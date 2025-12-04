@@ -1,11 +1,11 @@
-#!/bin/bash
-. ${HPC_CMDS_PATH}/config.sh
+#!/usr/bin/env bash
+
+source ${HPC_CMDS_PATH}/config.sh
 
 # NOTE: Trailing / at end of path is need to differentiate between base paths
 #       with beginnings e.g. path/to/example vs path/to/example2
 DEFAULT_ARCHIVE_MAPS="${HOME}/,home/
 											${WORKDIR}/,work/"
-
 
 ARCHIVE_MAPS="${DEFAULT_ARCHIVE_MAPS} ${USER_ARCHIVE_MAPS}"
 
@@ -21,26 +21,28 @@ if [[ ! -r $1 ]]; then
 fi
 
 if [[ -d $1 ]]; then
-	# Ensure directory path has a single trailing /
-	FPATH=${1%/}/
+  # Ensure directory path has a single trailing /
+  FPATH=${1%/}/
 else
-	FPATH=$1
+  FPATH=$1
 fi
 
 # Searching for mapped archive path exists
 IS_FOUND=F
-for i in ${ARCHIVE_MAPS}; do IFS=","; set -- $i;
-	if [[ "${FPATH}" == "$1"* ]]; then
-		ARCHIVE_PATH=${FPATH/$1/$2}
-		IS_FOUND=T
-		break
-	fi
+for i in ${ARCHIVE_MAPS}; do
+  IFS=","
+  set -- $i
+  if [[ "${FPATH}" == "$1"* ]]; then
+    ARCHIVE_PATH=${FPATH/$1/$2}
+    IS_FOUND=T
+    break
+  fi
 done
 
-# Return error if no archive map found 
+# Return error if no archive map found
 if [[ $IS_FOUND == F ]]; then
-	echo "ERROR: Directory map to archive server not found for directory '${PWD}'!"
-	return 1
+  echo "ERROR: Directory map to archive server not found for directory '${PWD}'!"
+  return 1
 fi
 
 # Returning mapped archive path

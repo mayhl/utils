@@ -10,8 +10,8 @@ function cd {
   if [ ! -f "$SCRIPT" ]; then
     builtin cd $@
   else
-		# ISSUE: Doesn't work for ~/.....
-		#        add check for absolute paths?
+    # ISSUE: Doesn't work for ~/.....
+    #        add check for absolute paths?
     if [[ $1 == ".." ]]; then
       builtin cd $1
     else

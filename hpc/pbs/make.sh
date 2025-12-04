@@ -1,32 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-. ${HPC_CMDS_PATH}/config.sh
+source ${HPC_CMDS_PATH}/config.sh
 
-# Numerical model to base values off 
+# Numerical model to base values off
 MODEL=$(echo $1 | tr '[a-z]' '[A-Z]')
-# Switch to fill PBS script with model default values 
+# Switch to fill PBS script with model default values
 IS_DEFAULT=$2
-# (Optional) Command line input for PBS name 
+# (Optional) Command line input for PBS name
 JOB_NAME=$3
 # (Optional) Number of threads
 NTHREADS=$4
 # (Optional)
 ADD_FILES=${@:5:${#@}}
 
-
-# Name of PBS script to create 
+# Name of PBS script to create
 PBS_NAME="run_script.pbs"
 
-# Path to PBS script code 
+# Path to PBS script code
 PBS_SCRIPT="${HPC_CMDS_PATH}/pbs/base_script.sh"
 
 # Setting up default values is quick create mode
 if [ "${IS_DEFAULT}" == "T" ]; then
-   DEFAULT_EXEC=$(eval echo \${${MODEL}_DEFAULT_EXEC})
-   DEFAULT_SUBPROJ=$(eval echo \${${MODEL}_DEFAULT_SUBPROJ})
-   DEFAULT_QUEUE=$(eval echo \${${MODEL}_DEFAULT_QUEUE})
-   DEFAULT_INPUT=$(eval echo \${${MODEL}_DEFAULT_INPUT})
-   DEFAULT_WALL=$(eval echo \${${MODEL}_DEFAULT_WALL})
+  DEFAULT_EXEC=$(eval echo \${${MODEL}_DEFAULT_EXEC})
+  DEFAULT_SUBPROJ=$(eval echo \${${MODEL}_DEFAULT_SUBPROJ})
+  DEFAULT_QUEUE=$(eval echo \${${MODEL}_DEFAULT_QUEUE})
+  DEFAULT_INPUT=$(eval echo \${${MODEL}_DEFAULT_INPUT})
+  DEFAULT_WALL=$(eval echo \${${MODEL}_DEFAULT_WALL})
 fi
 
 # Parsing hostname for HPC name
@@ -35,33 +34,32 @@ HOSTNAME=${HOSTNAME//[[:digit:]]/}
 
 # Setting up HPC MPI
 if [ "$HOSTNAME" = "onyx" ]; then
-	NPROC=44
+  NPROC=44
 elif [ "$HOSTNAME" = "jim" ]; then
-	NPROC=36
+  NPROC=36
 else
-        echo "----------------------------------------"
-        echo "-           Unidentified HPC           -"
-        echo "----------------------------------------"
-        echo " hostname orig: $(hostname)"
-        echo " hostname filt: $HOSTNAME"
-        echo "----------------------------------------"
-        exit 1
+  echo "----------------------------------------"
+  echo "-           Unidentified HPC           -"
+  echo "----------------------------------------"
+  echo " hostname orig: $(hostname)"
+  echo " hostname filt: $HOSTNAME"
+  echo "----------------------------------------"
+  exit 1
 fi
 
 if [ -z $NTHREADS ]; then
-	NNODES=1
+  NNODES=1
 else
-	if (( $NTHREADS <= ${NPROC} )); then
-		NMPI=$NTHREADS
-		NNODES=1
-	else
-		NMPI=$NPROC
-		NNODES=$(( ($NTHREADS + ($NPROC - 1) ) / $NPROC))
-	fi		
+  if (($NTHREADS <= ${NPROC})); then
+    NMPI=$NTHREADS
+    NNODES=1
+  else
+    NMPI=$NPROC
+    NNODES=$((($NTHREADS + ($NPROC - 1)) / $NPROC))
+  fi
 fi
 
-
-# Model specfic exectuable directory path 
+# Model specfic exectuable directory path
 EXEC_DPATH=$(eval echo \${${MODEL}_EXEC_DPATH})
 
 # NOTE: $'\n' is used for newline char with heredoc syntax,
@@ -69,17 +67,17 @@ EXEC_DPATH=$(eval echo \${${MODEL}_EXEC_DPATH})
 
 INPUT_FILES="${DEFAULT_INPUT} ${ADD_FILES}"
 FMT_INPUT_FILES=""
-for INPUT_FILE in ${INPUT_FILES}; do 
-   FMT_INPUT_FILES="${FMT_INPUT_FILES}${INPUT_FILE}"$'\n'"             "
+for INPUT_FILE in ${INPUT_FILES}; do
+  FMT_INPUT_FILES="${FMT_INPUT_FILES}${INPUT_FILE}"$'\n'"             "
 done
 
 # Removing last newline char and spacing
-# NOTE: Should only trigger if DEFAULT_INPUT is not empty 
+# NOTE: Should only trigger if DEFAULT_INPUT is not empty
 N=${#FMT_INPUT_FILES}
 [[ $N -gt 14 ]] && FMT_INPUT_FILES=${FMT_INPUT_FILES::-14}
 
 # Create PBS header and user input options
-cat << EOF > $PBS_NAME
+cat <<EOF >$PBS_NAME
 #!/bin/bash
 ## ----------------------
 ## Required PBS Directive
@@ -115,5 +113,5 @@ INPUT_FILES='$FMT_INPUT_FILES'
 ## -------------------------------------------
 EOF
 
-# Concatenating PBS script 
-cat $PBS_SCRIPT >> $PBS_NAME
+# Concatenating PBS script
+cat $PBS_SCRIPT >>$PBS_NAME

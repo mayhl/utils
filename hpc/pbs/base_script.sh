@@ -1,5 +1,4 @@
-
-# Executable path 
+# Executable path
 EXEC=${EXEC_DPATH}/${EXEC_NAME}
 
 # Parsing hostname for HPC name
@@ -9,28 +8,28 @@ HOSTNAME=${HOSTNAME//[[:digit:]]/}
 
 # Setting up HPC MPI
 if [ "$HOSTNAME" = "onyx" ]; then
-        HOST_ID='o'
-        EXEC_CMD="aprun -n"
-        MOD_CMD="module swap PrgEnv-cray PrgEnv-intel"
+  HOST_ID='o'
+  EXEC_CMD="aprun -n"
+  MOD_CMD="module swap PrgEnv-cray PrgEnv-intel"
 
 elif [ "$HOSTNAME" = "jim" ]; then
-        HOST_ID='j'
-        EXEC_CMD="mpiexec_mpt -n"
-        MOD_CMD=""
+  HOST_ID='j'
+  EXEC_CMD="mpiexec_mpt -n"
+  MOD_CMD=""
 else
-        echo "----------------------------------------"
-        echo "-           Unidentified HPC           -"
-        echo "----------------------------------------"
-        echo " hostname orig: $PBS_O_HOST"
-        echo " hostname filt: $HOSTNAME"
-        echo "----------------------------------------"
-        exit 1
+  echo "----------------------------------------"
+  echo "-           Unidentified HPC           -"
+  echo "----------------------------------------"
+  echo " hostname orig: $PBS_O_HOST"
+  echo " hostname filt: $HOSTNAME"
+  echo "----------------------------------------"
+  exit 1
 fi
 
-# Parsing job ID 
-JOB_ID=`echo ${PBS_JOBID} | cut -d '.' -f 1`
+# Parsing job ID
+JOB_ID=$(echo ${PBS_JOBID} | cut -d '.' -f 1)
 
-# Mirroring PBS script path to WORKDIR with 
+# Mirroring PBS script path to WORKDIR with
 # suffix of HPC abbreviation and job ID
 SIM_DPATH=${PBS_O_WORKDIR/${HOME}/$WORKDIR}_${HOST_ID}${JOB_ID}
 
