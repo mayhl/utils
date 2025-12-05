@@ -15,17 +15,15 @@ if [ ! -z ${MY_CONFIG_IS_MACOS+x} ]; then
 
   # Aliasing MacOS cut with Linux equivlent
   alias cut='/usr/local/bin/gcut'
-
-else
-  #echo "WARNING: No quick path clipboarding for Linux"
 fi
+#else
+
+#echo "WARNING: No quick path clipboarding for Linux"
+#fi
 
 # Kill all processes via grep matching
 function gkill {
-
-  kill -9 $(ps -u $(whoami) | grep "$1" | cut -d ' ' -f4 | xargs)
-  #PIDS=$(ps aux | grep "$1" | grep -v grep | awk '{print $2}' | xargs)
-  #kill -9 $PIDS
+  kill -9 $(pgrep "$1" | xargs)
 }
 
 # Wrapper around ffmpeg for image series
