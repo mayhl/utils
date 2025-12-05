@@ -8,18 +8,15 @@ alias vim="nvim"
 alias vimc="vim ~/.config/nvim/"
 
 if [ ! -z ${MY_CONFIG_IS_MACOS+x} ]; then
-
-  # cd between terminal quickly using clipboard
-  alias cppath='pwd | pbcopy'
-  alias cdpath='cd $(pbpaste)'
-
-  # Aliasing MacOS cut with Linux equivlent
+  export PYENV_ROOT="$HOME/.pyenv"
+  [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+  eval "$(pyenv init - zsh)"
   alias cut='/usr/local/bin/gcut'
 fi
-#else
 
-#echo "WARNING: No quick path clipboarding for Linux"
-#fi
+# Aliasing MacOS cut with Linux equivlent
+alias cppath='pwd | clipcopy'
+alias cdpath='cd $(clippaste)'
 
 # Kill all processes via grep matching
 function gkill {
