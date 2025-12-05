@@ -67,7 +67,7 @@ for HPC in ${HPCS}; do
 
   typeset ${HPCU}_SSH=${HPC_UNAME}@${HPC_HOST}
 
-  alias ${HPCL}='ossh "$@"'\${${HPCU}_SSH}
+  alias ${HPCL}='ossh ${HPC_SSH_OPTS} "$@"'\${${HPCU}_SSH}
   HPCC=$(echo ${HPCL:0:1} | tr '[a-z]' '[A-Z]')${HPCL:1}
   alias cp2${HPCC}='cp2HPC '\${${HPCU}_SSH}' "$@"'
   alias cp${HPCC}='cpHPC '\${${HPCU}_SSH}' "$@"'
