@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 
 
-if [ ! -z ${MY_CONFIG_IS_LOCAL+x} ]; then
+if [ ! -n "${MY_CONFIG_IS_LOCAL+x}" ]; then
   # TODO: 
   #   [] Check ssh/ossh switching with rsync
   #   [] Add optional ossh/krb5 PATHS with defaults
   export PATH=/usr/local/krb5/bin:/usr/local/ossh/bin:$PATH
-  export KRB5_CONFIG=/usr/local/krb5/etc/krb5.conf
-  PATH="/usr/local/krb5/bin:${PATH}"
-  OSSH="/usr/local/ossh/bin/ssh"
-  SSH=$OSSH
+  export KRB5_CONFIG=/etc/krb5.conf
+  export OSSH="/usr/local/ossh/bin/ssh"
   alias ossh='/usr/local/ossh/bin/ssh'
   alias hpc='pkinit ${HPC_UNAME} "$@"'
 else

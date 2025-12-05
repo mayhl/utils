@@ -7,7 +7,7 @@ alias vim="nvim"
 
 alias vimc="vim ~/.config/nvim/"
 
-if [ ! -z ${MY_CONFIG_IS_MACOS+x} ]; then
+if [ ! -n "${MY_CONFIG_IS_MACOS+1}" ]; then
   export PYENV_ROOT="$HOME/.pyenv"
   [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
   eval "$(pyenv init - zsh)"
@@ -61,8 +61,8 @@ setGitLabUsr() {
 ############
 
 # pyenv for python versioning control on MacOS
-if [ ! -z ${MAYHL_UTIL_IS_LOCAL+x} ]; then
-  if [ ! -z ${MAYHL_UTIL_IS_MACOS+x} ]; then
+if [ ! -n "${MAYHL_UTIL_IS_LOCAL+1}" ]; then
+  if [ ! -n "${MAYHL_UTIL_IS_MACOS+1}" ]; then
     export PYENV_ROOT="$HOME/.pyenv"
     [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
     eval "$(pyenv init -)"
