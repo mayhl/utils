@@ -39,9 +39,9 @@ HPCS=()
 for HPC_HOST in ${HPC_HOSTS}; do
 
   # Constructing variables names
-  HOST=$(echo ${HPC_HOST} | tr '[a-z]' '[A-Z]')
-  HOST_HPCS=${HOST}_HPCS
-  HPC_HOST=${HOST}_HOST
+  HOST_NAME=$(echo ${HPC_HOST} | tr '[a-z]' '[A-Z]')
+  HOST_HPCS=${HOST_NAME}_HPCS
+  HPC_HOST=${HOST_NAME}_HOST
 
 
   # Reading variable based on dynamic name 
