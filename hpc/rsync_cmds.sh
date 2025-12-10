@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 
-if def MY_CONFIG_IS_LOCAL; then
+
+if def MAYHL_UTILS_IS_LOCAL; then
   # TODO: 
   #   [] Check ssh/ossh switching with rsync
   #   [] Add optional ossh/krb5 PATHS with defaults
