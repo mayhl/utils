@@ -6,6 +6,10 @@
 #   [] Add optional config path, e.g., ~/.configs
 #
 
+def () {
+  [[ ! -z "${(tP)1}" ]]
+}
+
 MAYHL_UTILS_CONFIG_PATH="${0:a:h}"/config.env
 
 if [ ! -n "${MAYHL_UTILS_PATH}" ]; then
@@ -15,7 +19,7 @@ fi
 
 # Checking if system type has been set
 DEFAULT_SYSTEM='local'
-if [ ! -n "${MAYHL_UTILS_SYSTEM}" ]; then
+if ! def MAYHL_UTILS_SYSTEM; then
   #if [ -z "${MAYHL_UTILS_SYSTEM}" ]; then
   echo "WARNING: MAYHL_UTILS_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
   MAYHL_UTILS_SYSTEM=$DEFAULT_SYSTEM

@@ -7,7 +7,7 @@ alias vim="nvim"
 
 alias vimc="vim ~/.config/nvim/"
 
-if [[ -v "${MY_CONFIG_IS_MACOS}" ]]; then
+if def MAYHL_UTILS_IS_MACOS; then
   alias cut='/usr/local/bin/gcut'
 fi
 
@@ -58,8 +58,8 @@ setGitLabUsr() {
 ############
 
 # pyenv for python versioning control on MacOS
-if [ -v "${MAYHL_UTIL_IS_LOCAL}" ]; then
-  if [ -v "${MAYHL_UTIL_IS_MACOS}" ]; then
+if def MAYHL_UTILS_IS_LOCAL; then
+  if def MAYHL_UTILS_IS_MACOS; then
     export PYENV_ROOT="$HOME/.pyenv"
     [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
     eval "$(pyenv init - zsh)"
