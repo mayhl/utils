@@ -21,7 +21,7 @@ function gkill {
 }
 
 # Wrapper around ffmpeg for image series
-qffmpeg() {
+function qffmpeg {
   IMG_PATH_MASK=$1
   VIDEO_PATH=$2
   FPS=$3
