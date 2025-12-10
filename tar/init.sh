@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 
-#. ${HPC_CMDS_PATH}/config.sh
 IS_TQDM=$(sh ${0:a:h}/check_tqdm.sh)
 
-if [ $IS_TQDM == 'T' ]; then
+if [[ "$IS_TQDM" == 'T' ]]; then
 
   gtar() {
 

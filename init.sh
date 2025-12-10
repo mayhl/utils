@@ -54,7 +54,7 @@ source "$MAYHL_UTILS_CONFIG_PATH"
 source "${0:a:h}"/general.sh
 
 source "${0:a:h}"/hpc/init.sh
-#source "${0:a:h}"/tar/init.sh
+source "${0:a:h}"/tar/init.sh
 #source ${HPC_CMDS_PATH}/pbs/main.sh
 #source ${HPC_CMDS_PATH}/rsync_cmds.sh
 #source ${HPC_CMDS_PATH}/swap_work_home/main.sh

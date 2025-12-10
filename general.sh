@@ -30,14 +30,6 @@ function qffmpeg {
   #ffmpeg -r ${FPS} -pattern_type glob -i "'${IMG_PATH_MASK}'" -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2"  -vcodec libx264 -pix_fmt yuv420p ${VIDEO_PATH}
 }
 
-# Wrapper for quickly taring and compressing by file name
-qtar() {
-  DIR=$1
-  ARCHIVE=${1%/}.tar.gz
-
-  tar -czvf ${ARCHIVE} ${DIR}
-
-}
 #######
 # Git #
 #######
