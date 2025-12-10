@@ -8,14 +8,14 @@
 
 MAYHL_UTILS_CONFIG_PATH="${0:a:h}"/config.env
 
-if [ -z ${MAYHL_UTILS_PATH+x} ]; then
+if [ ! -n "${MAYHL_UTILS_PATH}" ]; then
   echo "ERROR: MAYHL_UTILS_PATH not set. Exiting .zshrc script..."
   return 1
 fi
 
 # Checking if system type has been set
 DEFAULT_SYSTEM='local'
-if [ -z ${MAYHL_UTILS_SYSTEM+x} ]; then
+if [ ! -n "${MAYHL_UTILS_SYSTEM}" ]; then
   #if [ -z "${MAYHL_UTILS_SYSTEM}" ]; then
   echo "WARNING: MAYHL_UTILS_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
   MAYHL_UTILS_SYSTEM=$DEFAULT_SYSTEM
