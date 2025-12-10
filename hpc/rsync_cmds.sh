@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 
-if [ ! -v "${MY_CONFIG_IS_LOCAL}" ]; then
+if def MY_CONFIG_IS_LOCAL; then
   # TODO: 
   #   [] Check ssh/ossh switching with rsync
   #   [] Add optional ossh/krb5 PATHS with defaults
@@ -34,7 +34,7 @@ cpHPC() {
 HPCS=()
 
 
-
+#TODO: Add filter for current HPC
 
 for HPC_HOST in ${HPC_HOSTS}; do
 
