@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+## ----------------------
+## Required PBS Directive
+## ----------------------
+#PBS -A ERDCV00898FUN
+#PBS -S /bin/bash
+#PBS -q transfer
+##PBS -N tar_b50826
+#PBS -l select=1:ncpus=1:mpiprocs=1
+#PBS -l walltime=40:00:00
+#PBS -l application=other
+#PBS -j oe
+
+if [[ ! $DIR_DNAME ]]; then
+  echo "DIR_DNAME not defined!" 2>&1
+  exit 1
+fi
+
+if [[ ! $DIR_DPATH ]]; then
+  echo "DIR_DPATH not defined!" 2>&1
+  exit 1
+fi
+
+if [[ ! $ARC_DPATH ]]; then
+  echo "ARC_DPATH not defined!" 2>&1
+  exit 1
+fi
+
+if [[ ! $ARC_FNAME ]]; then
+  echo "ARC_FNAME not defined!" 2>&1
+  exit 1
+fi
+
+TAR_ARGS="-cvzf"
+
+echo "Switching to archive folder path: '$DIR_DPATH'..."
+cd "${DIR_DPATH}"
+if [ $? -eq 0 ]; then
+  echo "   Success"
+else
+  echo "   FAILED" 2>&1
+  exit 1
+fi
+
+echo "Compressing archive folder '${DIR_DNAME}'..."
+tar "${TAR_ARGS}" "${ARC_FNAME}" "${DIR_DNAME}"
+if [ $? -eq 0 ]; then
+  echo "   Success"
+else
+  echo "   FAILED" 2>&1
+  exit 1
+fi
+
+echo "Creating archive path: '$ARC_DPATH'.."
+archive mkdir -s "${ARC_DPATH}"
+if [ $? -eq 0 ]; then
+  echo "   Success"
+else
+  echo "   FAILED" 2>&1
+  exit 1
+fi
+
+echo "Transfering ${ARC_FNAME} to archive server..."
+archive put "${ARC_FNAME}" -C "${ARC_DPATH}"
+if [ $? -eq 0 ]; then
+  echo "   Success"
+else
+  echo "   FAILED" 2>&1
+  exit 1
+fi
+
+echo "Removing old archive ${ARC_FNAME}..."
+rm "${ARC_FNAME}"
+if [ $? -eq 0 ]; then
+  echo "   Success"
+else
+  echo "   FAILED" 2>&1
+  exit 1
+fi
