@@ -1,31 +1,24 @@
 #!/usr/bin/env bash
 
 MPATH=${1%/}
-SCRIPT=".${MPATH}.sh"
-
-source spinner.sh
-
-# sshfs options
-#OPTS=""
-
 MAPATH=$PWD/$MPATH
+EPATH=".${MPATH}.env"
 
 if [ ! -d "$MPATH" ]; then
   echo "ERROR: Directory '$MPATH' does not exist!"
   exit 1
 fi
 
-if [ ! -f "$SCRIPT" ]; then
-  echo "ERROR: Mount script '$SCRIPT' does not exist!"
+if [ ! -f "${EPATH}" ]; then
+  echo "ERROR: Mount script '${EPATH}' does not exist!"
   exit 1
 fi
 
-HPATH=$(sh $SCRIPT)
-HPATH=${HPATH/ /:}
-
-MPATHS=$(mount | grep macfuse | cut -d ' ' -f 3)
+source $EPATH
+source "${MAYHL_UTILS_PATH}/hpc/sshfs/spinner.sh"
 
 # Check if path is already mounted with macfuse/sshfs
+MPATHS=$(mount | grep fuse-t | cut -d ' ' -f 3)
 IS_MOUNTED=F
 for TMP_MPATH in $MPATHS; do
   if [[ $MAPATH == $TMP_MPATH ]]; then
@@ -57,7 +50,13 @@ if [[ $MOUNT == 'T' ]]; then
 
   echo -n "Connecting "
 
-  sshfs $HPATH $MAPATH &
+  HPC_HOST="mayhl@node1.alpha.example.mil"
+  HPC_DPATH="/p/home/mayhl/repos/mayhl-FUNWAVE-TVD"
+  #  sshfs -o allow_other $HPATH $MAPATH &
+
+  ARGS=(-o defer_permissions)
+  sshfs "${ARGS[@]}" "${HPC_HOST}:${HPC_DPATH}" "${MAPATH}"
+
   spinner $! #"${OPTS[@]}"
 
   echo ""

@@ -1,75 +1,59 @@
 #!/usr/bin/env bash
 
+# Load the config
+source "${MAYHL_UTILS_PATH}/config.env"
 
+# Use a common cache directory
+_CACHE_DIR="${HOME}/.cache/mayhl_utils"
+_CACHE_FILE="${_CACHE_DIR}/hpc_aliases.sh"
 
-if def MAYHL_UTILS_IS_LOCAL; then
-  # TODO: 
-  #   [] Check ssh/ossh switching with rsync
-  #   [] Add optional ossh/krb5 PATHS with defaults
-  export PATH=/usr/local/krb5/bin:/usr/local/ossh/bin:$PATH
-  export KRB5_CONFIG=/etc/krb5.conf
-  export OSSH="/usr/local/ossh/bin/ssh"
-  alias ossh='/usr/local/ossh/bin/ssh'
-  alias hpc='pkinit ${HPC_UNAME} "$@"'
-else
-
-  OSSH=$(which ssh)
-  alias ossh=ssh
+# Ensure OSSH is set
+if [[ -z "${OSSH}" ]]; then
+  if [[ -f "/usr/local/ossh/bin/ssh" ]]; then
+    export OSSH="/usr/local/ossh/bin/ssh"
+  else
+    export OSSH=$(command -v ssh)
+  fi
 fi
 
-# Wrapper commands
-cpHPCWrapper() {
+# Function to generate the alias file
+generate_hpc_aliases() {
+  mkdir -p "$_CACHE_DIR"
 
-  #echo "rsync ${HPC_RSYNC_OPTS} -e $OSSH $1 $2"
-  rsync "${HPC_RSYNC_OPTS}" -e "$OSSH" $1 $2
-}
+  cat <<'EOC' >"$_CACHE_FILE"
+cpHPCWrapper() { rsync "${HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2"; }
+cp2HPC() { cpHPCWrapper "$2" "$1:$3"; }
+cpHPC() { cpHPCWrapper "$1:$2" "$3"; }
+EOC
 
-cp2HPC() {
-  cpHPCWrapper $2 $1:$3
-}
+  for HPC_HOST_VAR in $HPC_HOSTS; do
+    HOST_NAME=$(echo "$HPC_HOST_VAR" | tr '[:lower:]' '[:upper:]')
 
-cpHPC() {
-  cpHPCWrapper $1:$2 $3
-}
+    hpcs_var="${HOST_NAME}_HPCS"
+    host_var="${HOST_NAME}_HOST"
 
-HPCS=()
+    # Indirect expansion: works in bash and zsh when accessed via eval or local indirect
+    # Let's use eval to be safe across both
+    eval "local hosts_list=\"\$$hpcs_var\""
+    eval "local base_host=\"\$$host_var\""
 
+    for HOST_HPC in $hosts_list; do
+      local HPCL=$(echo "$HOST_HPC" | tr '[:upper:]' '[:lower:]')
+      local SSH_TARGET="${HPC_UNAME}@${HPCL}.${base_host}"
+      local HPCC="${HPCL^}"
 
-#TODO: Add filter for current HPC
-
-for HPC_HOST in ${HPC_HOSTS}; do
-
-  # Constructing variables names
-  HOST_NAME=$(echo ${HPC_HOST} | tr '[a-z]' '[A-Z]')
-  HOST_HPCS=${HOST_NAME}_HPCS
-  HPC_HOST=${HOST_NAME}_HOST
-
-
-  # Reading variable based on dynamic name 
-  HOST_HPCS=(${(P)${:-${HOST_HPCS}}})
-  HPC_HOST=(${(P)${:-${HPC_HOST}}})
-
-  for HOST_HPC in ${HOST_HPCS}; do
-
-    HPCS+=($HOST_HPC) 
-    HOST_HPCU=$(echo ${HOST_HPC} | tr '[a-z]' '[A-Z]')
-    HOST_HPCL=$(echo ${HOST_HPC} | tr '[a-zA-Z]' '[a-z]')
-
-    typeset ${HOST_HPCU}_HOST=${HOST_HPCL}.${HPC_HOST}
+      {
+        echo "alias ${HPCL}='${OSSH} ${HPC_SSH_OPTS} \"\$@\" ${SSH_TARGET}'"
+        echo "alias cp2${HPCC}='cp2HPC ${SSH_TARGET} \"\$@\"'"
+        echo "alias cp${HPCC}='cpHPC ${SSH_TARGET} \"\$@\"'"
+      } >>"$_CACHE_FILE"
+    done
   done
+}
 
-done
+# Gatekeeper
+if [[ ! -f "$_CACHE_FILE" ]]; then
+  generate_hpc_aliases
+fi
 
-for HPC in ${HPCS}; do
-  HPCU=$(echo ${HPC} | tr '[a-z]' '[A-Z]')
-  HPCL=$(echo ${HPC} | tr '[A-Z]' '[a-z]')
-
-  HPC_HOST=(${(P)${:-${HPCU}_HOST}})
-
-  typeset ${HPCU}_SSH=${HPC_UNAME}@${HPC_HOST}
-
-  alias ${HPCL}='ossh ${HPC_SSH_OPTS} "$@"'\${${HPCU}_SSH}
-  HPCC=$(echo ${HPCL:0:1} | tr '[a-z]' '[A-Z]')${HPCL:1}
-  alias cp2${HPCC}='cp2HPC '\${${HPCU}_SSH}' "$@"'
-  alias cp${HPCC}='cpHPC '\${${HPCU}_SSH}' "$@"'
-done
+source "$_CACHE_FILE"
