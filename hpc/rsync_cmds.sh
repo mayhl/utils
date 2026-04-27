@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-source "${MAYHL_UTILS_PATH}/config.env"
+
+# Load the config
+source "${MU_PATH}/config.env"
 
 _CACHE_DIR="${HOME}/.cache/mayhl_utils"
 _CACHE_FILE="${_CACHE_DIR}/hpc_aliases.sh"
 
-if [[ -z "${OSSH}" ]]; then
-  export OSSH=$(command -v ssh)
-fi
+[[ -z "${OSSH}" ]] && export OSSH=$(command -v ssh)
 
 generate_hpc_aliases() {
   mkdir -p "$_CACHE_DIR"
+
   cat <<'EOC' >"$_CACHE_FILE"
-cpHPCWrapper() { rsync "${HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2"; }
+cpHPCWrapper() { rsync "${MU_HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2"; }
 cp2HPC() { cpHPCWrapper "$2" "$1:$3"; }
 cpHPC() { cpHPCWrapper "$1:$2" "$3"; }
 EOC
 
-  # Look for variables starting with MHPC_ and ending with _HOST
-  for host_var in $(compgen -v | grep '^MHPC_.*_HOST$'); do
+  # Auto-discover clusters (pattern: MU_.*_HOST$)
+  for host_var in $(compgen -v | grep '^MU_.*_HOST$'); do
     HOST_PREFIX=${host_var%_HOST}
     hpcs_var="${HOST_PREFIX}_HPCS"
 
@@ -27,10 +28,11 @@ EOC
     if [[ -n "$hosts_list" ]]; then
       for HOST_HPC in $hosts_list; do
         local HPCL=$(echo "$HOST_HPC" | tr '[:upper:]' '[:lower:]')
-        local SSH_TARGET="${HPC_UNAME}@${HPCL}.${base_host}"
+        local SSH_TARGET="${MU_HPC_UNAME}@${HPCL}.${base_host}"
         local HPCC="${HPCL^}"
+
         {
-          echo "alias ${HPCL}='${OSSH} ${HPC_SSH_OPTS} \"\$@\" ${SSH_TARGET}'"
+          echo "alias ${HPCL}='${OSSH} ${MU_HPC_SSH_OPTS} \"\$@\" ${SSH_TARGET}'"
           echo "alias cp2${HPCC}='cp2HPC ${SSH_TARGET} \"\$@\"'"
           echo "alias cp${HPCC}='cpHPC ${SSH_TARGET} \"\$@\"'"
         } >>"$_CACHE_FILE"
