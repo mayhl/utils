@@ -207,3 +207,12 @@ mu_run() {
 
   return $_status
 }
+
+# Display Mayhl Utils environment status
+mu_status() {
+  echo "--- Mayhl Utils Status ---"
+  echo "System:   $MU_SYSTEM"
+  echo "Path:     $MU_PATH"
+  echo "Git Hash: $(git -C "$MU_PATH" rev-parse --short HEAD 2>/dev/null || echo 'Not a git repo')"
+  echo "Clusters: $(compgen -v | grep '^MU_.*_HOST$' | sed 's/_HOST//g' | tr '\n' ' ')"
+}
