@@ -179,3 +179,31 @@ mytb() {
   fi
   rm -f "$logfile"
 }
+
+# Unified Execution Wrapper: Logs command, runs it, cleans output, and logs status
+# Usage: mu_run <command> [args...]
+mu_run() {
+  local _log_file="${HOME}/.cache/mayhl_utils/audit.log"
+  local _cmd_str="$*"
+  local _timestamp="$(date +%Y-%m-%dT%H:%M:%S)"
+
+  # Log the start of the command
+  printf "[%s] [EXEC] %s\n" "$_timestamp" "$_cmd_str" >>"$_log_file"
+
+  # Execute and pipe through tbvaccine if available
+  if command -v tbvaccine >/dev/null 2>&1; then
+    eval "$_cmd_str" 2>&1 | tbvaccine >>"$_log_file" 2>&1
+  else
+    eval "$_cmd_str" >>"$_log_file" 2>&1
+  fi
+
+  local _status=${PIPESTATUS[0]}
+
+  if [ $_status -ne 0 ]; then
+    printf "[%s] [FAIL] Status: %s | Cmd: %s\n" "$_timestamp" "$_status" "$_cmd_str" >>"$_log_file"
+  else
+    printf "[%s] [OK] Cmd: %s\n" "$_timestamp" "$_cmd_str" >>"$_log_file"
+  fi
+
+  return $_status
+}
