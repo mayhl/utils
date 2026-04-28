@@ -239,3 +239,29 @@ mu_ctx() {
     done
   fi
 }
+
+# Standardized Logging
+# Usage: mu_log <INFO|WARN|ERROR> "Message"
+mu_log() {
+  local _level=$1
+  local _msg=$2
+  local _log_file="${HOME}/.cache/mayhl_utils/framework.log"
+  printf "[%s] [%-5s] %s\n" "$(date +%Y-%m-%dT%H:%M:%S)" "$_level" "$_msg" >>"$_log_file"
+
+  # Print to stderr if error
+  if [[ "$_level" == "ERROR" ]]; then
+    printf "\033[0;31m[ERROR]\033[0m %s\n" "$_msg" >&2
+  fi
+}
+
+# Example mu_mount wrapper
+mu_mount() {
+  local target=$1
+  mu_log "INFO" "Mounting ${target}..."
+  if mayhl_sshfs_mount "$target"; then
+    mu_log "INFO" "Successfully mounted ${target}"
+  else
+    mu_log "ERROR" "Failed to mount ${target}"
+    return 1
+  fi
+}
