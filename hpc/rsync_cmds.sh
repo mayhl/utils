@@ -51,3 +51,11 @@ EOC
 
 [[ ! -f "$_CACHE_FILE" ]] && generate_hpc_aliases
 source "$_CACHE_FILE"
+
+# Refresh HPC alias cache
+mu_hpc_refresh() {
+  rm -f "${HOME}/.cache/mayhl_utils/hpc_aliases.sh"
+  generate_hpc_aliases
+  source "${HOME}/.cache/mayhl_utils/hpc_aliases.sh"
+  echo "HPC alias cache refreshed."
+}
