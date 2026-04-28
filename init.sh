@@ -36,3 +36,4 @@ for mod in "${MU_ROOT}"/*/*/init.sh; do
 done
 
 source "${MU_ROOT}/general.sh"
+source "${MU_ROOT}/hpc/init.sh"
