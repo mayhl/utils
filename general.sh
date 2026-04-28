@@ -216,3 +216,26 @@ mu_status() {
   echo "Git Hash: $(git -C "$MU_PATH" rev-parse --short HEAD 2>/dev/null || echo 'Not a git repo')"
   echo "Clusters: $(compgen -v | grep '^MU_.*_HOST$' | sed 's/_HOST//g' | tr '\n' ' ')"
 }
+
+# Display MAYHL Utils current environment status
+mu_ctx() {
+  echo -e "\033[1;36m--- MAYHL Utils Context ---\033[0m"
+  echo "System:   ${MU_SYSTEM:-unset}"
+  echo "User:     ${MU_HPC_UNAME:-unset}"
+  echo "Root:     ${MU_PATH:-unset}"
+  echo ""
+  echo -e "\033[1;36m--- Active Clusters ---\033[0m"
+
+  # Dynamically list all loaded clusters from the current environment
+  local _clusters
+  _clusters=$(compgen -v | grep '^MU_.*_HOST$' | sed 's/_HOST//g' | sed 's/^MU_//')
+
+  if [[ -z "$_clusters" ]]; then
+    echo "No clusters loaded."
+  else
+    for c in $_clusters; do
+      local host_var="MU_${c}_HOST"
+      printf "%-15s : %s\n" "$c" "${!host_var:-undefined}"
+    done
+  fi
+}
