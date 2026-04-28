@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-source ${HPC_CMDS_PATH}/config.sh
+source ${MU_ROOT}/config.env
 
 # Numerical model to base values off
 MODEL=$(echo $1 | tr '[a-z]' '[A-Z]')

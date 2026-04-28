@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
-# Portable defined check
+# Portable defined check (Works in Bash 4.2+ and Zsh)
 def() {
-  [[ -n "${!1+x}" ]]
+  [[ -v "$1" ]]
 }
 
-# Checking if system type has been set
+# Source config
+source "${MU_ROOT}/config.env"
+
+# Logic for system type
 DEFAULT_SYSTEM='local'
 if ! def MU_SYSTEM; then
   echo "WARNING: MU_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
@@ -24,9 +27,6 @@ else
   echo "ERROR: MU_SYSTEM must be 'local' or 'hpc'. Exiting..."
   return 1
 fi
-
-# Source config from MU_ROOT
-source "${MU_ROOT}/config.env"
 
 # Source all init files recursively
 for mod in "${MU_ROOT}"/*/*/init.sh; do

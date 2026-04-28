@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-source ${HPC_CMDS_PATH}/config.sh
+source ${MU_ROOT}/config.env
 
 # NOTE: Trailing / at end of path is need to differentiate between base paths
 #       with beginnings e.g. path/to/example vs path/to/example2

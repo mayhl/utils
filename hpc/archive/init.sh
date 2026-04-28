@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-source ${HPC_CMDS_PATH}/config.sh
+source "${MU_ROOT}/config.env"
 
 _chkarch() {
 

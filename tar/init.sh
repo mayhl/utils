@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-IS_TQDM=$(sh ${0:a:h}/check_tqdm.sh)
+IS_TQDM=$(sh ${MU_ROOT}/check_tqdm.sh)
 
 if [[ "$IS_TQDM" == 'T' ]]; then
 

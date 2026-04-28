@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-. ${HPC_CMDS_PATH}/config.sh
+. ${MU_ROOT}/config.env
 
 for MODEL in ${PBS_MODELS}; do
   # Make empty PBS for model
