@@ -5,13 +5,10 @@ def() {
   [[ -n "${!1+x}" ]]
 }
 
-# Source config
-export MU_CONFIG_PATH="${MU_PATH}/config.env"
-source "$MU_CONFIG_PATH"
-
-# Logic for system type
+# Checking if system type has been set
 DEFAULT_SYSTEM='local'
 if ! def MU_SYSTEM; then
+  echo "WARNING: MU_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
   export MU_SYSTEM=$DEFAULT_SYSTEM
 fi
 
@@ -28,12 +25,14 @@ else
   return 1
 fi
 
+# Source config from MU_ROOT
+source "${MU_ROOT}/config.env"
+
 # Source all init files recursively
-# Using a simple loop that works in bash and zsh
-for mod in "${MU_PATH}"/*/*/init.sh; do
+for mod in "${MU_ROOT}"/*/*/init.sh; do
   if [ -f "$mod" ]; then
     source "$mod"
   fi
 done
 
-source "${MU_PATH}/general.sh"
+source "${MU_ROOT}/general.sh"
