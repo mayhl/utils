@@ -1,62 +1,39 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1090
 
-# TODO:
-#   [] Add script validation?
-#   [] Add optional config path, e.g., ~/.configs
-#
-
-def () {
-  [[ ! -z "${(tP)1}" ]]
+# Portable defined check
+def() {
+  [[ -n "${!1+x}" ]]
 }
 
-MAYHL_UTILS_CONFIG_PATH="${0:a:h}"/config.env
+# Source config
+export MU_CONFIG_PATH="${MU_PATH}/config.env"
+source "$MU_CONFIG_PATH"
 
-if [ ! -n "${MAYHL_UTILS_PATH}" ]; then
-  echo "ERROR: MAYHL_UTILS_PATH not set. Exiting .zshrc script..."
-  return 1
-fi
-
-# Checking if system type has been set
+# Logic for system type
 DEFAULT_SYSTEM='local'
-if ! def MAYHL_UTILS_SYSTEM; then
-  #if [ -z "${MAYHL_UTILS_SYSTEM}" ]; then
-  echo "WARNING: MAYHL_UTILS_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
-  MAYHL_UTILS_SYSTEM=$DEFAULT_SYSTEM
+if ! def MU_SYSTEM; then
+  export MU_SYSTEM=$DEFAULT_SYSTEM
 fi
 
-if [ "${MAYHL_UTILS_SYSTEM}" = "local" ]; then
-  export MAYHL_UTILS_IS_LOCAL='TRUE'
-  unset MAYHL_UTILS_IS_HPC
-
-  # TODO: Convert to MacOS check
-  # shellcheck disable=2050
-  if [ 'a' = 'a' ]; then
-    export MAYHL_UTILS_IS_MACOS='TRUE'
-  else
-    unset MAYHL_UTILS_IS_MACOS
-  fi
-elif [ "${MAYHL_UTILS_SYSTEM}" = "hpc" ]; then
-  export MAYHL_UTILS_IS_HPC='TRUE'
-  unset MAYHL_UTILS_IS_LOCAL
-
-  # No MacOS HPCs
-  unset MAYHL_UTILS_IS_MACOS
+if [ "$MU_SYSTEM" = "local" ]; then
+  export MU_IS_LOCAL='TRUE'
+  unset MU_IS_HPC
+  export MU_IS_MACOS='TRUE'
+elif [ "$MU_SYSTEM" = "hpc" ]; then
+  export MU_IS_HPC='TRUE'
+  unset MU_IS_LOCAL
+  unset MU_IS_MACOS
 else
-  echo "ERROR: MAYHL_UTILS_SYSTEM must either be 'local' or 'hpc'. Exiting .zshrc script..."
+  echo "ERROR: MU_SYSTEM must be 'local' or 'hpc'. Exiting..."
   return 1
 fi
-unset DEFAULT_SYSTEM
 
-#echo "CONFIG PATH:" $MAYHL_UTILS_CONFIG_PATH
-source "$MAYHL_UTILS_CONFIG_PATH"
+# Source all init files recursively
+# Using a simple loop that works in bash and zsh
+for mod in "${MU_PATH}"/*/*/init.sh; do
+  if [ -f "$mod" ]; then
+    source "$mod"
+  fi
+done
 
-source "${0:a:h}"/general.sh
-
-source "${0:a:h}"/hpc/init.sh
-source "${0:a:h}"/tar/init.sh
-#source ${HPC_CMDS_PATH}/pbs/main.sh
-#source ${HPC_CMDS_PATH}/rsync_cmds.sh
-#source ${HPC_CMDS_PATH}/swap_work_home/main.sh
-#source ${HPC_CMDS_PATH}/
-#source ${HPC_CMDS_PATH}/archive/main.sh
+source "${MU_PATH}/general.sh"
