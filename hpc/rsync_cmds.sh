@@ -12,7 +12,15 @@ generate_hpc_aliases() {
   mkdir -p "$_CACHE_DIR"
 
   cat <<'EOC' >"$_CACHE_FILE"
-cpHPCWrapper() { rsync "${MU_HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2"; }
+cpHPCWrapper() { 
+  mu_log "INFO" "Sync: $1 to $2"; 
+  if rsync "${MU_HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2" >> "${HOME}/.cache/mayhl_utils/framework.log" 2>&1; then 
+      mu_log "INFO" "Sync success: $1"; 
+  else 
+      mu_log "ERROR" "Sync failed: $1"; 
+      return 1; 
+  fi; 
+}
 cp2HPC() { cpHPCWrapper "$2" "$1:$3"; }
 cpHPC() { cpHPCWrapper "$1:$2" "$3"; }
 EOC
