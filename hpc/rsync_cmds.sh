@@ -9,9 +9,9 @@ _CACHE_FILE="${_CACHE_DIR}/hpc_aliases.sh"
 [[ -z "${OSSH}" ]] && export OSSH=$(command -v ssh)
 
 generate_hpc_aliases() {
-  mkdir -p "$_CACHE_DIR"
-
-  cat <<'EOC' >"$_CACHE_FILE"
+    mkdir -p "$_CACHE_DIR"
+    
+    cat << 'EOC' > "$_CACHE_FILE"
 cpHPCWrapper() { 
   mu_log "INFO" "Sync: $1 to $2"; 
   if rsync "${MU_HPC_RSYNC_OPTS}" -e "${OSSH}" "$1" "$2" >> "${HOME}/.cache/mayhl_utils/framework.log" 2>&1; then 
@@ -25,37 +25,50 @@ cp2HPC() { cpHPCWrapper "$2" "$1:$3"; }
 cpHPC() { cpHPCWrapper "$1:$2" "$3"; }
 EOC
 
-  # Auto-discover clusters (pattern: MU_.*_HOST$)
-  for host_var in $(compgen -v | grep '^MU_.*_HOST$'); do
-    HOST_PREFIX=${host_var%_HOST}
-    hpcs_var="${HOST_PREFIX}_HPCS"
+    # Auto-discover clusters (pattern: MU_.*_HOST$)
+    for host_var in $(compgen -v | grep '^MU_.*_HOST$'); do
+        # Extract cluster name (e.g., MU_CLUSTER1_HOST -> MU_CLUSTER1)
+        HOST_PREFIX=${host_var%_HOST}
+        
+        # Get the corresponding _HPCS variable name (e.g., 'MU_CLUSTER1_HPCS')
+        hpcs_var="${HOST_PREFIX}_HPCS"
+        
+        eval "hosts_list=\"\$$hpcs_var\""
+        eval "base_host=\"\$$host_var\""
 
-    eval "hosts_list=\"\$$hpcs_var\""
-    eval "base_host=\"\$$host_var\""
+        if [[ -n "$hosts_list" ]]; then
+            for HOST_HPC in $hosts_list; do
+                local HPCL=$(echo "$HOST_HPC" | tr '[:upper:]' '[:lower:]')
+                local SSH_TARGET="${MU_HPC_UNAME}@${HPCL}.${base_host}"
+                
+                # Zsh/Bash portable capitalization
+                if [ -n "$ZSH_VERSION" ]; then
+                    local HPCC="${(C)HPCL}"
+                else
+                    local HPCC="${HPCL^}"
+                fi
 
-    if [[ -n "$hosts_list" ]]; then
-      for HOST_HPC in $hosts_list; do
-        local HPCL=$(echo "$HOST_HPC" | tr '[:upper:]' '[:lower:]')
-        local SSH_TARGET="${MU_HPC_UNAME}@${HPCL}.${base_host}"
-        local HPCC="${HPCL^}"
-
-        {
-          echo "alias ${HPCL}='${OSSH} ${MU_HPC_SSH_OPTS} \"\$@\" ${SSH_TARGET}'"
-          echo "alias cp2${HPCC}='cp2HPC ${SSH_TARGET} \"\$@\"'"
-          echo "alias cp${HPCC}='cpHPC ${SSH_TARGET} \"\$@\"'"
-        } >>"$_CACHE_FILE"
-      done
-    fi
-  done
+                {
+                    echo "alias ${HPCL}='${OSSH} ${MU_HPC_SSH_OPTS} \"\$@\" ${SSH_TARGET}'"
+                    echo "alias cp2${HPCC}='cp2HPC ${SSH_TARGET} \"\$@\"'"
+                    echo "alias cp${HPCC}='cpHPC ${SSH_TARGET} \"\$@\"'"
+                } >> "$_CACHE_FILE"
+            done
+        fi
+    done
 }
 
-[[ ! -f "$_CACHE_FILE" ]] && generate_hpc_aliases
-source "$_CACHE_FILE"
+# Gatekeeper
+if [[ ! -f "$_CACHE_FILE" ]]; then
+    generate_hpc_aliases
+fi
 
 # Refresh HPC alias cache
 mu_hpc_refresh() {
-  rm -f "${HOME}/.cache/mayhl_utils/hpc_aliases.sh"
+  rm -f "$_CACHE_FILE"
   generate_hpc_aliases
-  source "${HOME}/.cache/mayhl_utils/hpc_aliases.sh"
+  source "$_CACHE_FILE"
   echo "HPC alias cache refreshed."
 }
+
+source "$_CACHE_FILE"
