@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Load the config
-source "${MU_PATH}/config.env"
+source "${MU_ROOT}/config.env"
 
 _CACHE_DIR="${HOME}/.cache/mayhl_utils"
 _CACHE_FILE="${_CACHE_DIR}/hpc_aliases.sh"
