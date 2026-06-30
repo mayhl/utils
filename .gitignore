@@ -2,6 +2,9 @@
 # Ignore configs
 .venv
 
+# macOS
+.DS_Store
+
 # Compiled Lua sources
 luac.out
 
