@@ -75,3 +75,17 @@ mu_kitty_bootstrap() {
     done
   done
 }
+
+# --- sshfs mounts (local-only; `mu sshfs` is the engine, only hcd mounts) -----
+# The mount name is the only handle; the local dir is the tool's business.
+# hcd <name>   mount (if needed) + cd into it;  no arg -> list what's available.
+hcd() {
+  [ -n "$1" ] || {
+    mu sshfs list
+    return
+  }
+  mu sshfs mount "$1" && cd "$(mu sshfs path "$1")"
+}
+hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
+hum() { mu sshfs umount "$1"; } # unmount
+alias hls='mu sshfs list'       # table with live status
