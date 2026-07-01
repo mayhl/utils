@@ -1,160 +1,144 @@
-# Alpha HPC Scripts
---
-Bash scripts to improve workflow on an HPC center High Performance Computers (HPCs).
+# mayhl_utils
 
-> **NOTE:** You should contact the HPC Helpdesk to change your shell to bash.
+A portable shell toolkit to improve workflow on the an HPC center and other DoD High Performance Computers (HPCs). The same checkout works from an HPC login node or a local macOS/Linux workstation.
 
-## Table of Conntents
-* [Installation] (#install)
-* [SSH to New HPC] (#hpc_swap)
-* [Copying Files Between HPCs] (#rsync)
-* [Quick Tar] (#qtar)
-* [Quick Portable Bash Script (PBS) File] (#pbs) 
-* [Swapping Between Mirrored Paths] (#swap) 
+> **NOTE:** Works with both bash and zsh. The *mu* CLI and the tar progress bars use Python 3 through a self-contained virtual environment — no system installs.
+
+## Table of Contents
+* [Installation](#install)
+* [Configuration](#config)
+* [SSH to an HPC](#ssh)
+* [Copying Files Between HPCs](#rsync)
+* [The mu CLI](#mu)
+* [Quick Tar](#qtar)
+* [Status](#status)
+* [Command Summary](#summary)
 
 ## Installation <a name='install'></a>
-To install the HPC scripts, first clone this repository to a directory
-of your choice on the HPC
+To install, first clone this repository to a directory of your choice. This path becomes *MU_ROOT*.
 
     user@hpc: cd path/of/your/choice
-    user@hpc: git clone https://github.com/mayhl/mayhl_utils.git
-    
-After cloning the repo, go to your home directory and use the editor of your choice to modify your .bashrc or .bash_profile file.
+    user@hpc: git clone git@github.com:mayhl/utils.git
 
-    user@hpc: cd $HOME
-    user@hpc: vim .bashrc
-    
-To your .bashrc/.bash_profile, add the following lines
+The toolkit needs only two coordinates and a source line — no other repository or framework is required. Add the following to your `.zshrc` or `.bashrc` (or a personal environment file it sources):
 
-    export HPC_CMDS_PATH=path/of/your/choice
-    source $HPC_CMDS_PATH/main.sh
-    
+    export MU_ROOT=path/of/your/choice/utils
+    export MU_SYSTEM=local
+    source $MU_ROOT/init.sh
 
-## SSH to new HPC <a name='hpc_swap'></a>
-While connected to an HPC, you can ssh to a new HPC by using the HPC name, e.g., 
+*MU_SYSTEM* selects the platform module: `local` for a workstation, `hpc` for a login node.
 
-    user@login1: node3
+> **NOTE:** *MU_SYSTEM* only picks the platform module (local vs hpc); it does not imply an operating system, and defaults to *local* if unset.
 
-> **NOTE:** Nested tunnels do not work.
+Next, copy the example config and fill in your details:
 
-## Copying files between HPCs <a name='rsync'></a>
-Files are copied between HPCs via [rsync](https://rsync.samba.org/). Two commands are created for each HPCs: cpName, copy from HPC 'Name' to current HPC; and cp2Name, copy to HPC 'Name' from current HPC. For example:
+    user@hpc: cp $MU_ROOT/config.env.example $MU_ROOT/config.env
+    user@hpc: vim $MU_ROOT/config.env
 
-    user@login1: cpNode3 /path/node3/file /path/jim/file
-    user@login1: cp2Node3 /path/node3/directory /path/jim/directory 
+Finally, build the Python virtual environment used by the *mu* CLI and the tar progress bars:
+
+    user@hpc: mu_py_bootstrap
+
+Open a new shell (or re-source your rc file) and run *mu_status* to confirm everything loaded.
+
+## Configuration <a name='config'></a>
+Configuration is split across two files, sourced in order: *defaults.env* (tracked, shared knobs) and *config.env* (gitignored, your machine's identity). Only *config.env* needs editing — copy it from *config.env.example*.
+
+In *config.env*, set your HPC login name and list the clusters to generate aliases for. Each cluster needs a matching *_DOMAIN* and *_NODES* variable keyed by its ALL-CAPS name, e.g.
+
+    export MU_HPC_UNAME=your_username
+    export MU_CLUSTERS="alpha"
+    export MU_CLUSTER_ALPHA_DOMAIN="alpha.example.mil"
+    export MU_CLUSTER_ALPHA_NODES="node1 node2"
+
+> **NOTE:** Cluster names in *MU_CLUSTERS* are lowercase; the per-cluster variables use the ALL-CAPS name.
+
+Behavior knobs live in *defaults.env* and rarely need changing: the rsync options (*MU_HPC_RSYNC_OPTS*, default `-avuP`), the ssh options (*MU_HPC_SSH_OPTS*, default `-Y`), the Python interpreter (*MU_PYTHON*), and the venv location (*MU_PY_VENV*, default `~/.cache/mayhl_utils/venv`). Override any of them in *config.env* if needed.
+
+The generated ssh and copy aliases are cached and regenerate automatically when *connect.sh* or *config.env* change. To force a refresh, run *mu_connect_refresh*.
+
+## SSH to an HPC <a name='ssh'></a>
+An alias is created for each configured node — simply type its name to connect. On a local workstation, a Kerberos ticket is obtained automatically (via *pkinit*) if you do not already have one, e.g.
+
+    user@laptop: node1
+
+> **NOTE:** Nested tunnels do not work; connect to one HPC at a time.
+
+## Copying Files Between HPCs <a name='rsync'></a>
+Files are copied via [rsync](https://rsync.samba.org/). Two commands are created for each node: *cpName*, copy from node 'Name' to the current machine; and *cp2Name*, copy to node 'Name' from the current machine (the *2* is a mnemonic for "to"). For example,
+
+    user@laptop: cpNode1 /p/work/me/run42/out ./out
+    user@laptop: cp2Node1 ./case.in /p/home/me/case
+
+Both authenticate automatically and stream rsync's output (and any ssh prompts) straight to the terminal.
+
+## The mu CLI <a name='mu'></a>
+For richer, flag-driven transfers, the *mu* command (a Typer CLI backed by the venv) provides the same copies with a live progress bar, dry-run, and filters:
+
+    user@laptop: mu cp push node1 ./run42 /p/work/me/run42
+    user@laptop: mu cp pull node1 /p/work/me/run42/out ./out
+    user@laptop: mu cp nodes
+
+*mu cp push* copies local to node, *mu cp pull* copies node to local, and *mu cp nodes* prints a table of the configured nodes. The node may be a bare name (which tab-completes) or an explicit user@host. Useful options include *--dry-run* (*-n*) to preview, *--exclude PATTERN* to skip files, *--delete* to remove extraneous files at the destination, and *--bwlimit RATE* to cap bandwidth. Add *-h* to any command for help. For example,
+
+    user@laptop: mu cp push node1 ./run42 /p/work/me/run42 -n --exclude '*.o'
 
 ## Quick Tar <a name='qtar'></a>
-
-To quickly put a folder into a tarball or extract the files from a tarball (with or without compression using gzip), two wrapper commands *qtar* (no compression) and *gtar* (with compression). The commands will check for the file extension *.tar* (no compression) or *.tar.gz* to determine if tar should be in extract mode. Examples of using these commands are,
+To quickly put a folder into a tarball or extract the files from a tarball (with or without gzip compression), use the wrapper commands *qtar* (no compression) and *gtar* (with compression). The commands check for a *.tar* or *.tar.gz* file extension to determine whether to run in extract mode. For example,
 
     user@hpc: qtar FOLDER
     user@hpc: gtar ARCHIVE.tar.gz
 
-> **NOTE:** In extraction mode *gtar* and *qtar* are equivalent. 
+> **NOTE:** In extraction mode *gtar* and *qtar* are equivalent.
 
 #### Background Mode
-For larger folders/archives, the commands  *bqtar* and *bqtar* execute their respective commands in the background in a low-priority mode. Outputs from the commands with be piped to a *.log* file.
+For larger folders/archives, the commands *bqtar* and *bgtar* execute their respective commands in the background at low priority. Output is piped to a *.log* file.
 
-> **NOTE:** Low-priority mode applies the nice -20 command
+> **NOTE:** Low-priority mode applies the *nice* command.
 
-#### Python & tqdm   
-
-If the Python package [tqdm](https://tqdm.github.io/) is available, *qtar* and *gtar* will provide progress bars. The Python [venv](https://docs.python.org/3/library/venv.html) module provides a method to set up virtual environments for installing custom Python packages. An existing virtual environment can be added to the config.sh file, e.g., 
-
-    HPC_PYTHON=python
-    HPC_PY_VENV=/path/to/venv
-
-An example of the extended output with tqdm is below,
+#### Python & tqdm
+If the Python package [tqdm](https://tqdm.github.io/) is available (it is installed into the toolkit venv by *mu_py_bootstrap*), *qtar* and *gtar* provide progress bars. An example of the extended output is below,
 
     user@hpc: gtar FOLDER
     Processing:  31%|███            |  112M/365M [00:05<00:15, 17.2MB/s]
     Compressed:   7%|█              | 24.8M/365M [00:05<01:21, 4.38MB/s]
 
-> **NOTE:** The Compressed progress part will not fill up but gives the size of the compressed archive.
+> **NOTE:** The Compressed progress bar will not fill up but gives the size of the compressed archive.
 
-## Quick Portable Bash Script (PBS) File <a name='pbs'></a>
-    
-Numerical simulations on the HPCs are queued to be executed on an HPC using a PBS file. A PBS file typically has two overall parts:
+## Status <a name='status'></a>
+The command *mu_status* prints a compact summary (system, root, git revision, ssh binary, user, clusters), and *mu_ctx* prints a detailed per-cluster listing of domains and nodes.
 
-1. A header containing information describing the resources to be used.
-2. As script setting up the numerical simulation and executing it.
+## Command Summary <a name='summary'></a>
 
-When a PBS file is submitted to the HPC, a Job ID is returned to identify the submission.  
+The short shell commands are the everyday drivers; where a richer Typer form
+exists (progress bar, flags, tab-completion), it is listed alongside. The *Where*
+column notes whether a command applies on a local workstation, an HPC, or both.
 
-#### *\$HOME* and *\$WORKDIR*
+#### Bootstrap & Init
 
-On Alpha HPCs, user files are located in the *\$HOME* directory with limited storage (quota). The *\$WORKDIR* is a temporary storage location with no quota, where older files are periodically deleted. Typically, this location is used to store the outputs from numerical simulations.
+| Command | Typer equivalent | Where | Description |
+|---------|------------------|-------|-------------|
+| `mu_py_bootstrap` | — | both | create or refresh the Python venv |
+| `mu_connect_refresh` | — | both | regenerate the ssh/copy aliases |
+| `mu_kitty_bootstrap` | — | local | push kitty terminfo to each configured node |
 
-#### File Structure Mirroring
+#### HPC — Connectivity & Transfers
 
-To simplify the data movement between *\$HOME* and *\$WORKDIR*, the current directory where the job was submitted from (typically the path containing the input/drive files) in *\$HOME* is mirrored to *\$WORKDIR*. In addition, the Job ID is attached as a suffix to the folder where as well as letter identifying the HPC system, e.g.,
+| Command | Typer equivalent | Where | Description |
+|---------|------------------|-------|-------------|
+| `<node>` | — | both | ssh to a configured node (Kerberos handled automatically) |
+| `cp2<Node> <src> <dst>` | `mu cp push <node> <src> <dst>` | both | copy *to* the node (here → node) |
+| `cp<Node> <src> <dst>` | `mu cp pull <node> <src> <dst>` | both | copy *from* the node (node → here) |
+| — | `mu cp nodes` | both | list the configured nodes |
 
-    $HOME/path/to/simulation
-    
-is mirrored to 
+#### General
 
-    $WORKDIR/path/to/simulation_j12345
-    
-where 'j' is an abbreviation of Jim and '12345' is the Job ID returned from the PBS submission.
+| Command | Typer equivalent | Where | Description |
+|---------|------------------|-------|-------------|
+| `qtar <dir\|archive>` | — | both | create or extract a `.tar` (no compression) |
+| `gtar <dir\|archive>` | — | both | create or extract a `.tar.gz` (gzip) |
+| `bqtar` / `bgtar` | — | both | background, low-priority `qtar` / `gtar` |
+| `mu_status` / `mu_ctx` | — | both | compact / detailed environment summary |
 
-#### Workflow
-The workflow for the PBS file generated is as follows:
-
-1. Starting from a directory in the user's *\$HOME* folder containing the simulation's input/driver files.
-3. The PBS file is submitted, queuing the script to be executed.
-4. The PBS file will copy the input/driver files from *\$HOME*  to the mirror directory in the *\$WORKDIR*.
-5. The numerical simulation is output written to the mirrored path in *\$WORKDIR* (or some subdirectory)
-
-#### Quick Generation 
-
-Quick-generation commands can be created for various numerical models. In the config.sh file, new models can be added by modifying the variable, *PBS_MODELS*, e.g.,  
-
-    PBS_MODELS="Fun WW3"
-
-will generate commands for FUNWAVE and WaveWatch3. For each model, two commands will be created: *mkMdlPBS* and *qmkMdlPBS*, where *Mdl* is the model name in *PBS_MODELS*, e.g., 
-
-    mkFunPBS
-    
-For each model, a parameter specifying the path containing the executable(s) must be added to the config.sh file. For example
-
-    MDL_EXEC_DPATH=/path/to/folder/with/executable
-
-> **NOTE:** The prefix in *EXEC_PATH* will be the capitalization of the model name in *PBS_MODELS*
-
-The *qmkMdlPBS* command is a quicker way to generate a PBS file. In the config.sh file, several new parameters need to be defined:
-
-    MDL_DEFAULT_EXEC='exectuable name'
-    MDL_DEFAULT_SUBPROJ='subproject code'
-    MLD_DEFAULT_QUEUE='queue'
-    MLD_DEFAULT_INPUT='driver/input files'
-    MDL_DEFAULT_WALL='simulation (real) wall time'
-
-In addition, *qmkMldPBS*, has optional arugments 
-
-    qmkMldPBS JOB_NAME NUMBER_OF_THREADS FILE1 FILE2 FILE3 ... 
-    
-where: 
-
-1. *JOB\_NAME* is the name of the job.
-2.  *NUMBER\_OF\_THREADS* is the number of threads (not nodes). The command will automatically select the correct number of nodes and MPI threads. 
-3. FILE1, FILE2, ... are additional input/driver files to include on top of the file(s) defined in *MDL\_DEFAULT\_INPUT*.
-
-> **NOTE:** *mkMdlPBS* will accept the same parameters; however, will not lead to a complete PBS file. 
- 
-## Swapping Between Mirrored Paths<a name='swap'></a>
-
-To make working between the *\$HOME* and *\$WORKDIR* easier, the command *swap* changes between mirrored paths, e.g.,
-
-    user@hpc: pwd
-    $HOME/current/path/
-    user@hpc: swap
-    user@hpc: pwd
-    $WORKDIR/current/path
-    
-> **NOTE:** If the current path is a simulation in *\$HOME*, multiple folders may exist in *\$WORKDIR* (i.e., mirrored paths with suffixes corresponding to the HPC and job ID); therefore, the swap command will cd into to the parent directory containing the simulation runs. 
-
-> ### TODO 
-1. Create a Makefile to automate installation and create a basic user config file.
-2. Add Job ID list when swapping to *\$WORKDIR* for the simulation folder (instead of going to the parent folder)
-3. Add quick archive commands 
-4. Fix ToC links
+> **NOTE:** Add *-h* to any `mu` command for help. A `cp2<Node>` alias is
+> `mu cp push` with the node pre-bound; the two forms do the same transfer.
