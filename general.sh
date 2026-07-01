@@ -3,7 +3,7 @@
 # Aliasing neovim over vim command
 # shellcheck disable=SC2139
 alias ovim="$(which vim)"
-alias vim="source $HOME/.pyvenvs/nvim/bin/activate && nvim"
+alias vim="nvim"
 
 alias vimc="vim ~/.config/nvim/"
 
@@ -26,7 +26,7 @@ function qffmpeg {
   VIDEO_PATH=$2
   FPS=$3
 
-  ffmpeg -r ${FPS} -pattern_type glob -i "$1plot_*.png" -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -vcodec libx264 -pix_fmt yuv420p ${VIDEO_PATH}
+  ffmpeg -r "${FPS}" -pattern_type glob -i "$1plot_*.png" -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -vcodec libx264 -pix_fmt yuv420p "${VIDEO_PATH}"
   #ffmpeg -r ${FPS} -pattern_type glob -i "'${IMG_PATH_MASK}'" -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2"  -vcodec libx264 -pix_fmt yuv420p ${VIDEO_PATH}
 }
 
@@ -86,7 +86,7 @@ swap_rec() {
 
 spinner() {
 
-  sh ${HOME}/repos/mayhl_utils/spinners.sh "${@}"
+  sh "${MU_ROOT}/lib/spinner.sh" "${@}"
 
 }
 
@@ -111,15 +111,15 @@ record() {
 
   line_num=$(grep "START RECORDING" "${name}.v2.cast" -n | tail -n 1 | cut -d : -f1)
   if [[ $line_num > 0 ]]; then
-    head -n 1 "${name}.v2.cast" >"${name}.v3.cast"
-    sed "1,${line_num}d" "${name}.v2.cast" >>"${name}.v3.cast"
+    head -n 1 "${name}.v2.cast" > "${name}.v3.cast"
+    sed "1,${line_num}d" "${name}.v2.cast" >> "${name}.v3.cast"
     mv -f "${name}.v3.cast" "${name}.v2.cast"
   fi
 
   line_num=$(grep "\^D" "${name}.v2.cast" -n | tail -n 1 | cut -d : -f1)
   if [[ $line_num > 0 ]]; then
     line_num=$((line_num - 1))
-    head -n ${line_num} "${name}.v2.cast" >"${name}.cast"
+    head -n ${line_num} "${name}.v2.cast" > "${name}.cast"
     rm "${name}.v2.cast"
   else
     mv -f "${name}.v2.cast" "${name}.cast"
@@ -142,8 +142,8 @@ crop_record() {
   echo "line_num: $line_num"
   if [[ $line_num > 0 ]]; then
     echo "HERE"
-    head -n 1 "${new}" >"${tmp}"
-    sed "1,${line_num}d" "${new}" >>"${tmp}"
+    head -n 1 "${new}" > "${tmp}"
+    sed "1,${line_num}d" "${new}" >> "${tmp}"
     mv -f "${tmp}" "${new}"
   fi
 
@@ -166,12 +166,12 @@ cast2svg() {
 # Utility Functions
 mytb() {
   local logfile="/tmp/$$.log"
-  if ! command -v tbvaccine >/dev/null 2>&1 || ! command -v rcat >/dev/null 2>&1; then
+  if ! command -v tbvaccine > /dev/null 2>&1 || ! command -v rcat > /dev/null 2>&1; then
     echo "mytb: Required tools missing."
     "$@"
     return $?
   fi
-  "$@" >"$logfile" 2>&1
+  "$@" > "$logfile" 2>&1
   if [ $? -ne 0 ]; then
     cat "$logfile" | tbvaccine
   else
@@ -188,24 +188,24 @@ mu_run() {
   local _timestamp="$(date +%Y-%m-%dT%H:%M:%S)"
 
   # Log the start of the command
-  printf "[%s] [EXEC] %s\n" "$_timestamp" "$_cmd_str" >>"$_log_file"
+  printf "[%s] [EXEC] %s\n" "$_timestamp" "$_cmd_str" >> "$_log_file"
 
   # Execute and pipe through tbvaccine if available
-  if command -v tbvaccine >/dev/null 2>&1; then
-    eval "$_cmd_str" 2>&1 | tbvaccine >>"$_log_file" 2>&1
+  if command -v tbvaccine > /dev/null 2>&1; then
+    eval "$_cmd_str" 2>&1 | tbvaccine >> "$_log_file" 2>&1
   else
-    eval "$_cmd_str" >>"$_log_file" 2>&1
+    eval "$_cmd_str" >> "$_log_file" 2>&1
   fi
 
   local _status=${PIPESTATUS[0]}
 
-  if [ $_status -ne 0 ]; then
-    printf "[%s] [FAIL] Status: %s | Cmd: %s\n" "$_timestamp" "$_status" "$_cmd_str" >>"$_log_file"
+  if [ "$_status" -ne 0 ]; then
+    printf "[%s] [FAIL] Status: %s | Cmd: %s\n" "$_timestamp" "$_status" "$_cmd_str" >> "$_log_file"
   else
-    printf "[%s] [OK] Cmd: %s\n" "$_timestamp" "$_cmd_str" >>"$_log_file"
+    printf "[%s] [OK] Cmd: %s\n" "$_timestamp" "$_cmd_str" >> "$_log_file"
   fi
 
-  return $_status
+  return "$_status"
 }
 
 # Display Mayhl Utils environment status
@@ -213,7 +213,7 @@ mu_status() {
   echo "--- Mayhl Utils Status ---"
   echo "System:   $MU_SYSTEM"
   echo "Path:     $MU_PATH"
-  echo "Git Hash: $(git -C "$MU_PATH" rev-parse --short HEAD 2>/dev/null || echo 'Not a git repo')"
+  echo "Git Hash: $(git -C "$MU_PATH" rev-parse --short HEAD 2> /dev/null || echo 'Not a git repo')"
   echo "Clusters: $(compgen -v | grep '^MU_.*_HOST$' | sed 's/_HOST//g' | tr '\n' ' ')"
 }
 
@@ -246,7 +246,7 @@ mu_log() {
   local _level=$1
   local _msg=$2
   local _log_file="${HOME}/.cache/mayhl_utils/framework.log"
-  printf "[%s] [%-5s] %s\n" "$(date +%Y-%m-%dT%H:%M:%S)" "$_level" "$_msg" >>"$_log_file"
+  printf "[%s] [%-5s] %s\n" "$(date +%Y-%m-%dT%H:%M:%S)" "$_level" "$_msg" >> "$_log_file"
 
   # Print to stderr if error
   if [[ "$_level" == "ERROR" ]]; then
