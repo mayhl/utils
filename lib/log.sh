@@ -26,14 +26,18 @@ mu_wrap() {
   shift
   local msg=$* cols plen twidth indent
   cols=${COLUMNS:-$(tput cols 2> /dev/null || echo 80)}
+  # guard against unset/zero/non-numeric COLUMNS (non-interactive shells)
+  case $cols in '' | *[!0-9]* | 0) cols=80 ;; esac
   plen=$(_mu_visible_len "$prefix")
   twidth=$((cols - plen))
   [ "$twidth" -lt 20 ] && twidth=20
   indent=$(printf '%*s' "$plen" '')
+  # `|| [ -n "$line" ]` processes the final line, which fold emits without a
+  # trailing newline (a plain `while read` would silently drop it).
   printf '%s' "$msg" | fold -s -w "$twidth" | {
     IFS= read -r line
     printf '%s%s\n' "$prefix" "$line"
-    while IFS= read -r line; do printf '%s%s\n' "$indent" "$line"; done
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s%s\n' "$indent" "$line"; done
   }
 }
 
