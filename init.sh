@@ -40,6 +40,7 @@ if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
 
 # ---- shared tooling --------------------------------------------------------
 . "${MU_ROOT}/shared/connect.sh"
+. "${MU_ROOT}/shared/tar.sh"
 
 # ---- legacy (pending migration in later slices) ----------------------------
 # general.sh still carries mu_status/mu_ctx/tar/spinner/etc.; migrated later.
