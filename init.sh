@@ -12,6 +12,7 @@
 # ---- portability shims (no side effects) -----------------------------------
 . "${MU_ROOT}/lib/compat.sh"
 . "${MU_ROOT}/lib/log.sh"
+. "${MU_ROOT}/lib/py.sh"
 mkdir -p "${HOME}/.cache/mayhl_utils"
 
 # ---- config: tracked defaults, then machine overrides ----------------------

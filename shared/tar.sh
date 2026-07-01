@@ -17,7 +17,7 @@ _mu_have_tqdm() (
     # shellcheck source=/dev/null
     . "${MU_PY_VENV}/bin/activate"
   fi
-  "${MU_HPC_PYTHON:-python}" -c "import tqdm" 2> /dev/null
+  "${MU_PYTHON:-python3}" -c "import tqdm" 2> /dev/null
 )
 
 # Activate the tqdm venv if one is configured (call-site paired with deactivate).

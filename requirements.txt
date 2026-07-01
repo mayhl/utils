@@ -1,0 +1,3 @@
+# Python deps for the toolkit's venv (installed by mu_py_bootstrap).
+rich
+tqdm
