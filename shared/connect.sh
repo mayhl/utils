@@ -60,7 +60,7 @@ EOC
       nc=$(mu_capitalize "$nl")
       target="${MU_HPC_UNAME}@${nl}.${domain}"
       {
-        echo "alias ${nl}='mu_auth && \${MU_SSH} \${MU_HPC_SSH_OPTS} ${target}'"
+        echo "alias ${nl}='mu_auth && \${MU_SSH_LOGIN} \${MU_HPC_SSH_OPTS} ${target}'"
         echo "alias cp2${nc}='cp2HPC ${target}'"
         echo "alias cp${nc}='cpHPC ${target}'"
       } >> "$_MU_ALIAS_CACHE"

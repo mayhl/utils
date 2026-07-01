@@ -19,6 +19,17 @@ export KRB5_CONFIG="${KRB5_CONFIG:-/etc/krb5.conf}"
 MU_SSH="$(command -v ossh || command -v ssh)"
 export MU_SSH
 
+# Interactive-login ssh: inside kitty, wrap with the ssh kitten (shell
+# integration / clipboard / terminfo over ssh). It execs the `ssh` on PATH,
+# which is the ossh build, so Kerberos is preserved. File transfers (rsync -e)
+# keep the plain MU_SSH — the kitten's session setup is pointless there.
+if [ -n "${KITTY_WINDOW_ID}" ] && mu_have kitty; then
+  MU_SSH_LOGIN="kitty +kitten ssh"
+else
+  MU_SSH_LOGIN="$MU_SSH"
+fi
+export MU_SSH_LOGIN
+
 # auth hook: obtain a Kerberos ticket if none is present for the HPC user.
 mu_auth() {
   if ! klist 2> /dev/null | grep -q "${MU_HPC_UNAME}"; then
@@ -33,3 +44,31 @@ if mu_is_macos; then
   [ -d "${PYENV_ROOT}/bin" ] && export PATH="${PYENV_ROOT}/bin:$PATH"
   mu_have pyenv && eval "$(pyenv init -)"
 fi
+
+# One-time-per-HPC setup: push kitty's terminfo to the HPC systems so kitty
+# renders correctly over ssh (parallels mu_py_bootstrap). Local-only (kitty is
+# your terminal). One push per node — each Alpha system has its own $HOME.
+# Driven by MU_CLUSTERS.
+mu_kitty_bootstrap() {
+  mu_have kitty || {
+    mu_log "ERROR" "kitty not found"
+    return 1
+  }
+  mu_auth
+  local c cu domain nodes node target
+  for c in $(echo "$MU_CLUSTERS"); do
+    cu=$(printf '%s' "$c" | tr '[:lower:]' '[:upper:]')
+    domain=$(mu_indirect "MU_CLUSTER_${cu}_DOMAIN")
+    nodes=$(mu_indirect "MU_CLUSTER_${cu}_NODES")
+    [ -n "$domain" ] || continue
+    for node in $(echo "$nodes"); do
+      target="${MU_HPC_UNAME}@${node}.${domain}"
+      mu_log "INFO" "kitty terminfo -> ${target}"
+      if timeout 15 kitty +kitten ssh "$target" true; then
+        mu_log "OK" "${node}: terminfo updated"
+      else
+        mu_log "ERROR" "${node}: terminfo push failed"
+      fi
+    done
+  done
+}
