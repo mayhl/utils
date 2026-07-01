@@ -1,39 +1,47 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
+# mayhl_utils entry point.
+#
+# Load order:  compat -> log -> config (defaults, then machine) ->
+#              platform seam (MU_SYSTEM) -> shared tooling.
+#
+# This file knows only env-var contracts; it must not reference .config paths.
+# Caller (.config) sets MU_ROOT and MU_SYSTEM, then sources this file.
 
-# Portable defined check (Works in Bash 4.2+ and Zsh)
-def() {
-  [[ -v "$1" ]]
-}
+: "${MU_ROOT:?MU_ROOT must point at the mayhl_utils checkout}"
 
-# Source config
-source "${MU_ROOT}/config.env"
+# ---- portability shims (no side effects) -----------------------------------
+. "${MU_ROOT}/lib/compat.sh"
+. "${MU_ROOT}/lib/log.sh"
+mkdir -p "${HOME}/.cache/mayhl_utils"
 
-# Logic for system type
-DEFAULT_SYSTEM='local'
-if ! def MU_SYSTEM; then
-  echo "WARNING: MU_SYSTEM not set. Defaulting to ${DEFAULT_SYSTEM}..."
-  export MU_SYSTEM=$DEFAULT_SYSTEM
-fi
-
-if [ "$MU_SYSTEM" = "local" ]; then
-  export MU_IS_LOCAL='TRUE'
-  unset MU_IS_HPC
-  export MU_IS_MACOS='TRUE'
-elif [ "$MU_SYSTEM" = "hpc" ]; then
-  export MU_IS_HPC='TRUE'
-  unset MU_IS_LOCAL
-  unset MU_IS_MACOS
+# ---- config: tracked defaults, then machine overrides ----------------------
+[ -f "${MU_ROOT}/defaults.env" ] && . "${MU_ROOT}/defaults.env"
+if [ -f "${MU_ROOT}/config.env" ]; then
+  . "${MU_ROOT}/config.env"
 else
-  echo "ERROR: MU_SYSTEM must be 'local' or 'hpc'. Exiting..."
-  return 1
+  mu_log "WARN " "No config.env found; copy config.env.example to config.env and fill it in."
 fi
 
-# Source all init files recursively
-for mod in "${MU_ROOT}"/*/*/init.sh; do
-  if [ -f "$mod" ]; then
-    source "$mod"
-  fi
-done
+# ---- mode toggle (binary: local | hpc) -------------------------------------
+: "${MU_SYSTEM:=local}"
+case "$MU_SYSTEM" in
+  local | hpc) ;;
+  *)
+    printf 'ERROR: MU_SYSTEM must be "local" or "hpc" (got "%s")\n' "$MU_SYSTEM" >&2
+    return 1 2> /dev/null || exit 1
+    ;;
+esac
 
-source "${MU_ROOT}/general.sh"
-source "${MU_ROOT}/hpc/init.sh"
+# OS compat is DETECTED, never derived from the mode toggle.
+if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
+
+# ---- platform seam (sets MU_SSH + mu_auth) ---------------------------------
+. "${MU_ROOT}/platform/${MU_SYSTEM}.sh"
+
+# ---- shared tooling --------------------------------------------------------
+. "${MU_ROOT}/shared/connect.sh"
+
+# ---- legacy (pending migration in later slices) ----------------------------
+# general.sh still carries mu_status/mu_ctx/tar/spinner/etc.; migrated later.
+# The old glob loader and hpc/init.sh are intentionally no longer sourced.
+[ -f "${MU_ROOT}/general.sh" ] && . "${MU_ROOT}/general.sh"
