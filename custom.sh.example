@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# custom.sh — machine-specific shell customizations.
+# Copy to custom.sh (gitignored); sourced LAST by init.sh. Put personal /
+# this-machine-only aliases & functions here, out of the tracked portable tool.
+
+# --- venv shortcuts -------------------------------------------------------
+# alias funtools='source ~/.pyvenvs/funtools/bin/activate'
+# alias chltools='source ~/.pyvenvs/chltools/bin/activate'
+
+# --- clipboard helpers (interactive; needs clipcopy/clippaste, e.g. omz) --
+# alias cppath='pwd | clipcopy'
+# alias cdpath='cd "$(clippaste)"'
+
+# --- GNU cut on macOS (BSD cut is the default; gcut via coreutils) --------
+# (prefer the mu_cut shim in scripts; this is only for interactive muscle memory)
+# alias cut='gcut'

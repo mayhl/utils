@@ -26,3 +26,10 @@ mu_auth() {
     pkinit "${MU_HPC_UNAME}"
   fi
 }
+
+# pyenv (Python version management) when installed.
+if mu_is_macos; then
+  export PYENV_ROOT="${HOME}/.pyenv"
+  [ -d "${PYENV_ROOT}/bin" ] && export PATH="${PYENV_ROOT}/bin:$PATH"
+  mu_have pyenv && eval "$(pyenv init -)"
+fi

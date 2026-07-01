@@ -41,8 +41,10 @@ if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
 # ---- shared tooling --------------------------------------------------------
 . "${MU_ROOT}/shared/connect.sh"
 . "${MU_ROOT}/shared/tar.sh"
+. "${MU_ROOT}/shared/git.sh"
+. "${MU_ROOT}/shared/aliases.sh"
+. "${MU_ROOT}/shared/status.sh"
+. "${MU_ROOT}/shared/utils.sh"
 
-# ---- legacy (pending migration in later slices) ----------------------------
-# general.sh still carries mu_status/mu_ctx/tar/spinner/etc.; migrated later.
-# The old glob loader and hpc/init.sh are intentionally no longer sourced.
-[ -f "${MU_ROOT}/general.sh" ] && . "${MU_ROOT}/general.sh"
+# ---- machine-specific customizations (gitignored, optional, sourced last) --
+[ -f "${MU_ROOT}/custom.sh" ] && . "${MU_ROOT}/custom.sh"
