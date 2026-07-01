@@ -51,7 +51,7 @@ EOC
     domain=$(mu_indirect "MU_CLUSTER_${cu}_DOMAIN")
     nodes=$(mu_indirect "MU_CLUSTER_${cu}_NODES")
     [ -n "$domain" ] || {
-      mu_log "WARN " "Cluster '${c}' has no _DOMAIN; skipping"
+      mu_log "WARN" "Cluster '${c}' has no _DOMAIN; skipping"
       continue
     }
 

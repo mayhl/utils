@@ -19,7 +19,7 @@ mkdir -p "${HOME}/.cache/mayhl_utils"
 if [ -f "${MU_ROOT}/config.env" ]; then
   . "${MU_ROOT}/config.env"
 else
-  mu_log "WARN " "No config.env found; copy config.env.example to config.env and fill it in."
+  mu_log "WARN" "No config.env found; copy config.env.example to config.env and fill it in."
 fi
 
 # ---- mode toggle (binary: local | hpc) -------------------------------------

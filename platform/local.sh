@@ -22,7 +22,7 @@ export MU_SSH
 # auth hook: obtain a Kerberos ticket if none is present for the HPC user.
 mu_auth() {
   if ! klist 2> /dev/null | grep -q "${MU_HPC_UNAME}"; then
-    echo "No Kerberos ticket for ${MU_HPC_UNAME}; running pkinit..."
+    mu_log "INFO" "No Kerberos ticket for ${MU_HPC_UNAME}; running pkinit..."
     pkinit "${MU_HPC_UNAME}"
   fi
 }
