@@ -28,7 +28,10 @@ _MU_ALIAS_CACHE="${_MU_CACHE_DIR}/hpc_aliases.sh"
 mu_cp_wrapper() {
   mu_auth
   mu_log "INFO" "Sync: $1 -> $2"
-  if rsync ${MU_HPC_RSYNC_OPTS} -e "${MU_SSH}" "$1" "$2" >> "${_MU_CACHE_DIR}/framework.log" 2>&1; then
+  # No output redirect: rsync's progress, errors, and any ssh host-key/password
+  # prompts stay on the terminal. The audit trail is mu_log's job — it already
+  # records INFO/OK/ERROR to the framework log.
+  if rsync ${MU_HPC_RSYNC_OPTS} -e "${MU_SSH}" "$1" "$2"; then
     mu_log "OK" "Sync: $1"
   else
     mu_log "ERROR" "Sync failed: $1"
@@ -40,11 +43,19 @@ mu_cp_from() { mu_cp_wrapper "$1:$2" "$3"; } # remote -> local:  mu_cp_from <tar
 
 # --- per-cluster alias codegen (cached) --------------------------------------
 mu_connect_generate() {
-  local c cu domain nodes node nl nc target
+  local c cu domain nodes node nl nc target existing current
   mkdir -p "$_MU_CACHE_DIR"
   : > "$_MU_ALIAS_CACHE"
 
   [ -n "${MU_HPC_UNAME}" ] || mu_log "WARN" "MU_HPC_UNAME unset; ssh targets will be malformed"
+  [ -n "${MU_CLUSTERS}" ] || mu_log "WARN" "MU_CLUSTERS empty; no connection aliases generated"
+
+  # Current system, to skip self-referential aliases (an ssh/copy alias to the
+  # box you are already on is useless): explicit MU_NODE, else the HPC $BC_HOST
+  # (lowercased to match node names). Empty on a workstation — nothing skipped.
+  current=$(printf '%s' "${MU_NODE:-$BC_HOST}" | tr '[:upper:]' '[:lower:]')
+  [ "$MU_SYSTEM" = hpc ] && [ -z "$current" ] &&
+    mu_log "WARN" "hpc mode but neither BC_HOST nor MU_NODE set; self-aliases not filtered"
 
   # $(echo ...) splits the space-separated list under both bash and zsh (zsh
   # does not word-split a bare $var). Names are lowercase in the list; config
@@ -60,8 +71,17 @@ mu_connect_generate() {
 
     for node in $(echo "$nodes"); do
       nl=$(printf '%s' "$node" | tr '[:upper:]' '[:lower:]')
+      # Skip the system we are already on — ssh/copy aliases to self are useless.
+      [ -n "$current" ] && [ "$nl" = "$current" ] && continue
       nc=$(mu_capitalize "$nl")
       target="${MU_HPC_UNAME}@${nl}.${domain}"
+      # Warn if the bare-node ssh alias would mask a real executable. Match only
+      # absolute paths (command -v of a binary) — avoids false positives on our
+      # own already-loaded alias, functions, or builtins.
+      existing=$(command -v "$nl" 2> /dev/null)
+      case "$existing" in
+        /*) mu_log "WARN" "ssh alias '${nl}' shadows executable ${existing}" ;;
+      esac
       {
         echo "alias ${nl}='mu_auth && \${MU_SSH_LOGIN} \${MU_HPC_SSH_OPTS} ${target}'"
         echo "alias cp2${nc}='mu_cp_to ${target}'"

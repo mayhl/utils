@@ -23,8 +23,13 @@ else
   mu_log "WARN" "No config.env found; copy config.env.example to config.env and fill it in."
 fi
 
-# ---- mode toggle (binary: local | hpc) -------------------------------------
-: "${MU_SYSTEM:=local}"
+# ---- mode: detected from $BC_HOST, MU_SYSTEM is an optional override --------
+# $BC_HOST is the HPC system name (set on HPC login + compute nodes, absent on
+# a workstation). If MU_SYSTEM was not set explicitly, derive it; an explicit
+# value always wins.
+if [ -z "${MU_SYSTEM}" ]; then
+  if [ -n "${BC_HOST}" ]; then MU_SYSTEM=hpc; else MU_SYSTEM=local; fi
+fi
 case "$MU_SYSTEM" in
   local | hpc) ;;
   *)
@@ -32,6 +37,7 @@ case "$MU_SYSTEM" in
     return 1 2> /dev/null || exit 1
     ;;
 esac
+export MU_SYSTEM
 
 # OS compat is DETECTED, never derived from the mode toggle.
 if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
