@@ -50,3 +50,7 @@ config.env
 
 custom.sh
 ARCHITECTURE.md
+
+# Python
+__pycache__/
+*.pyc

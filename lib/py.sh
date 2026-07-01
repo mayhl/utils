@@ -20,6 +20,9 @@ mu_py() {
   "${MU_PY_VENV}/bin/python" "$@"
 }
 
+# mu — the mayhl_utils CLI (Typer). Management + transfer plane; needs the venv.
+mu() { mu_py "${MU_ROOT}/lib/py/cli.py" "$@"; }
+
 # Create (or refresh) the venv and install requirements.txt.
 mu_py_bootstrap() {
   local py ver
