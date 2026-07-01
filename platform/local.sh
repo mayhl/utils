@@ -41,7 +41,10 @@ mu_auth() {
 # pyenv (Python version management) when installed.
 if mu_is_macos; then
   export PYENV_ROOT="${HOME}/.pyenv"
-  [ -d "${PYENV_ROOT}/bin" ] && export PATH="${PYENV_ROOT}/bin:$PATH"
+  case ":$PATH:" in
+    *":${PYENV_ROOT}/bin:"*) ;;
+    *) [ -d "${PYENV_ROOT}/bin" ] && export PATH="${PYENV_ROOT}/bin:$PATH" ;;
+  esac
   mu_have pyenv && eval "$(pyenv init -)"
 fi
 

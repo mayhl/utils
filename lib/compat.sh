@@ -11,10 +11,6 @@ mu_is_macos() { [ "$(uname -s)" = "Darwin" ]; }
 mu_is_zsh() { [ -n "$ZSH_VERSION" ]; }
 mu_have() { command -v "$1" > /dev/null 2>&1; }
 
-# "is variable set?" predicate (still used by general.sh). eval keeps it valid
-# under sh/bash/zsh without the bash/zsh-only `[[ -v ]]`.
-def() { eval "[ -n \"\${$1+x}\" ]"; }
-
 # --- indirect expansion (bash ${!v} / zsh ${(P)v}) --------------------------
 # eval is the one form both shells parse; the alternatives are mutually
 # exclusive parse-time syntax. $1 must be a bare variable name.
