@@ -20,6 +20,7 @@ from typing import List, Optional
 import typer
 
 import hpc
+from log import mu_log
 from sshfs import sshfs_app
 
 # -h as well as --help, everywhere.
@@ -146,7 +147,7 @@ def cp_nodes():
 
     defs = list(hpc.cluster_defs())
     if not defs:
-        typer.secho("no nodes — is MU_CLUSTERS set?", fg="yellow")
+        mu_log("WARN", "no nodes — is MU_CLUSTERS set?")
         raise typer.Exit(1)
 
     user = os.environ.get("MU_HPC_UNAME", "?")

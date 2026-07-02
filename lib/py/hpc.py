@@ -11,6 +11,8 @@ from typing import List
 
 import typer
 
+from log import mu_log
+
 
 def cluster_defs():
     """Yield (cluster, domain, [nodes]) from the inherited env config."""
@@ -51,8 +53,7 @@ def resolve(node_or_target: str) -> str:
     targets = node_targets()
     if node_or_target not in targets:
         known = ", ".join(sorted(targets)) or "(none — is MU_CLUSTERS set?)"
-        typer.secho(f"unknown node: {node_or_target}", fg="red", err=True)
-        typer.secho(f"known nodes: {known}", err=True)
+        mu_log("ERROR", f"unknown node: {node_or_target} (known: {known})")
         raise typer.Exit(2)
     return targets[node_or_target]
 
@@ -69,5 +70,5 @@ def ensure_ticket() -> None:
         return  # no kerberos here (e.g. hpc login node) — nothing to do
     if user in klist.stdout:
         return
-    typer.secho(f"No Kerberos ticket for {user}; running pkinit...", fg="cyan")
+    mu_log("INFO", f"No Kerberos ticket for {user}; running pkinit…")
     subprocess.run(["pkinit", user])

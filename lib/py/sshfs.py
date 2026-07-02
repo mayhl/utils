@@ -20,6 +20,7 @@ from typing import List
 import typer
 
 import hpc
+from log import mu_log
 
 _CTX = {"help_option_names": ["-h", "--help"]}
 sshfs_app = typer.Typer(no_args_is_help=True, context_settings=_CTX,
@@ -131,10 +132,10 @@ def list_mounts(verbose: bool = typer.Option(False, "-v", "--verbose", help="als
 
     reg = _read_registry()
     if not reg:
-        typer.secho("no mounts — add one with `mu sshfs add <name> <node> <path>`", fg="yellow")
+        mu_log("INFO", "no mounts — add one with `mu sshfs add <name> <node> <path>`")
         raise typer.Exit(0)
 
-    badge = {"mounted": "[green]● mounted[/]", "hung": "[yellow]⚠ hung[/]",
+    badge = {"mounted": "[green]● mounted[/]", "hung": "[yellow]! hung[/]",
              "unmounted": "[bright_black]○ not mounted[/]"}
     table = Table(title="[bold]SSHFS Mounts[/]", title_justify="left", header_style="bold")
     table.add_column("Name", style="bold green")
@@ -146,7 +147,7 @@ def list_mounts(verbose: bool = typer.Option(False, "-v", "--verbose", help="als
         table.add_column("Local", style="bright_black")
     for name in sorted(reg):
         node, rpath, ro = reg[name]
-        access = "[yellow]🔒 ro[/]" if ro else "[bright_black]rw[/]"
+        access = "[yellow]ro[/]" if ro else "[bright_black]rw[/]"
         row = [name, node, rpath, access, badge.get(_status(name), "?")]
         if verbose:
             row.append(_mount_dir(name))
@@ -165,11 +166,11 @@ def mount(
     answerable and connection errors are visible (not swallowed by a pipe).
     """
     if not shutil.which("sshfs"):
-        typer.secho("sshfs not found — install fuse-t + sshfs to use mu sshfs", fg="red", err=True)
+        mu_log("ERROR", "sshfs not found — install fuse-t + sshfs to use mu sshfs")
         raise typer.Exit(3)
     reg = _read_registry()
     if name not in reg:
-        typer.secho(f"unknown mount: {name} (see `mu sshfs list`)", fg="red", err=True)
+        mu_log("ERROR", f"unknown mount: {name} (see `mu sshfs list`)")
         raise typer.Exit(2)
     node, rpath, ro = reg[name]
     mdir = _mount_dir(name)
@@ -178,10 +179,9 @@ def mount(
     if st == "mounted":
         return  # already live — idempotent
     if st == "hung":
-        typer.secho(f"{name}: stale mount — remounting", fg="yellow")
+        mu_log("WARN", f"{name}: stale mount — remounting")
         if not _umount(mdir):
-            typer.secho(f"{name}: could not unmount (hung); may need `diskutil unmount force {mdir}` or a restart",
-                        fg="red", err=True)
+            mu_log("ERROR", f"{name}: couldn't unmount (hung); try `diskutil unmount force {mdir}` or a restart")
             raise typer.Exit(1)
 
     target = hpc.resolve(node)
@@ -194,13 +194,16 @@ def mount(
         opts += ["-o", "ro"]
     cmd = ["sshfs", *opts, f"{target}:{rpath}", mdir]
 
-    dest = f"{target}:{rpath}" if verbose else node
-    typer.secho(f"connecting {name} → {dest}" + ("  (ro)" if ro else ""), fg="cyan")
+    ro_tag = " (ro)" if ro else ""
+    mu_log("INFO", f"connecting {name} → {node}{ro_tag}")
+    if verbose:                                   # detail block (terminal-only)
+        typer.secho(f"  local   {mdir}", dim=True)
+        typer.secho(f"  remote  {rpath}", dim=True)
 
     # Inherit stdin/stderr so host-key / Kerberos prompts are answerable and errors
-    # are visible; sshfs daemonizes once the mount is ready. The spinner runs only
-    # in non-verbose mode — with -v the raw ssh output flows to the terminal (and is
-    # the fallback if a mount ever stalls on a new-host prompt the spinner would hide).
+    # are visible; sshfs daemonizes once the mount is ready. Spinner in non-verbose
+    # only — with -v the raw ssh output flows to the terminal (and is the fallback
+    # if a mount ever stalls on a new-host prompt the spinner would hide).
     try:
         if verbose:
             rc = subprocess.run(cmd).returncode
@@ -209,13 +212,12 @@ def mount(
             with Console().status(f"[cyan]mounting {name}…", spinner="dots"):
                 rc = subprocess.run(cmd).returncode
     except KeyboardInterrupt:
-        typer.secho(f"{name}: interrupted", fg="yellow", err=True)
+        mu_log("WARN", f"{name}: interrupted")
         raise typer.Exit(130)
     if rc == 0 and _is_mounted(mdir):
-        typer.secho(f"● mounted {name} → {mdir}", fg="green")
+        mu_log("OK", f"mounted {name}" + (f" → {rpath}" if verbose else "") + ro_tag)
         return
-    typer.secho(f"mount failed (sshfs exited {rc}) — retry with `mu sshfs mount {name} -v` for detail",
-                fg="red", err=True)
+    mu_log("ERROR", f"{name}: mount failed (sshfs exited {rc}) — retry with `mu sshfs mount {name} -v`")
     raise typer.Exit(1)
 
 
@@ -224,13 +226,12 @@ def umount_cmd(name: str = typer.Argument(..., autocompletion=_complete_mount, h
     """Unmount a mount."""
     mdir = _mount_dir(name)
     if not _is_mounted(mdir):
-        typer.echo(f"{name}: not mounted")
+        mu_log("INFO", f"{name}: not mounted")
         return
     if _umount(mdir):
-        typer.secho(f"● unmounted {name}", fg="green")
+        mu_log("OK", f"unmounted {name}")
     else:
-        typer.secho(f"{name}: could not unmount (hung?); try `diskutil unmount force {mdir}` or a restart",
-                    fg="red", err=True)
+        mu_log("ERROR", f"{name}: couldn't unmount (hung?); try `diskutil unmount force {mdir}` or a restart")
         raise typer.Exit(1)
 
 
@@ -238,7 +239,7 @@ def umount_cmd(name: str = typer.Argument(..., autocompletion=_complete_mount, h
 def path_cmd(name: str = typer.Argument(..., autocompletion=_complete_mount, help="mount name")):
     """Print the local mount dir (used by `hcd` to cd). stdout = just the path."""
     if name not in _read_registry():
-        typer.secho(f"unknown mount: {name}", fg="red", err=True)
+        mu_log("ERROR", f"unknown mount: {name}")
         raise typer.Exit(2)
     typer.echo(_mount_dir(name))
 
@@ -253,12 +254,12 @@ def add(
     """Register a new mount (name -> node:path). Does not mount."""
     reg = _read_registry()
     if name in reg:
-        typer.secho(f"mount '{name}' already exists → {reg[name][0]}:{reg[name][1]}", fg="yellow", err=True)
+        mu_log("WARN", f"mount '{name}' already exists → {reg[name][0]}:{reg[name][1]}")
         raise typer.Exit(1)
     hpc.resolve(node)  # validate the node resolves (exits 2 if unknown)
     reg[name] = (node, path, read_only)
     _write_registry(reg)
-    typer.secho(f"● added {name} → {node}:{path}{'  (ro)' if read_only else ''}", fg="green")
+    mu_log("OK", f"added {name} → {node}:{path}{' (ro)' if read_only else ''}")
 
 
 @sshfs_app.command("rm")
@@ -266,10 +267,10 @@ def rm(name: str = typer.Argument(..., autocompletion=_complete_mount, help="mou
     """Remove a mount from the registry (does not unmount)."""
     reg = _read_registry()
     if name not in reg:
-        typer.secho(f"unknown mount: {name}", fg="red", err=True)
+        mu_log("ERROR", f"unknown mount: {name}")
         raise typer.Exit(2)
     if _is_mounted(_mount_dir(name)):
-        typer.secho(f"note: {name} is still mounted — `mu sshfs umount {name}` first", fg="yellow")
+        mu_log("WARN", f"{name} still mounted — `mu sshfs umount {name}` first")
     del reg[name]
     _write_registry(reg)
-    typer.secho(f"● removed {name}", fg="green")
+    mu_log("OK", f"removed {name}")
