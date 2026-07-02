@@ -78,14 +78,18 @@ mu_kitty_bootstrap() {
 
 # --- sshfs mounts (local-only; `mu sshfs` is the engine, only hcd mounts) -----
 # The mount name is the only handle; the local dir is the tool's business.
-# hcd <name>   mount (if needed) + cd into it;  no arg -> list what's available.
+# hcd [flags] <name>   mount (if needed) + cd into it;  no arg -> list.
+# Flags (e.g. -v) pass through to `mu sshfs mount`; the non-flag arg is the name.
 hcd() {
-  [ -n "$1" ] || {
+  [ $# -eq 0 ] && {
     mu sshfs list
     return
   }
-  mu sshfs mount "$1" && cd "$(mu sshfs path "$1")"
+  mu sshfs mount "$@" || return
+  local a name=
+  for a in "$@"; do case "$a" in -*) ;; *) name=$a ;; esac done
+  [ -n "$name" ] && cd "$(mu sshfs path "$name")"
 }
 hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
-hum() { mu sshfs umount "$1"; } # unmount
+hum() { mu sshfs umount "$@"; } # unmount
 alias hls='mu sshfs list'       # table with live status

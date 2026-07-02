@@ -15,7 +15,6 @@ to it) and never config.env.
 import os
 import shutil
 import subprocess
-import time
 from typing import List
 
 import typer
@@ -27,7 +26,6 @@ sshfs_app = typer.Typer(no_args_is_help=True, context_settings=_CTX,
                         help="Mount HPC dirs locally over sshfs (macOS/fuse-t).")
 
 _STAT_TIMEOUT = 4     # s; a slower listing = treat the mount as hung
-_MOUNT_TIMEOUT = 20   # s to reach a live mount before giving up
 
 
 # --- registry (a file, not the shell env) ------------------------------------
@@ -36,25 +34,30 @@ def _root() -> str:
 
 
 def _registry_path() -> str:
-    return os.path.join(_root(), "mounts")
+    return os.path.join(_root(), "registry")
 
 
 def _mount_dir(name: str) -> str:
-    return os.path.join(_root(), name)
+    return os.path.join(_root(), "mounts", name)
 
 
 def _read_registry() -> dict:
-    """Return {name: (node, remote_path)} from the registry file."""
+    """Return {name: (node, remote_path, read_only)} from the registry file.
+
+    Tab-separated: `name<TAB>node<TAB>path[<TAB>ro]`. Path may contain spaces (not
+    tabs); an optional 4th `ro` field marks a read-only mount.
+    """
     out = {}
     try:
         with open(_registry_path()) as f:
             for line in f:
-                s = line.strip()
-                if not s or s.startswith("#"):
+                s = line.rstrip("\n")
+                if not s.strip() or s.lstrip().startswith("#"):
                     continue
-                parts = s.split(None, 2)  # path may contain spaces -> keep as rest
-                if len(parts) == 3:
-                    out[parts[0]] = (parts[1], parts[2])
+                parts = s.split("\t")
+                if len(parts) >= 3:
+                    ro = len(parts) >= 4 and parts[3].strip() == "ro"
+                    out[parts[0].strip()] = (parts[1].strip(), parts[2].strip(), ro)
     except FileNotFoundError:
         pass
     return out
@@ -64,10 +67,13 @@ def _write_registry(entries: dict) -> None:
     path = _registry_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     lines = ["# managed by `mu sshfs add` / `mu sshfs rm` — do not hand-edit lightly",
-             "# name\tnode\tremote-path"]
+             "# name\tnode\tremote-path\t[ro]"]
     for name in sorted(entries):
-        node, rpath = entries[name]
-        lines.append(f"{name}\t{node}\t{rpath}")
+        node, rpath, ro = entries[name]
+        row = f"{name}\t{node}\t{rpath}"
+        if ro:
+            row += "\tro"
+        lines.append(row)
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -134,12 +140,14 @@ def list_mounts(verbose: bool = typer.Option(False, "-v", "--verbose", help="als
     table.add_column("Name", style="bold green")
     table.add_column("Node", style="magenta")
     table.add_column("Remote path", style="cyan")
+    table.add_column("Access")
     table.add_column("Status")
     if verbose:
         table.add_column("Local", style="bright_black")
     for name in sorted(reg):
-        node, rpath = reg[name]
-        row = [name, node, rpath, badge.get(_status(name), "?")]
+        node, rpath, ro = reg[name]
+        access = "[yellow]🔒 ro[/]" if ro else "[bright_black]rw[/]"
+        row = [name, node, rpath, access, badge.get(_status(name), "?")]
         if verbose:
             row.append(_mount_dir(name))
         table.add_row(*row)
@@ -147,8 +155,15 @@ def list_mounts(verbose: bool = typer.Option(False, "-v", "--verbose", help="als
 
 
 @sshfs_app.command()
-def mount(name: str = typer.Argument(..., autocompletion=_complete_mount, help="mount name")):
-    """Mount a configured name (used by `hcd`). Auto-remounts a stale mount."""
+def mount(
+    name: str = typer.Argument(..., autocompletion=_complete_mount, help="mount name"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="show the remote target + verbose ssh output"),
+):
+    """Mount a configured name (used by `hcd`). Auto-remounts a stale mount.
+
+    sshfs keeps stdin/stderr on the terminal, so host-key / Kerberos prompts are
+    answerable and connection errors are visible (not swallowed by a pipe).
+    """
     if not shutil.which("sshfs"):
         typer.secho("sshfs not found — install fuse-t + sshfs to use mu sshfs", fg="red", err=True)
         raise typer.Exit(3)
@@ -156,7 +171,7 @@ def mount(name: str = typer.Argument(..., autocompletion=_complete_mount, help="
     if name not in reg:
         typer.secho(f"unknown mount: {name} (see `mu sshfs list`)", fg="red", err=True)
         raise typer.Exit(2)
-    node, rpath = reg[name]
+    node, rpath, ro = reg[name]
     mdir = _mount_dir(name)
 
     st = _status(name)
@@ -173,39 +188,34 @@ def mount(name: str = typer.Argument(..., autocompletion=_complete_mount, help="
     os.makedirs(mdir, exist_ok=True)
     hpc.ensure_ticket()
     ssh = os.environ.get("MU_SSH", "ssh")
-    ssh_cmd = f"{ssh} -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-    cmd = ["sshfs",
-           "-o", f"ssh_command={ssh_cmd}",
-           "-o", "reconnect",
-           "-o", "defer_permissions",
-           f"{target}:{rpath}", mdir]
+    ssh_cmd = f"{ssh} -o ServerAliveInterval=15 -o ServerAliveCountMax=3" + (" -v" if verbose else "")
+    opts = ["-o", f"ssh_command={ssh_cmd}", "-o", "reconnect", "-o", "defer_permissions"]
+    if ro:
+        opts += ["-o", "ro"]
+    cmd = ["sshfs", *opts, f"{target}:{rpath}", mdir]
 
-    from rich.console import Console
-    console = Console()
-    ok, err_msg = False, ""
-    with console.status(f"[cyan]connecting {name} ({target})…"):
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except OSError as e:
-            err_msg = f"failed to launch sshfs: {e}"
-            proc = None
-        if proc is not None:
-            deadline = time.monotonic() + _MOUNT_TIMEOUT
-            while time.monotonic() < deadline:
-                if _is_mounted(mdir) and _responds(mdir):
-                    ok = True
-                    break
-                rc = proc.poll()
-                if rc is not None and rc != 0:
-                    err_msg = (proc.stderr.read() if proc.stderr else "").strip() or f"sshfs exited {rc}"
-                    break
-                time.sleep(0.3)
-            else:
-                err_msg = f"not ready after {_MOUNT_TIMEOUT}s (connection down?)"
-    if ok:
-        console.print(f"[green]● mounted[/] {name} → {mdir}")
+    dest = f"{target}:{rpath}" if verbose else node
+    typer.secho(f"connecting {name} → {dest}" + ("  (ro)" if ro else ""), fg="cyan")
+
+    # Inherit stdin/stderr so host-key / Kerberos prompts are answerable and errors
+    # are visible; sshfs daemonizes once the mount is ready. The spinner runs only
+    # in non-verbose mode — with -v the raw ssh output flows to the terminal (and is
+    # the fallback if a mount ever stalls on a new-host prompt the spinner would hide).
+    try:
+        if verbose:
+            rc = subprocess.run(cmd).returncode
+        else:
+            from rich.console import Console
+            with Console().status(f"[cyan]mounting {name}…", spinner="dots"):
+                rc = subprocess.run(cmd).returncode
+    except KeyboardInterrupt:
+        typer.secho(f"{name}: interrupted", fg="yellow", err=True)
+        raise typer.Exit(130)
+    if rc == 0 and _is_mounted(mdir):
+        typer.secho(f"● mounted {name} → {mdir}", fg="green")
         return
-    console.print(f"[red]mount failed:[/] {err_msg}")
+    typer.secho(f"mount failed (sshfs exited {rc}) — retry with `mu sshfs mount {name} -v` for detail",
+                fg="red", err=True)
     raise typer.Exit(1)
 
 
@@ -238,6 +248,7 @@ def add(
     name: str = typer.Argument(..., help="short handle (used by hcd)"),
     node: str = typer.Argument(..., autocompletion=hpc.complete_node, help="HPC node (from MU_CLUSTERS) or user@host"),
     path: str = typer.Argument(..., help="remote directory to mount"),
+    read_only: bool = typer.Option(False, "--ro", "--read-only", help="mount read-only (data to browse, no writes)"),
 ):
     """Register a new mount (name -> node:path). Does not mount."""
     reg = _read_registry()
@@ -245,9 +256,9 @@ def add(
         typer.secho(f"mount '{name}' already exists → {reg[name][0]}:{reg[name][1]}", fg="yellow", err=True)
         raise typer.Exit(1)
     hpc.resolve(node)  # validate the node resolves (exits 2 if unknown)
-    reg[name] = (node, path)
+    reg[name] = (node, path, read_only)
     _write_registry(reg)
-    typer.secho(f"● added {name} → {node}:{path}", fg="green")
+    typer.secho(f"● added {name} → {node}:{path}{'  (ro)' if read_only else ''}", fg="green")
 
 
 @sshfs_app.command("rm")
