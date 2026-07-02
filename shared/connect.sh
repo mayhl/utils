@@ -2,7 +2,7 @@
 # shared/connect.sh — ssh / rsync codegen for hopping and copying between
 # clusters. Loads everywhere (you hop and copy from an HPC too).
 #
-# Seam-driven: interactive logins use MU_SSH_LOGIN, transfers use MU_SSH, auth
+# Seam-driven: interactive logins use mu_ssh_login, transfers use MU_SSH, auth
 # via mu_auth (all set by platform/*.sh); it never branches on the platform.
 # Portable across bash and zsh — no `compgen`, no `${!var}` (uses the explicit
 # MU_CLUSTERS list + mu_indirect instead).
@@ -83,7 +83,7 @@ mu_connect_generate() {
         /*) mu_log "WARN" "ssh alias '${nl}' shadows executable ${existing}" ;;
       esac
       {
-        echo "alias ${nl}='mu_auth && \${MU_SSH_LOGIN} \${MU_HPC_SSH_OPTS} ${target}'"
+        echo "alias ${nl}='mu_auth && mu_ssh_login \${MU_HPC_SSH_OPTS} ${target}'"
         echo "alias cp2${nc}='mu_cp_to ${target}'"
         echo "alias cp${nc}='mu_cp_from ${target}'"
       } >> "$_MU_ALIAS_CACHE"

@@ -23,12 +23,13 @@ export MU_SSH
 # integration / clipboard / terminfo over ssh). It execs the `ssh` on PATH,
 # which is the ossh build, so Kerberos is preserved. File transfers (rsync -e)
 # keep the plain MU_SSH — the kitten's session setup is pointless there.
+# A function (not a string var) so the multi-word command survives unquoted
+# use without relying on word-splitting — zsh doesn't split ${var} by default.
 if [ -n "${KITTY_WINDOW_ID}" ] && mu_have kitty; then
-  MU_SSH_LOGIN="kitty +kitten ssh"
+  mu_ssh_login() { kitty +kitten ssh "$@"; }
 else
-  MU_SSH_LOGIN="$MU_SSH"
+  mu_ssh_login() { "$MU_SSH" "$@"; }
 fi
-export MU_SSH_LOGIN
 
 # auth hook: obtain a Kerberos ticket if none is present for the HPC user.
 mu_auth() {

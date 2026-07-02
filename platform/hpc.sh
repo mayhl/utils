@@ -12,7 +12,6 @@ MU_SSH="$(command -v ssh)"
 export MU_SSH
 
 # No kitty on a login node; interactive login uses the same plain ssh.
-MU_SSH_LOGIN="$MU_SSH"
-export MU_SSH_LOGIN
+mu_ssh_login() { "$MU_SSH" "$@"; }
 
 mu_auth() { :; }
