@@ -28,18 +28,44 @@ _MU_ALIAS_CACHE="${_MU_CACHE_DIR}/hpc_aliases.sh"
 mu_cp_wrapper() {
   mu_auth
   mu_log "INFO" "Sync: $1 -> $2"
-  # No output redirect: rsync's progress, errors, and any ssh host-key/password
-  # prompts stay on the terminal. The audit trail is mu_log's job — it already
-  # records INFO/OK/ERROR to the framework log.
-  if rsync ${MU_HPC_RSYNC_OPTS} -e "${MU_SSH}" "$1" "$2"; then
+  # Progress: aggregate one-liner by default (--info=progress2); MU_CP_VERBOSE
+  # switches to per-file -vP. Transfer ssh is quieted (MU_SSH_TRANSFER_OPTS=-q)
+  # to drop the login banner; host-key/password prompts and errors still surface
+  # (no output redirect). The audit trail is mu_log's job (INFO/OK/ERROR).
+  local progress="--info=progress2"
+  [ -n "${MU_CP_VERBOSE}" ] && progress="-vP"
+  # $(echo ...) word-splits the opts under both bash and zsh (zsh doesn't split a
+  # bare ${var}); the value may now be multi-word (e.g. "-au --partial").
+  if rsync $(echo "${MU_HPC_RSYNC_OPTS}") ${progress} -e "${MU_SSH} ${MU_SSH_TRANSFER_OPTS}" "$1" "$2"; then
     mu_log "OK" "Sync: $1"
   else
     mu_log "ERROR" "Sync failed: $1"
     return 1
   fi
 }
-mu_cp_to() { mu_cp_wrapper "$2" "$1:$3"; }   # local -> remote:  mu_cp_to <target> <local> <remote>
-mu_cp_from() { mu_cp_wrapper "$1:$2" "$3"; } # remote -> local:  mu_cp_from <target> <remote> <local>
+# A leading -v/--verbose flips to per-file progress; rest is <local>/<remote>.
+mu_cp_to() { # local -> remote:  cp2<N> [-v] <local> <remote>
+  local tgt="$1"
+  shift
+  local MU_CP_VERBOSE=""
+  case "$1" in -v | --verbose)
+    MU_CP_VERBOSE=1
+    shift
+    ;;
+  esac
+  mu_cp_wrapper "$1" "${tgt}:$2"
+}
+mu_cp_from() { # remote -> local:  cp<N> [-v] <remote> <local>
+  local tgt="$1"
+  shift
+  local MU_CP_VERBOSE=""
+  case "$1" in -v | --verbose)
+    MU_CP_VERBOSE=1
+    shift
+    ;;
+  esac
+  mu_cp_wrapper "${tgt}:$1" "$2"
+}
 
 # --- per-cluster alias codegen (cached) --------------------------------------
 mu_connect_generate() {

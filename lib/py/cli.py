@@ -14,6 +14,7 @@ helpers live in hpc.py; the sshfs plane in sshfs.py.
 """
 import os
 import re
+import shlex
 import subprocess
 from typing import List, Optional
 
@@ -60,19 +61,114 @@ def _split_stream(stream):
         yield buf
 
 
-def _build_rsync_args(src, dst, dry_run, exclude, delete, bwlimit) -> List[str]:
+_BASE_DEFAULT = "-au --partial"
+_PARTIAL_DIR = ".rsync-partial"
+
+# Progress/output flags the tool owns; stripped from user-supplied base/ropt so
+# they can't corrupt the --info=progress2 parser. Short clusters keep their other
+# letters (-avuP -> -au). Long forms drop whole.
+_PROGRESS_LONG = {"--verbose", "--progress"}
+# raw-option -> canonical key, for cross-layer duplicate detection. --exclude is
+# intentionally absent: multiple excludes stack, they don't conflict.
+_SHORT_KEY = {"z": "--compress", "c": "--checksum"}
+_LONG_KEY = {
+    "--compress": "--compress", "--checksum": "--checksum",
+    "--timeout": "--timeout", "--partial-dir": "--partial-dir",
+    "--delete": "--delete", "--bwlimit": "--bwlimit",
+}
+
+
+def _crack_progress(tokens):
+    """Split progress/verbose flags out of a token list -> (kept, stripped).
+
+    Long flags (--verbose/--progress/--info*) drop whole; short clusters keep
+    their non-progress letters (e.g. -avuP -> -au, stripping v and P).
+    """
+    kept, stripped = [], []
+    for tok in tokens:
+        if tok in _PROGRESS_LONG or tok.startswith("--info"):
+            stripped.append(tok)
+        elif len(tok) > 1 and tok[0] == "-" and tok[1] != "-":
+            bad = [c for c in tok[1:] if c in "vP"]
+            if bad:
+                stripped += [f"-{c}" for c in bad]
+                clean = "".join(c for c in tok[1:] if c not in "vP")
+                if clean:
+                    kept.append(f"-{clean}")
+            else:
+                kept.append(tok)
+        else:
+            kept.append(tok)
+    return kept, stripped
+
+
+def _sanitize(tokens, source):
+    """Drop tool-owned progress flags from a user layer, warning once."""
+    kept, stripped = _crack_progress(tokens)
+    if stripped:
+        uniq = " ".join(dict.fromkeys(stripped))
+        mu_log("WARN", f"ignoring progress flags in {source} ({uniq}); the tool "
+                       "owns progress (default aggregate bar; -v for per-file)")
+    return kept
+
+
+def _canon_keys(tokens):
+    """Canonical option keys present in a raw token list (for dup detection)."""
+    keys = set()
+    for tok in tokens:
+        head = tok.split("=", 1)[0]
+        if head in _LONG_KEY:
+            keys.add(_LONG_KEY[head])
+        elif len(tok) > 1 and tok[0] == "-" and tok[1] != "-":
+            keys |= {_SHORT_KEY[c] for c in tok[1:] if c in _SHORT_KEY}
+    return keys
+
+
+def _build_rsync_args(src, dst, *, dry_run, exclude, delete, bwlimit,
+                      compress, checksum, timeout, partial_dir, ropt) -> List[str]:
     ssh = os.environ.get("MU_SSH", "ssh")
-    args = ["-au", "--partial", "-e", ssh]
-    if dry_run:
-        args.append("--dry-run")
-    if delete:
-        args.append("--delete")
-    if bwlimit:
-        args += ["--bwlimit", bwlimit]
+    # Quiet the transfer transport (default -q) so the login banner is dropped;
+    # interactive logins go through mu_ssh_login and keep it.
+    transport = f"{ssh} {os.environ.get('MU_SSH_TRANSFER_OPTS', '-q')}".strip()
+
+    # Layer order (later wins): env base -> named flags -> --ropt -> progress
+    # (progress is prepended by the runner). Each user layer is progress-sanitized.
+    env = _sanitize(shlex.split(os.environ.get("MU_HPC_RSYNC_OPTS", _BASE_DEFAULT)),
+                    "MU_HPC_RSYNC_OPTS")
+
+    # --ropt: progress-sanitize, then drop exact repeats.
+    ropt_clean, seen = [], set()
+    for o in _sanitize(list(ropt or []), "--ropt"):
+        if o in seen:
+            mu_log("WARN", f"duplicate --ropt '{o}' ignored")
+            continue
+        seen.add(o)
+        ropt_clean.append(o)
+
+    # Warn when a named flag repeats an option already set in a raw layer.
+    raw_keys = _canon_keys(env) | _canon_keys(ropt_clean)
+    named: List[str] = []
+
+    def _flag(active, tokens, key):
+        if not active:
+            return
+        if key in raw_keys:
+            mu_log("WARN", f"{key} set via both a flag and a raw opt; "
+                           "rightmost wins (--ropt > flag > env)")
+        named.extend(tokens)
+
+    _flag(compress, ["-z"], "--compress")
+    _flag(checksum, ["-c"], "--checksum")
+    _flag(delete, ["--delete"], "--delete")
+    _flag(bool(bwlimit), ["--bwlimit", bwlimit or ""], "--bwlimit")
+    _flag(timeout > 0, ["--timeout", str(timeout)], "--timeout")
+    _flag(partial_dir, [f"--partial-dir={_PARTIAL_DIR}"], "--partial-dir")
     for ex in exclude or []:
-        args += ["--exclude", ex]
-    args += [src, dst]
-    return args
+        named += ["--exclude", ex]
+    if dry_run:
+        named.append("--dry-run")
+
+    return [*env, *named, *ropt_clean, "-e", transport, src, dst]
 
 
 def _rsync_progress(rsync_args: List[str], label: str) -> int:
@@ -103,6 +199,17 @@ def _rsync_progress(rsync_args: List[str], label: str) -> int:
     return proc.returncode
 
 
+def _rsync_run(rsync_args: List[str], label: str, verbose: bool) -> int:
+    """Aggregate Rich bar by default; -v streams raw per-file rsync (no bar).
+
+    The per-file `-vP` output can't be folded into an aggregate bar, so verbose
+    mode bypasses the Rich renderer and attaches rsync straight to the terminal.
+    """
+    if verbose:
+        return subprocess.run(["rsync", "-vP", *rsync_args]).returncode
+    return _rsync_progress(rsync_args, label)
+
+
 # --- commands ----------------------------------------------------------------
 @cp_app.command(epilog=_NODES_EPILOG)
 def push(
@@ -113,12 +220,20 @@ def push(
     exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="rsync exclude pattern (repeatable)"),
     delete: bool = typer.Option(False, "--delete", help="delete extraneous files on the remote"),
     bwlimit: Optional[str] = typer.Option(None, "--bwlimit", help="rsync bandwidth limit, e.g. 10m"),
+    compress: bool = typer.Option(False, "--compress", "-z", help="compress in transit (skip for pre-compressed data)"),
+    checksum: bool = typer.Option(False, "--checksum", "-c", help="verify by checksum, not size+mtime"),
+    timeout: int = typer.Option(0, "--timeout", help="I/O timeout in seconds (0 = none)"),
+    partial_dir: bool = typer.Option(True, "--partial-dir/--no-partial-dir", help="keep partials in .rsync-partial for cross-run resume"),
+    ropt: Optional[List[str]] = typer.Option(None, "--ropt", help="extra raw rsync option (repeatable)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="per-file output instead of the aggregate bar"),
 ):
     """Copy a local path TO a node (rsync push), with a live progress bar."""
     target = hpc.resolve(node)
     hpc.ensure_ticket()
-    args = _build_rsync_args(src, f"{target}:{dst}", dry_run, exclude, delete, bwlimit)
-    raise typer.Exit(_rsync_progress(args, f"push {node}"))
+    args = _build_rsync_args(src, f"{target}:{dst}", dry_run=dry_run, exclude=exclude,
+                             delete=delete, bwlimit=bwlimit, compress=compress, checksum=checksum,
+                             timeout=timeout, partial_dir=partial_dir, ropt=ropt)
+    raise typer.Exit(_rsync_run(args, f"push {node}", verbose))
 
 
 @cp_app.command(epilog=_NODES_EPILOG)
@@ -130,12 +245,20 @@ def pull(
     exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="rsync exclude pattern (repeatable)"),
     delete: bool = typer.Option(False, "--delete", help="delete extraneous files locally"),
     bwlimit: Optional[str] = typer.Option(None, "--bwlimit", help="rsync bandwidth limit, e.g. 10m"),
+    compress: bool = typer.Option(False, "--compress", "-z", help="compress in transit (skip for pre-compressed data)"),
+    checksum: bool = typer.Option(False, "--checksum", "-c", help="verify by checksum, not size+mtime"),
+    timeout: int = typer.Option(0, "--timeout", help="I/O timeout in seconds (0 = none)"),
+    partial_dir: bool = typer.Option(True, "--partial-dir/--no-partial-dir", help="keep partials in .rsync-partial for cross-run resume"),
+    ropt: Optional[List[str]] = typer.Option(None, "--ropt", help="extra raw rsync option (repeatable)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="per-file output instead of the aggregate bar"),
 ):
     """Copy a path FROM a node TO local (rsync pull), with a live progress bar."""
     target = hpc.resolve(node)
     hpc.ensure_ticket()
-    args = _build_rsync_args(f"{target}:{src}", dst, dry_run, exclude, delete, bwlimit)
-    raise typer.Exit(_rsync_progress(args, f"pull {node}"))
+    args = _build_rsync_args(f"{target}:{src}", dst, dry_run=dry_run, exclude=exclude,
+                             delete=delete, bwlimit=bwlimit, compress=compress, checksum=checksum,
+                             timeout=timeout, partial_dir=partial_dir, ropt=ropt)
+    raise typer.Exit(_rsync_run(args, f"pull {node}", verbose))
 
 
 @cp_app.command("nodes")
