@@ -1,0 +1,270 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+
+	"github.com/spf13/cobra"
+
+	"github.com/mayhl/mayhl_utils/internal/hpc"
+	"github.com/mayhl/mayhl_utils/internal/render"
+	"github.com/mayhl/mayhl_utils/internal/sshfs"
+)
+
+func sshfsCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "sshfs",
+		Short: "Mount HPC dirs locally over sshfs (macOS/fuse-t).",
+	}
+	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsRmCmd())
+	return c
+}
+
+// mountCompletion completes the first arg (mount name) from the registry.
+func mountCompletion(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) != 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return sshfs.CompleteMount(toComplete), cobra.ShellCompDirectiveNoFileComp
+}
+
+func sshfsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List configured mounts with live status. (shortcut: hls)",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			reg := sshfs.ReadRegistry()
+			if len(reg) == 0 {
+				render.Info("no mounts — add one with `mu sshfs add <name> <node> <path>`")
+				return nil
+			}
+			names := make([]string, 0, len(reg))
+			for n := range reg {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			rows := make([]render.MountRow, 0, len(reg))
+			for _, n := range names {
+				m := reg[n]
+				rows = append(rows, render.MountRow{
+					Name: n, Node: m.Node, Path: m.Path, RO: m.RO, Status: sshfs.Status(n),
+				})
+			}
+			render.MountsTable(rows, sshfs.MountsRoot())
+			return nil
+		},
+	}
+}
+
+func sshfsMountCmd() *cobra.Command {
+	var verbose bool
+	c := &cobra.Command{
+		Use:               "mount <name>",
+		Short:             "Mount a configured name. Auto-remounts a stale mount. (shortcut: hcd — mounts + cds)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: mountCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			os.Exit(runMount(args[0], verbose))
+			return nil
+		},
+	}
+	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show the remote target + verbose ssh output")
+	return c
+}
+
+// runMount ports sshfs.py's mount: idempotent, remounts a stale/hung mount, keeps
+// stdin/stderr on the terminal so host-key/Kerberos prompts are answerable, and
+// shows a spinner while sshfs settles (non-verbose only).
+func runMount(name string, verbose bool) int {
+	if _, err := exec.LookPath("sshfs"); err != nil {
+		render.Err("sshfs not found — install fuse-t + sshfs to use mu sshfs")
+		return 3
+	}
+	m, ok := sshfs.ReadRegistry()[name]
+	if !ok {
+		render.Err(fmt.Sprintf("unknown mount: %s (see `mu sshfs list`)", name))
+		return 2
+	}
+	mdir := sshfs.MountDir(name)
+
+	switch sshfs.Status(name) {
+	case "mounted":
+		return 0 // already live — idempotent
+	case "hung":
+		render.Warn(name + ": stale mount — remounting")
+		if !sshfs.Umount(mdir) {
+			render.Err(fmt.Sprintf("%s: couldn't unmount (hung); try `diskutil unmount force %s` or a restart", name, mdir))
+			return 1
+		}
+	}
+
+	target, err := hpc.Resolve(m.Node)
+	if err != nil {
+		render.Err(err.Error())
+		return 2
+	}
+	if err := os.MkdirAll(mdir, 0o755); err != nil {
+		render.Err(err.Error())
+		return 1
+	}
+	hpc.EnsureTicket()
+
+	roTag := ""
+	if m.RO {
+		roTag = " (ro)"
+	}
+	render.Info(fmt.Sprintf("connecting %s → %s%s", name, m.Node, roTag))
+	if verbose {
+		render.Detail("  local   " + mdir)
+		render.Detail("  remote  " + m.Path)
+	}
+
+	cmd := exec.Command("sshfs", sshfs.MountArgs(target, m.Path, mdir, m.RO, verbose)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	var rc int
+	if verbose {
+		rc = procExit(cmd.Run())
+	} else {
+		sp := render.NewSpinner("mounting " + name + "…")
+		sp.Start()
+		rc = procExit(cmd.Run())
+		sp.Stop()
+	}
+
+	if rc == 0 && sshfs.IsMounted(mdir) {
+		msg := "mounted " + name
+		if verbose {
+			msg += " → " + m.Path
+		}
+		render.OK(msg + roTag)
+		return 0
+	}
+	render.Err(fmt.Sprintf("%s: mount failed (sshfs exited %d) — retry with `mu sshfs mount %s -v`", name, rc, name))
+	return 1
+}
+
+func sshfsUmountCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:               "umount <name>",
+		Short:             "Unmount a mount. (shortcut: hum)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: mountCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			mdir := sshfs.MountDir(name)
+			if !sshfs.IsMounted(mdir) {
+				render.Info(name + ": not mounted")
+				return nil
+			}
+			if sshfs.Umount(mdir) {
+				render.OK("unmounted " + name)
+				return nil
+			}
+			render.Err(fmt.Sprintf("%s: couldn't unmount (hung?); try `diskutil unmount force %s` or a restart", name, mdir))
+			os.Exit(1)
+			return nil
+		},
+	}
+}
+
+func sshfsPathCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:               "path <name>",
+		Short:             "Print the local mount dir (used by hcd to cd). stdout = just the path.",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: mountCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			if _, ok := sshfs.ReadRegistry()[name]; !ok {
+				render.Err("unknown mount: " + name)
+				os.Exit(2)
+			}
+			fmt.Println(sshfs.MountDir(name))
+			return nil
+		},
+	}
+}
+
+func sshfsAddCmd() *cobra.Command {
+	var readOnly bool
+	c := &cobra.Command{
+		Use:   "add <name> <node> <path>",
+		Short: "Register a new mount (name → node:path). Does not mount. (shortcut: hadd)",
+		Args:  cobra.ExactArgs(3),
+		ValidArgsFunction: func(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 1 { // completing the node arg
+				return hpc.CompleteNode(toComplete), cobra.ShellCompDirectiveNoFileComp
+			}
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(_ *cobra.Command, args []string) error {
+			name, node, path := args[0], args[1], args[2]
+			reg := sshfs.ReadRegistry()
+			if ex, ok := reg[name]; ok {
+				render.Warn(fmt.Sprintf("mount '%s' already exists → %s:%s", name, ex.Node, ex.Path))
+				os.Exit(1)
+			}
+			if _, err := hpc.Resolve(node); err != nil { // validate the node resolves
+				render.Err(err.Error())
+				os.Exit(2)
+			}
+			reg[name] = sshfs.Mount{Node: node, Path: path, RO: readOnly}
+			if err := sshfs.WriteRegistry(reg); err != nil {
+				render.Err(err.Error())
+				os.Exit(1)
+			}
+			roTag := ""
+			if readOnly {
+				roTag = " (ro)"
+			}
+			render.OK(fmt.Sprintf("added %s → %s:%s%s", name, node, path, roTag))
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&readOnly, "ro", false, "mount read-only (data to browse, no writes)")
+	c.Flags().BoolVar(&readOnly, "read-only", false, "alias for --ro")
+	return c
+}
+
+func sshfsRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:               "rm <name>",
+		Short:             "Remove a mount from the registry (does not unmount).",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: mountCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			reg := sshfs.ReadRegistry()
+			if _, ok := reg[name]; !ok {
+				render.Err("unknown mount: " + name)
+				os.Exit(2)
+			}
+			if sshfs.IsMounted(sshfs.MountDir(name)) {
+				render.Warn(name + " still mounted — `mu sshfs umount " + name + "` first")
+			}
+			delete(reg, name)
+			if err := sshfs.WriteRegistry(reg); err != nil {
+				render.Err(err.Error())
+				os.Exit(1)
+			}
+			render.OK("removed " + name)
+			return nil
+		},
+	}
+}
+
+// procExit extracts a child process's exit code from exec.Cmd.Run's error.
+func procExit(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return 1
+}
