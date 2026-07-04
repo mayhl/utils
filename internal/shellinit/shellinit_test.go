@@ -1,0 +1,44 @@
+package shellinit
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestGenerate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+hpc_user = "alice"
+[[cluster]]
+name = "alpha"
+domain = "alpha.example.mil"
+nodes = ["mike", "login-c"]
+[[cluster]]
+name = "beta"
+domain = "beta.example.mil"
+nodes = ["node2"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	t.Setenv("MU_NODE", "login-c") // this shell is "on" login-c → its dispatcher is skipped
+
+	out := Generate()
+
+	if !strings.Contains(out, "_mu_node() {") {
+		t.Error("missing shared dispatcher helper")
+	}
+	if !strings.Contains(out, `mike() { _mu_node mike "alice@mike.alpha.example.mil" "$@"; }`) {
+		t.Errorf("missing/wrong mike wrapper:\n%s", out)
+	}
+	if !strings.Contains(out, `node2() { _mu_node node2 "alice@node2.beta.example.mil" "$@"; }`) {
+		t.Errorf("missing node2 wrapper:\n%s", out)
+	}
+	if strings.Contains(out, "login-c()") {
+		t.Error("self node (login-c) should be skipped")
+	}
+}
