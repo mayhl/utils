@@ -1,0 +1,98 @@
+package cli
+
+import (
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/mayhl/mayhl_utils/internal/hpc"
+	"github.com/mayhl/mayhl_utils/internal/render"
+	"github.com/mayhl/mayhl_utils/internal/rsync"
+)
+
+func cpCmd() *cobra.Command {
+	cp := &cobra.Command{
+		Use:   "cp",
+		Short: "Copy files to/from HPC nodes (rsync).",
+	}
+	cp.AddCommand(cpPushCmd(), cpPullCmd())
+	return cp
+}
+
+func cpPushCmd() *cobra.Command {
+	var o rsync.Opts
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:               "push <node> <src> <dst>",
+		Short:             "Copy a local path TO a node (rsync push), with a progress bar.",
+		Long:              "Copy a local path TO a node (rsync push), with a live progress bar.\n\n" + hpc.NodesHint(),
+		Args:              cobra.ExactArgs(3),
+		ValidArgsFunction: nodeCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runTransfer(true, args[0], args[1], args[2], o, verbose)
+		},
+	}
+	addTransferFlags(cmd, &o, &verbose)
+	return cmd
+}
+
+func cpPullCmd() *cobra.Command {
+	var o rsync.Opts
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:               "pull <node> <src> <dst>",
+		Short:             "Copy a path FROM a node to local (rsync pull), with a progress bar.",
+		Long:              "Copy a path FROM a node TO local (rsync pull), with a live progress bar.\n\n" + hpc.NodesHint(),
+		Args:              cobra.ExactArgs(3),
+		ValidArgsFunction: nodeCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runTransfer(false, args[0], args[1], args[2], o, verbose)
+		},
+	}
+	addTransferFlags(cmd, &o, &verbose)
+	return cmd
+}
+
+// runTransfer resolves the node, ensures a Kerberos ticket, and runs rsync. For
+// push the local src goes to node:dst; for pull node:src comes to local dst. It
+// exits the process directly so rsync's exit code propagates (fang would
+// otherwise return 0), and so an unknown-node error prints one house-style line
+// without fang's ERROR block.
+func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error {
+	target, err := hpc.Resolve(node)
+	if err != nil {
+		render.Err(err.Error())
+		os.Exit(2)
+	}
+	hpc.EnsureTicket()
+
+	src, dst, label := a, target+":"+b, "push "+node
+	if !push {
+		src, dst, label = target+":"+a, b, "pull "+node
+	}
+	os.Exit(rsync.Run(rsync.BuildArgs(src, dst, o), label, verbose))
+	return nil
+}
+
+func addTransferFlags(cmd *cobra.Command, o *rsync.Opts, verbose *bool) {
+	f := cmd.Flags()
+	f.BoolVarP(&o.DryRun, "dry-run", "n", false, "show what would transfer")
+	f.StringArrayVar(&o.Exclude, "exclude", nil, "rsync exclude pattern (repeatable)")
+	f.BoolVar(&o.Delete, "delete", false, "delete extraneous files on the destination")
+	f.StringVar(&o.Bwlimit, "bwlimit", "", "rsync bandwidth limit, e.g. 10m")
+	f.BoolVarP(&o.Compress, "compress", "z", false, "compress in transit (skip for pre-compressed data)")
+	f.BoolVarP(&o.Checksum, "checksum", "c", false, "verify by checksum, not size+mtime")
+	f.IntVar(&o.Timeout, "timeout", 0, "I/O timeout in seconds (0 = none)")
+	f.BoolVar(&o.PartialDir, "partial-dir", true, "keep partials in .rsync-partial for cross-run resume (--partial-dir=false to disable)")
+	f.StringArrayVar(&o.Ropt, "ropt", nil, "extra raw rsync option (repeatable)")
+	f.BoolVarP(verbose, "verbose", "v", false, "per-file output instead of the aggregate bar")
+}
+
+// nodeCompletion completes the first argument (node) from the configured
+// inventory; later arguments (src/dst) fall back to file-path completion.
+func nodeCompletion(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) != 0 {
+		return nil, cobra.ShellCompDirectiveDefault
+	}
+	return hpc.CompleteNode(toComplete), cobra.ShellCompDirectiveNoFileComp
+}

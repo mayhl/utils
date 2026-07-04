@@ -14,5 +14,6 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.AddCommand(cpCmd())
 	return root
 }
