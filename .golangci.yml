@@ -1,0 +1,4 @@
+version: "2"
+# golangci-lint v2's default linter set (errcheck, govet, ineffassign,
+# staticcheck, unused) is plenty for a personal tool. Add linters/settings here
+# as they earn their keep — keep it lean, don't over-enable.

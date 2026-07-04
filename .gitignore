@@ -47,6 +47,7 @@ luac.out
 *.hex
 
 config.env
+config.toml
 
 custom.sh
 ARCHITECTURE.md
@@ -54,3 +55,7 @@ ARCHITECTURE.md
 # Python
 __pycache__/
 *.pyc
+
+# Go build artifacts
+/mu
+/mu-*-amd64
