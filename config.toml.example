@@ -1,0 +1,32 @@
+# mayhl_utils configuration (TOML).
+#
+# The real file — config.toml — is gitignored (it carries your HPC username and
+# HPC cluster hostnames). Copy this to config.toml and fill it in:
+#
+#     cp config.toml.example config.toml
+#
+# The mu engine reads config.toml when present, else falls back to the legacy
+# config.env environment variables, so the migration is non-breaking. Platform
+# seams (MU_SSH — ossh vs ssh by mode) and terminal state (NO_COLOR, COLUMNS, …)
+# are NOT set here; they stay environment-sourced.
+
+hpc_user = "your_hpc_username"
+
+[transfer]
+rsync_opts        = "-au --partial"   # base rsync opts (NO -v/-P/--progress — the tool owns progress)
+ssh_transfer_opts = "-q"              # quiet ssh for transfers (suppress the login banner)
+
+[sshfs]
+root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
+
+# One [[cluster]] block per HPC cluster. Order is preserved (array of tables) and drives
+# both node resolution and the generated per-node shell dispatchers.
+[[cluster]]
+name   = "dsrc1"
+domain = "dsrc1.example.hpc.mil"
+nodes  = ["node-a", "node-b", "node-c"]
+
+[[cluster]]
+name   = "dsrc2"
+domain = "dsrc2.example.hpc.mil"
+nodes  = ["node-d", "node-e"]
