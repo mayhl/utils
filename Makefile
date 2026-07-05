@@ -26,7 +26,7 @@ build: ## Native build for this machine
 build-linux: ## Static linux/amd64 binary for HPC deploy (no libc dependency)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags '$(LDFLAGS)' -o $(BIN)-linux-amd64 $(PKG)
 
-test:
+test: ## Run the whole test suite (go test ./...)
 	$(GO) test ./...
 
 tidy:

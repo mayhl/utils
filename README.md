@@ -13,6 +13,7 @@ A portable shell + Go toolkit to improve workflow on HPC clusters. The same chec
 * [Quick Tar](#qtar)
 * [HPC info & status](#hpc)
 * [Command Summary](#summary)
+* [Development](#dev)
 
 ## Installation <a name='install'></a>
 Clone this repository to a directory of your choice; that path becomes *MU_ROOT*.
@@ -155,3 +156,23 @@ The short shell commands are the everyday drivers; where a richer `mu` form exis
 | `mu_kitty_bootstrap` | local | push kitty terminfo to each configured node |
 
 > **NOTE:** Add `-h` to any `mu` command for help. `node1 push …` and `mu cp push node1 …` do the same transfer — the per-node form is a generated shorthand.
+
+## Development <a name='dev'></a>
+
+The engine is pure Go; the `Makefile` wraps the common tasks.
+
+| Command | Does |
+|---------|------|
+| `make build` | native `mu` binary for this machine |
+| `make build-linux` | static `linux/amd64` binary for HPC deploy |
+| `make test` | run the whole suite (`go test ./...`) |
+| `make fmt` / `make lint` | gofumpt / golangci-lint |
+
+Running the tests directly gives finer control:
+
+    make test                               # everything, the short way
+    go test ./... -race -count=1            # race detector, no test cache
+    go test ./internal/shellinit/ -v        # one package, verbose
+    go test ./internal/hpc/ -run TestProbe  # one test by name (regex)
+
+> **NOTE:** The suite is hermetic — no cluster, network, or ssh. The per-node dispatcher test drives the generated shell under **both bash and zsh**, skipping a shell that isn't installed (`--- SKIP`), so results are consistent wherever you run it.
