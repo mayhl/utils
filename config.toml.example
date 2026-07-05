@@ -19,6 +19,10 @@ ssh_transfer_opts = "-q"              # quiet ssh for transfers (suppress the lo
 [sshfs]
 root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 
+[ssh]
+# ossh = "/path/to/ossh/bin/ssh"     # Kerberos ssh build if it's a shell alias (give the
+                                     # binary path); omit to use the system ssh on PATH
+
 # One [[cluster]] block per HPC cluster. Order is preserved (array of tables) and drives
 # both node resolution and the generated per-node shell dispatchers.
 [[cluster]]

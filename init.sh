@@ -40,13 +40,14 @@ export MU_SYSTEM
 # OS compat is DETECTED, never derived from the mode toggle.
 if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
 
-# ---- platform seam (sets MU_SSH + mu_auth) ---------------------------------
-. "${MU_ROOT}/platform/${MU_SYSTEM}.sh"
-
-# ---- connectivity: per-node dispatchers (mike / mike push|pull / mike <cmd>)
-# plus the config as MU_* exports, generated from config.toml by the Go engine.
+# ---- connectivity: config as MU_* exports (incl. MU_OSSH) + per-node dispatchers
+# (mike / mike push|pull / mike <cmd>), generated from config.toml by the Go
+# engine. Runs BEFORE the platform seam so MU_OSSH is set when it resolves MU_SSH.
 # Replaces the old connect.sh alias codegen. -----------------------------------
 eval "$(mu shell-init)"
+
+# ---- platform seam (sets MU_SSH from MU_OSSH + mu_auth) ---------------------
+. "${MU_ROOT}/platform/${MU_SYSTEM}.sh"
 
 # ---- shared tooling --------------------------------------------------------
 . "${MU_ROOT}/shared/tar.sh"

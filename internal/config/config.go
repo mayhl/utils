@@ -34,6 +34,9 @@ type file struct {
 	SSHFS struct {
 		Root string `toml:"root"`
 	} `toml:"sshfs"`
+	SSH struct {
+		OSSH string `toml:"ossh"`
+	} `toml:"ssh"`
 	Clusters []struct {
 		Name   string   `toml:"name"`
 		Domain string   `toml:"domain"`
@@ -168,6 +171,17 @@ func SSHFSRoot() string {
 		return v
 	}
 	return "~/hpc_sshfs"
+}
+
+// OSSHPath is the path to the Kerberos `ossh` build (config.toml [ssh] ossh), or
+// "" if unset. A machine-specific path, so it lives in config — the shell platform
+// seam consumes it via MU_OSSH (exported by shell-init) to set MU_SSH, instead of
+// hardcoding a path in the tracked toolkit.
+func OSSHPath() string {
+	if f := cfg(); f != nil {
+		return f.SSH.OSSH
+	}
+	return ""
 }
 
 // SSHCommand is the transfer/transport ssh program. It's a platform SEAM (ossh on

@@ -5,7 +5,7 @@
 # Later slices add the local-only tools here: sshfs mount/hcd, pyenv, kitty was
 # dropped. connect.sh consumes MU_SSH/mu_auth and never branches on platform.
 
-# Kerberos + GSSAPI-enabled OpenSSH build used to reach the DoD HPCs.
+# Kerberos client tools + the `ossh` OpenSSH build on PATH.
 # Prepend only once so re-sourcing .zshrc does not bloat PATH.
 case ":$PATH:" in
   *:/usr/local/ossh/bin:*) ;;
@@ -13,10 +13,15 @@ case ":$PATH:" in
 esac
 export KRB5_CONFIG="${KRB5_CONFIG:-/etc/krb5.conf}"
 
-# ssh binary: prefer the Kerberos `ossh` build, fall back to system ssh.
-# Set authoritatively — the platform module owns the seam (a stale MU_SSH from
-# the environment must not win).
-MU_SSH="$(command -v ossh || command -v ssh)"
+# ssh binary: the Kerberos `ossh` build, else system ssh.
+# `ossh` is usually a shell alias (invisible to this subshell), so its binary path
+# comes from config.toml ([ssh] ossh), exported as MU_OSSH by `mu shell-init`
+# (which runs before this seam). Authoritative — this module owns the seam.
+if [ -n "${MU_OSSH}" ] && [ -x "${MU_OSSH}" ]; then
+  MU_SSH="${MU_OSSH}"
+else
+  MU_SSH="$(command -v ossh || command -v ssh)"
+fi
 export MU_SSH
 
 # Interactive-login ssh: inside kitty, wrap with the ssh kitten (shell
@@ -51,7 +56,7 @@ fi
 
 # One-time-per-HPC setup: push kitty's terminfo to the HPC systems so kitty
 # renders correctly over ssh (parallels mu_py_bootstrap). Local-only (kitty is
-# your terminal). One push per node — each Alpha system has its own $HOME.
+# your terminal). One push per node — each HPC system has its own $HOME.
 # Driven by MU_CLUSTERS.
 mu_kitty_bootstrap() {
   mu_have kitty || {

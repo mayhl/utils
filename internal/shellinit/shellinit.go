@@ -16,13 +16,20 @@ import (
 // The dispatcher: bare `<node>` connects (interactive ssh), `<node> push|pull`
 // transfer via the engine, and `<node> <anycmd>` runs that command over ssh. It
 // leans on the shell framework's seam helpers (mu_auth, mu_ssh_login, $MU_SSH).
+//
+// Remote-exec runs `bash -lc` (login shell) so HPC modules/scheduler load from
+// /etc/profile.d — which `zsh -l` does NOT source. That login profile spews a
+// benign dbus/X11 error over non-interactive ssh; it's filtered from stderr via
+// MU_SSH_STDERR_FILTER (default drops that message; process substitution keeps the
+// command's exit code and lets real errors through). TEMPORARY workaround for the
+// cluster's /etc/profile.d — see the dbus-filter note.
 const helper = `_mu_node() {
   local node=$1 target=$2; shift 2
   case ${1:-} in
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
     "")   mu_auth && mu_ssh_login "$target" ;;
-    *)    mu_auth && ${MU_SSH:-ssh} "$target" "$@" ;;
+    *)    mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2) ;;
   esac
 }
 `
@@ -82,6 +89,12 @@ func configExports() string {
 	fmt.Fprintf(&b, "export MU_HPC_RSYNC_OPTS=%q\n", config.RsyncOpts())
 	fmt.Fprintf(&b, "export MU_SSH_TRANSFER_OPTS=%q\n", config.SSHTransferOpts())
 	fmt.Fprintf(&b, "export MU_SSHFS_ROOT=%q\n", config.SSHFSRoot())
+	// ossh binary path (machine-specific) → the platform seam reads it to set
+	// MU_SSH. Only emitted when configured, so an unset value falls back to
+	// command -v ossh || ssh.
+	if p := config.OSSHPath(); p != "" {
+		fmt.Fprintf(&b, "export MU_OSSH=%q\n", p)
+	}
 	return b.String()
 }
 
