@@ -9,7 +9,7 @@ import (
 // TicketInfo is the parsed state of the local Kerberos credential cache.
 type TicketInfo struct {
 	Present   bool
-	Principal string    // e.g. "mayhl@REALM.EXAMPLE"
+	Principal string    // e.g. "alice@REALM.EXAMPLE"
 	Expires   time.Time // TGT expiry (zero if unparsed)
 }
 

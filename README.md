@@ -1,6 +1,6 @@
 # mayhl_utils
 
-A portable shell toolkit to improve workflow on the an HPC center and other DoD High Performance Computers (HPCs). The same checkout works from an HPC login node or a local macOS/Linux workstation.
+A portable shell toolkit to improve workflow on HPC clusters. The same checkout works from an HPC login node or a local macOS/Linux workstation.
 
 > **NOTE:** Works with both bash and zsh. The *mu* CLI and the tar progress bars use Python 3 through a self-contained virtual environment — no system installs.
 

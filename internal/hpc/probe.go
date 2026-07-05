@@ -7,7 +7,7 @@ import (
 )
 
 // Probe checks reachability of each node concurrently by TCP-dialing its ssh port
-// (22) — not ICMP ping, which DoD login nodes commonly block and which needs raw
+// (22) — not ICMP ping, which HPC login nodes commonly block and which needs raw
 // sockets. It answers the question that matters ("can I ssh?") and, being
 // concurrent, completes in ~one timeout rather than N. Returns node name →
 // "up" | "down". The map is targets: node name → host (FQDN).

@@ -11,11 +11,13 @@ import (
 // with spaces) and reads it back, verifying tab-separated parsing and the ro flag.
 func TestRegistryRoundTrip(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("MU_CONFIG_FILE", "") // isolate from any ambient config.toml
+	t.Setenv("MU_ROOT", "")
 	t.Setenv("MU_SSHFS_ROOT", root)
 
 	in := map[string]Mount{
-		"funwave":       {Node: "node1", Path: "/p/work/funwave", RO: false},
-		"scratch": {Node: "node2", Path: "/archive/nav drift", RO: true},
+		"proj":    {Node: "alpha", Path: "/p/work/proj", RO: false},
+		"data_ro": {Node: "beta", Path: "/archive/data set", RO: true},
 	}
 	if err := WriteRegistry(in); err != nil {
 		t.Fatalf("write: %v", err)
@@ -29,8 +31,8 @@ func TestRegistryRoundTrip(t *testing.T) {
 	if RegistryPath() != filepath.Join(root, "registry") {
 		t.Errorf("RegistryPath = %s", RegistryPath())
 	}
-	if MountDir("funwave") != filepath.Join(root, "mounts", "funwave") {
-		t.Errorf("MountDir = %s", MountDir("funwave"))
+	if MountDir("proj") != filepath.Join(root, "mounts", "proj") {
+		t.Errorf("MountDir = %s", MountDir("proj"))
 	}
 }
 
@@ -38,8 +40,10 @@ func TestRegistryRoundTrip(t *testing.T) {
 // are ignored, and a bare (non-ro) 3-field line parses as read-write.
 func TestReadRegistrySkipsCommentsAndBlanks(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("MU_CONFIG_FILE", "") // isolate from any ambient config.toml
+	t.Setenv("MU_ROOT", "")
 	t.Setenv("MU_SSHFS_ROOT", root)
-	body := "# a comment\n\nfoo\tmike\t/home/foo\nbar\tgold\t/scratch/bar\tro\n"
+	body := "# a comment\n\nfoo\talpha\t/home/foo\nbar\tbeta\t/scratch/bar\tro\n"
 	if err := os.WriteFile(filepath.Join(root, "registry"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

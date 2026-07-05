@@ -7,14 +7,14 @@ import (
 
 func TestParseKlist(t *testing.T) {
 	out := `Ticket cache: API:4502F01E-1FFC-4C6A-AB96-5F866F1ECE00
-Default principal: mayhl@REALM.EXAMPLE
+Default principal: alice@REALM.EXAMPLE
 
 Valid starting       Expires              Service principal
 07/04/2026 11:44:12  07/04/2026 21:44:12  krbtgt/REALM.EXAMPLE@REALM.EXAMPLE
-07/04/2026 11:44:47  07/04/2026 21:44:12  host/node2.beta.example.mil@
+07/04/2026 11:44:47  07/04/2026 21:44:12  host/node.example.mil@
 `
 	info := parseKlist(out)
-	if info.Principal != "mayhl@REALM.EXAMPLE" {
+	if info.Principal != "alice@REALM.EXAMPLE" {
 		t.Errorf("principal = %q", info.Principal)
 	}
 	want := time.Date(2026, 7, 4, 21, 44, 12, 0, time.Local)
