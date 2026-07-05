@@ -2,7 +2,22 @@
 // root at Execute time to style help/errors in the house visual language.
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"charm.land/lipgloss/v2"
+
+	"github.com/charmbracelet/fang"
+	"github.com/spf13/cobra"
+)
+
+// HelpColorScheme themes fang's help/usage in the house language: ANSI colors
+// (theme-aware, matching render's tables) instead of fang's truecolor default, with
+// the title in cyan (ANSI 6) to match render.StatusTable titles. Chrome only —
+// meaning still rides on glyphs, not color.
+func HelpColorScheme(c lipgloss.LightDarkFunc) fang.ColorScheme {
+	s := fang.AnsiColorScheme(c)
+	s.Title = lipgloss.Color("6") // cyan — matches table titles
+	return s
+}
 
 // Root builds the top-level `mu` command with all subcommand trees attached.
 func Root() *cobra.Command {

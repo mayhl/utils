@@ -76,12 +76,21 @@ func StatusTable(title string, rows []StatusRow) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.SetStyle(table.StyleRounded)
+	// House accents: cyan-bold title, cyan headers, dim frame, bold-magenta check
+	// name, white detail — the colored status glyph still carries the verdict.
+	t.Style().Title.Colors = text.Colors{text.FgCyan, text.Bold}
+	t.Style().Color.Header = text.Colors{text.FgCyan}    // headers: cyan accent
+	t.Style().Color.Border = text.Colors{text.FgHiBlack} // frame: quiet dim chrome
+	t.Style().Color.Separator = text.Colors{text.FgHiBlack}
 	t.SetTitle(title)
 	t.AppendHeader(table.Row{"", "Check", "Detail"})
 	for _, r := range rows {
 		t.AppendRow(table.Row{statusCell(r.Level), r.Name, r.Detail})
 	}
-	t.SetColumnConfigs([]table.ColumnConfig{{Name: "Check", Colors: text.Colors{text.Bold}}})
+	// Detail left uncolored → terminal default foreground (white on dark), theme-aware.
+	t.SetColumnConfigs([]table.ColumnConfig{
+		{Name: "Check", Colors: text.Colors{text.FgMagenta, text.Bold}},
+	})
 	t.Render()
 }
 
