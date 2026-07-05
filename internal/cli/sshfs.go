@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,7 +21,7 @@ func sshfsCmd() *cobra.Command {
 		Use:   "sshfs",
 		Short: "Mount HPC dirs locally over sshfs (macOS/fuse-t).",
 	}
-	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsRmCmd())
+	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsSetCmd(), sshfsRmCmd())
 	return c
 }
 
@@ -268,6 +269,95 @@ func sshfsAddCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&readOnly, "ro", false, "mount read-only (data to browse, no writes)")
 	c.Flags().BoolVar(&readOnly, "read-only", false, "alias for --ro")
+	return c
+}
+
+func sshfsSetCmd() *cobra.Command {
+	var node, path string
+	var ro, rw bool
+	c := &cobra.Command{
+		Use:   "set <name>",
+		Short: "Change an existing mount's node/path or swap ro↔rw. Remounts if live. (shortcut: hset)",
+		Long: `Change an existing mount's target or access mode in the registry.
+
+Only the flags you pass change:
+  --node   repoint to a different HPC node (validated against your clusters)
+  --path   repoint to a different remote path
+  --ro/--rw   swap read-only ↔ read-write
+
+sshfs bakes node/path/ro at mount time, so if the mount is live, set umounts and
+remounts it to apply. Flipping an /archive (HSM) path to rw warns first — those
+writes land on tape.
+
+Examples:
+  mu sshfs set scratch --path /archive/project/run   # fix a wrong path
+  mu sshfs set scratch --rw                                 # temporarily allow writes
+  mu sshfs set scratch --node hpc1                      # move to another node`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: mountCompletion,
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			reg := sshfs.ReadRegistry()
+			m, ok := reg[name]
+			if !ok {
+				render.Err("unknown mount: " + name)
+				os.Exit(2)
+			}
+			if ro && rw {
+				render.Err("--ro and --rw are mutually exclusive")
+				os.Exit(2)
+			}
+			changed := false
+			if node != "" && node != m.Node {
+				if _, err := hpc.Resolve(node); err != nil { // validate the node resolves
+					render.Err(err.Error())
+					os.Exit(2)
+				}
+				m.Node, changed = node, true
+			}
+			if path != "" && path != m.Path {
+				m.Path, changed = path, true
+			}
+			if ro && !m.RO {
+				m.RO, changed = true, true
+			}
+			if rw && m.RO {
+				m.RO, changed = false, true
+			}
+			if !changed {
+				render.Info(name + ": no change (pass --node/--path/--ro/--rw)")
+				return nil
+			}
+			if !m.RO && strings.HasPrefix(m.Path, "/archive") {
+				render.Warn(name + ": rw on an /archive (HSM) path — writes land on tape; make sure that's intended")
+			}
+			reg[name] = m
+			if err := sshfs.WriteRegistry(reg); err != nil {
+				render.Err(err.Error())
+				os.Exit(1)
+			}
+			roTag := ""
+			if m.RO {
+				roTag = " (ro)"
+			}
+			render.OK(fmt.Sprintf("set %s → %s:%s%s", name, m.Node, m.Path, roTag))
+			// Apply to a live mount: sshfs bakes node/path/ro at mount time, so a
+			// change only takes effect on remount.
+			if sshfs.IsMounted(sshfs.MountDir(name)) {
+				render.Info(name + ": remounting to apply")
+				if !sshfs.Umount(sshfs.MountDir(name)) {
+					render.Err(name + ": couldn't unmount to remount — unmount manually, then `hcd " + name + "`")
+					os.Exit(1)
+				}
+				os.Exit(runMount(name, false))
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&node, "node", "", "repoint to a different node")
+	c.Flags().StringVar(&path, "path", "", "repoint to a different remote path")
+	c.Flags().BoolVar(&ro, "ro", false, "make read-only (remounts if live)")
+	c.Flags().BoolVar(&rw, "rw", false, "make read-write (remounts if live)")
 	return c
 }
 

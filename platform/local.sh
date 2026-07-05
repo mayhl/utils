@@ -97,5 +97,6 @@ hcd() {
   [ -n "$name" ] && cd "$(mu sshfs path "$name")"
 }
 hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
+hset() { mu sshfs set "$@"; }   # hset <name> [--node|--path|--ro|--rw]
 hum() { mu sshfs umount "$@"; } # unmount
 alias hls='mu sshfs list'       # table with live status
