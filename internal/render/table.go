@@ -61,6 +61,43 @@ func NodesTable(defs []config.Cluster, user string, status map[string]string) {
 	t.Render()
 }
 
+// StatusRow is one row of a StatusTable: a level ("ok"|"warn"|"error"|"info"), a
+// name, and a detail string. Domain-free — any grouped check output can use it.
+type StatusRow struct {
+	Level, Name, Detail string
+}
+
+// StatusTable renders a titled rounded table of check rows, the status column a
+// glyph colored by level. Used by `mu doctor` (one table per section).
+func StatusTable(title string, rows []StatusRow) {
+	if colorOff() {
+		text.DisableColors()
+	}
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.SetStyle(table.StyleRounded)
+	t.SetTitle(title)
+	t.AppendHeader(table.Row{"", "Check", "Detail"})
+	for _, r := range rows {
+		t.AppendRow(table.Row{statusCell(r.Level), r.Name, r.Detail})
+	}
+	t.SetColumnConfigs([]table.ColumnConfig{{Name: "Check", Colors: text.Colors{text.Bold}}})
+	t.Render()
+}
+
+func statusCell(level string) string {
+	switch strings.ToUpper(level) {
+	case "OK":
+		return text.Colors{text.FgGreen, text.Bold}.Sprint(glyph("✓", "OK"))
+	case "WARN", "WARNING":
+		return text.Colors{text.FgYellow, text.Bold}.Sprint(glyph("!", "WARN"))
+	case "ERROR", "ERR", "FAIL":
+		return text.Colors{text.FgRed, text.Bold}.Sprint(glyph("✗", "ERR"))
+	default:
+		return text.Colors{text.FgCyan}.Sprint(glyph("→", "INFO"))
+	}
+}
+
 func nodeStatusBadge(status string) string {
 	switch status {
 	case "up":

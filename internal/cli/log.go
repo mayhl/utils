@@ -18,7 +18,7 @@ func logCmd() *cobra.Command {
 	var tier, scope, since string
 	c := &cobra.Command{
 		Use:   "log",
-		Short: "View the event log (transfers, jobs, big ops); filter with -t/-s/--since.",
+		Short: "View the event log (transfers, jobs, big ops).",
 		Long:  "Show mu's event log. Subcommands: `write` (append, for scripts), `clear`.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -37,7 +37,7 @@ func logWriteCmd() *cobra.Command {
 	var scope string
 	c := &cobra.Command{
 		Use:   "write <level> <msg>",
-		Short: "Append an event (renders + records) — the API for external scripts.",
+		Short: "Append an event to the log (for external scripts).",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			render.WriteEvent(scope, args[0], strings.Join(args[1:], " "))

@@ -14,6 +14,6 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd())
+	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd(), doctorCmd())
 	return root
 }

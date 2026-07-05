@@ -50,6 +50,7 @@ func TestCommandTree(t *testing.T) {
 		{"log"},
 		{"log", "write"},
 		{"log", "clear"},
+		{"doctor"},
 	} {
 		find(t, root, p...)
 	}
