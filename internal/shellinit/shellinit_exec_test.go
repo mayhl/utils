@@ -35,12 +35,18 @@ nodes = ["login-a"]
 
 	// Stub the framework seams, source the generated dispatchers, then run every
 	// grammar arm. mu_ssh_login prints CONNECT <target>; $MU_SSH (fakessh) prints
-	// SSH <target> :: <remote-cmd> so numbered remote-exec is observable too.
+	// SSH <target> :: <remote-cmd> so numbered remote-exec is observable too, and
+	// writes two stderr lines — a benign dbus line (must be dropped by the
+	// dispatcher's stderr filter) and a real error (must survive it).
 	driver := `
 mu_auth() { return 0; }
 mu_ssh_login() { echo "CONNECT $1"; }
 mu() { echo "MU $*"; }
-fakessh() { echo "SSH $2 :: $3"; }
+fakessh() {
+  echo "SSH $2 :: $3"
+  echo "dbus-update-activation-environment: noise" >&2
+  echo "real-error-boom" >&2
+}
 export MU_SSH=fakessh
 ` + Generate() + `
 login-a
@@ -64,7 +70,10 @@ login-a -h
 		"SSH alice@login-a03.alpha.example.mil :: ", // remote-exec on numbered login node
 		"MU cp push login-a a b",                    // push stays node-level
 		"connect to login node N",                   // -h prints the grammar
+		"real-error-boom",                           // a real stderr line survives the filter
 	}
+	// The benign dbus login-profile noise must be dropped by the stderr filter.
+	notWants := []string{"dbus-update-activation-environment"}
 
 	for _, sh := range []string{"bash", "zsh"} {
 		t.Run(sh, func(t *testing.T) {
@@ -80,6 +89,11 @@ login-a -h
 			for _, w := range wants {
 				if !strings.Contains(got, w) {
 					t.Errorf("%s: missing %q in output:\n%s", sh, w, got)
+				}
+			}
+			for _, nw := range notWants {
+				if strings.Contains(got, nw) {
+					t.Errorf("%s: %q should have been filtered from stderr but appeared:\n%s", sh, nw, got)
 				}
 			}
 		})

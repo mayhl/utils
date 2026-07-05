@@ -46,16 +46,9 @@ nodes = ["node2"]
 	if !strings.Contains(out, "_mu_node() {") {
 		t.Error("missing shared dispatcher helper")
 	}
-	// Dispatcher grammar: help arm and the numbered-login-node selector.
-	for _, want := range []string{
-		"_mu_node_help() {",
-		"-h|--help) _mu_node_help",
-		`*) target="${target%%.*}$(printf '%02d' "$1").${target#*.}"; shift ;;`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing dispatcher grammar %q in:\n%s", want, out)
-		}
-	}
+	// The dispatcher grammar (help arm, numbered-node selector) is verified
+	// behaviorally by TestDispatchExec, which runs the generated code — a text
+	// match here would just duplicate that, more brittly.
 	if !strings.Contains(out, `mike() { _mu_node mike "alice@mike.alpha.example.mil" "$@"; }`) {
 		t.Errorf("missing/wrong mike wrapper:\n%s", out)
 	}
