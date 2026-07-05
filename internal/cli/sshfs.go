@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -76,6 +77,35 @@ func sshfsMountCmd() *cobra.Command {
 	return c
 }
 
+// Mount deadlines: a healthy sshfs daemonizes within a second or two, so these only
+// bite a genuine hang. Verbose gets a longer window to answer a host-key/Kerberos
+// prompt before the deadline.
+const (
+	mountTimeout        = 30 * time.Second
+	mountTimeoutVerbose = 2 * time.Minute
+)
+
+// runBounded runs cmd, killing it if it doesn't finish within timeout (so a wedged
+// sshfs — dead server, missing remote path — can't hang the terminal). Returns the
+// exit code and whether it was killed on timeout. No Setpgid: cmd stays in the
+// terminal's foreground group so prompts remain answerable.
+func runBounded(cmd *exec.Cmd, timeout time.Duration) (int, bool) {
+	if err := cmd.Start(); err != nil {
+		render.Err(err.Error())
+		return 1, false
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return procExit(err), false
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		<-done
+		return 1, true
+	}
+}
+
 // runMount ports sshfs.py's mount: idempotent, remounts a stale/hung mount, keeps
 // stdin/stderr on the terminal so host-key/Kerberos prompts are answerable, and
 // shows a spinner while sshfs settles (non-verbose only).
@@ -125,16 +155,27 @@ func runMount(name string, verbose bool) int {
 
 	cmd := exec.Command("sshfs", sshfs.MountArgs(target, m.Path, mdir, m.RO, verbose)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Bound the mount so a wedged sshfs can't hang the terminal (the old failure: a
+	// bad remote path left it spinning until ^Z). Verbose gets a longer deadline for
+	// an interactive prompt.
+	timeout := mountTimeout
 	var rc int
+	var timedOut bool
 	if verbose {
-		rc = procExit(cmd.Run())
+		timeout = mountTimeoutVerbose
+		rc, timedOut = runBounded(cmd, timeout)
 	} else {
 		sp := render.NewSpinner("mounting " + name + "…")
 		sp.Start()
-		rc = procExit(cmd.Run())
+		rc, timedOut = runBounded(cmd, timeout)
 		sp.Stop()
 	}
 
+	if timedOut {
+		render.Err(fmt.Sprintf("%s: mount timed out after %s — remote path may be missing or the server unreachable; check `mu sshfs list` and retry with -v", name, timeout))
+		_ = sshfs.Umount(mdir) // tear down a half-open mount so it isn't left hung
+		return 1
+	}
 	if rc == 0 && sshfs.IsMounted(mdir) {
 		msg := "mounted " + name
 		if verbose {
