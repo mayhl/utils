@@ -42,11 +42,15 @@ func doctorCmd() *cobra.Command {
 					if r.Verbose == "" {
 						continue
 					}
+					title := r.Name // sub-table uses the fuller Title when a check sets one
+					if r.Title != "" {
+						title = r.Title
+					}
 					fmt.Println()
 					if rows, ok := verboseRows(r.Verbose); ok {
-						render.StatusTable(r.Name, rows)
+						render.StatusTable(title, rows)
 					} else {
-						fmt.Printf("%s:\n", r.Name)
+						fmt.Printf("%s:\n", title)
 						for _, ln := range strings.Split(r.Verbose, "\n") {
 							fmt.Printf("  %s\n", ln)
 						}
@@ -58,7 +62,7 @@ func doctorCmd() *cobra.Command {
 				for i, r := range results {
 					rows[i] = render.StatusRow{Level: levelStr(r.Status), Name: r.Name, Detail: r.Detail}
 				}
-				render.StatusTable("mu doctor", rows)
+				render.StatusTable("Doctor", rows)
 			}
 
 			ok, warn, fail := tally(results)

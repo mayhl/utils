@@ -30,9 +30,12 @@ const (
 // Result is one check's outcome. Section groups results into tables (built-ins →
 // "environment"; plugins → their checks.d subdir, or "checks" at top level).
 // Verbose holds extra detail shown only under `-v` (a plugin's full output, etc.).
+// Title, if set, is the fuller label for the `-v` sub-table (else Name is used); the
+// terse Name always labels the row in the combined overview.
 type Result struct {
 	Section string
 	Name    string
+	Title   string
 	Status  Status
 	Detail  string
 	Verbose string
@@ -101,7 +104,7 @@ func checkConfig() Result {
 		}
 		fmt.Fprintf(&b, "info\t%s\t%d node(s)", d.Name, len(d.Nodes)) // TSV → -v sub-table
 	}
-	return Result{Name: "hpc-config", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: b.String()}
+	return Result{Name: "hpc-config", Title: "HPC clusters", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: b.String()}
 }
 
 func checkTicket() Result {
@@ -176,6 +179,15 @@ func runDir(dir, section string) []Result {
 func runPlugin(dir, section, name string) Result {
 	out, err := exec.Command(filepath.Join(dir, name)).Output()
 	full := strings.TrimRight(string(out), "\n")
+	// Optional first line "#TITLE: <label>" sets the -v sub-table title; strip it before
+	// detail/verbose parsing (plugins without it just use their name).
+	title := ""
+	if first, rest, found := strings.Cut(full, "\n"); found || full != "" {
+		if t, ok := strings.CutPrefix(first, "#TITLE:"); ok {
+			title = strings.TrimSpace(t)
+			full = rest // "" when the plugin emitted only the title line
+		}
+	}
 	detail := lastLine(full)
 	verbose := ""
 	if i := strings.LastIndex(full, "\n"); i >= 0 { // lines above the detail line → -v
@@ -193,7 +205,7 @@ func runPlugin(dir, section, name string) Result {
 			}
 		}
 	}
-	return Result{Section: section, Name: name, Status: status, Detail: detail, Verbose: verbose}
+	return Result{Section: section, Name: name, Title: title, Status: status, Detail: detail, Verbose: verbose}
 }
 
 func isExec(p string) bool {
