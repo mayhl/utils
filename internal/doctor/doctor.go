@@ -92,7 +92,7 @@ func checkMise() Result {
 func checkConfig() Result {
 	defs := config.ClusterDefs()
 	if len(defs) == 0 {
-		return Result{Name: "config", Status: Warn, Detail: "no clusters configured (config.toml?)"}
+		return Result{Name: "hpc-config", Status: Warn, Detail: "no clusters configured (config.toml?)"}
 	}
 	var b strings.Builder
 	for i, d := range defs {
@@ -101,7 +101,7 @@ func checkConfig() Result {
 		}
 		fmt.Fprintf(&b, "info\t%s\t%d node(s)", d.Name, len(d.Nodes)) // TSV → -v sub-table
 	}
-	return Result{Name: "config", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: b.String()}
+	return Result{Name: "hpc-config", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: b.String()}
 }
 
 func checkTicket() Result {
