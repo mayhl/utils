@@ -12,6 +12,12 @@ import (
 // concurrent, completes in ~one timeout rather than N. Returns node name →
 // "up" | "down". The map is targets: node name → host (FQDN).
 func Probe(targets map[string]string, timeout time.Duration) map[string]string {
+	return probe(targets, "22", timeout)
+}
+
+// probe is Probe with an injectable port so tests can dial a local listener
+// instead of ssh/22.
+func probe(targets map[string]string, port string, timeout time.Duration) map[string]string {
 	out := make(map[string]string, len(targets))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -20,7 +26,7 @@ func Probe(targets map[string]string, timeout time.Duration) map[string]string {
 		go func(name, host string) {
 			defer wg.Done()
 			status := "down"
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "22"), timeout)
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), timeout)
 			if err == nil {
 				_ = conn.Close()
 				status = "up"
