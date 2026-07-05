@@ -84,7 +84,7 @@ For example:
     user@laptop: mu cp push node1 ./run42 /p/work/me/run42 -n --exclude '*.o'
     user@laptop: mu cp pull node1 /p/work/me/run42/out ./out
 
-Useful options: `--dry-run`/`-n` (preview), `--exclude PATTERN`, `--delete`, `--bwlimit RATE`, `-v` (per-file output); add `-h` to any command for help. Top-level commands: `mu cp`, `mu sshfs`, `mu tar`, `mu hpc`, `mu shell-init`.
+Useful options: `--dry-run`/`-n` (preview), `--exclude PATTERN`, `--exclude-hidden` (skip dotfiles/dot-dirs), `--delete`, `--bwlimit RATE`, `-v` (per-file output); add `-h` to any command for help. Top-level commands: `mu cp`, `mu sshfs`, `mu tar`, `mu hpc`, `mu shell-init`.
 
 ## SSHFS mounts <a name='sshfs'></a>
 Mount an HPC directory locally over sshfs. Register a mount once, then use the `h*` shortcuts:
@@ -92,9 +92,10 @@ Mount an HPC directory locally over sshfs. Register a mount once, then use the `
     user@laptop: mu sshfs add data node1 /p/work/me/data   # register (name → node:path)
     user@laptop: hcd data                                  # mount (if needed) + cd into it
     user@laptop: hls                                       # list mounts with live status
+    user@laptop: hset data --ro                            # change node/path or swap ro↔rw (remounts if live)
     user@laptop: hum data                                  # unmount
 
-`hcd`/`hadd`/`hls`/`hum` are thin shortcuts over `mu sshfs mount`+`cd` / `add` / `list` / `umount`. Every filesystem-touching operation is timeout-bounded, so a hung mount reports a status instead of freezing the terminal.
+`hcd`/`hadd`/`hls`/`hset`/`hum` are thin shortcuts over `mu sshfs mount`+`cd` / `add` / `list` / `set` / `umount`. `mu sshfs set` repoints a mount's node/path or swaps read-only ↔ read-write, remounting in place if it is already live. Every filesystem-touching operation is timeout-bounded, and a mount **aborts as soon as sshfs reports a fatal error** (e.g. a missing remote path) instead of hanging — so a bad mount tells you why, fast, rather than freezing the terminal.
 
 ## Quick Tar <a name='qtar'></a>
 `qtar` (no compression) and `gtar` (gzip) create a tarball from a folder or extract one — the mode is inferred from a `.tar`/`.tar.gz` extension — with a live progress bar:
@@ -135,6 +136,7 @@ The short shell commands are the everyday drivers; where a richer `mu` form exis
 | `hcd <name>` | `mu sshfs mount <name>` + `cd` | local | mount (if needed) and cd in |
 | `hadd <name> <node> <path>` | `mu sshfs add` | local | register a mount |
 | `hls` | `mu sshfs list` | local | list mounts with live status |
+| `hset <name> [--node\|--path\|--ro\|--rw]` | `mu sshfs set` | local | repoint node/path or swap ro↔rw (remounts if live) |
 | `hum <name>` | `mu sshfs umount` | local | unmount |
 
 #### Tar
