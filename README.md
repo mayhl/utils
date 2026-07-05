@@ -1,144 +1,157 @@
 # mayhl_utils
 
-A portable shell toolkit to improve workflow on HPC clusters. The same checkout works from an HPC login node or a local macOS/Linux workstation.
+A portable shell + Go toolkit to improve workflow on HPC clusters. The same checkout works from an HPC login node or a local macOS/Linux workstation.
 
-> **NOTE:** Works with both bash and zsh. The *mu* CLI and the tar progress bars use Python 3 through a self-contained virtual environment — no system installs.
+> **NOTE:** Works with both bash and zsh. The `mu` engine is a single Go binary (built on first use) — there is no Python or virtualenv.
 
 ## Table of Contents
 * [Installation](#install)
 * [Configuration](#config)
-* [SSH to an HPC](#ssh)
-* [Copying Files Between HPCs](#rsync)
+* [Per-node commands](#node)
 * [The mu CLI](#mu)
+* [SSHFS mounts](#sshfs)
 * [Quick Tar](#qtar)
-* [Status](#status)
+* [HPC info & status](#hpc)
 * [Command Summary](#summary)
 
 ## Installation <a name='install'></a>
-To install, first clone this repository to a directory of your choice. This path becomes *MU_ROOT*.
+Clone this repository to a directory of your choice; that path becomes *MU_ROOT*.
 
-    user@hpc: cd path/of/your/choice
-    user@hpc: git clone git@github.com:mayhl/utils.git
+    user@host: git clone git@github.com:mayhl/utils.git
 
-The toolkit needs only two coordinates and a source line — no other repository or framework is required. Add the following to your `.zshrc` or `.bashrc` (or a personal environment file it sources):
+Add two lines to your `.zshrc`/`.bashrc` (or an environment file it sources):
 
-    export MU_ROOT=path/of/your/choice/utils
-    export MU_SYSTEM=local
+    export MU_ROOT=/path/to/utils
     source $MU_ROOT/init.sh
 
-*MU_SYSTEM* selects the platform module: `local` for a workstation, `hpc` for a login node.
+That is the whole hook — no other repository or framework is required. *MU_SYSTEM* (local vs hpc) is **auto-detected** from `$BC_HOST`; set it explicitly only to override.
 
-> **NOTE:** *MU_SYSTEM* only picks the platform module (local vs hpc); it does not imply an operating system, and defaults to *local* if unset.
+The `mu` engine is a Go binary at `$MU_ROOT/mu`. It **builds itself on first use** (needs `go` on `PATH`), so a fresh shell just works; on an HPC, drop a cross-compiled `mu` there (`make build-linux`) and no build happens.
 
-Next, copy the example config and fill in your details:
+Finally, copy the example config and fill it in:
 
-    user@hpc: cp $MU_ROOT/config.env.example $MU_ROOT/config.env
-    user@hpc: vim $MU_ROOT/config.env
+    user@host: cp $MU_ROOT/config.toml.example $MU_ROOT/config.toml
+    user@host: $EDITOR $MU_ROOT/config.toml
 
-Finally, build the Python virtual environment used by the *mu* CLI and the tar progress bars:
-
-    user@hpc: mu_py_bootstrap
-
-Open a new shell (or re-source your rc file) and run *mu_status* to confirm everything loaded.
+Open a new shell and run `mu hpc nodes` to confirm everything loaded.
 
 ## Configuration <a name='config'></a>
-Configuration is split across two files, sourced in order: *defaults.env* (tracked, shared knobs) and *config.env* (gitignored, your machine's identity). Only *config.env* needs editing — copy it from *config.env.example*.
+Configuration lives in **`config.toml`** (gitignored — your machine's identity; copy from the tracked `config.toml.example`). The Go engine reads it directly, and `mu shell-init` exports the values the shell layer needs, so it is the single source of truth.
 
-In *config.env*, set your HPC login name and list the clusters to generate aliases for. Each cluster needs a matching *_DOMAIN* and *_NODES* variable keyed by its ALL-CAPS name, e.g.
+    hpc_user = "your_username"
 
-    export MU_HPC_UNAME=your_username
-    export MU_CLUSTERS="alpha"
-    export MU_CLUSTER_ALPHA_DOMAIN="alpha.example.mil"
-    export MU_CLUSTER_ALPHA_NODES="node1 node2"
+    [ssh]
+    ossh = "/path/to/ossh/bin/ssh"     # a Kerberos ssh build if it's a shell alias (give the path); omit for system ssh
 
-> **NOTE:** Cluster names in *MU_CLUSTERS* are lowercase; the per-cluster variables use the ALL-CAPS name.
+    [sshfs]
+    root = "~/hpc_sshfs"               # local parent dir for sshfs mounts
 
-Behavior knobs live in *defaults.env* and rarely need changing: the rsync options (*MU_HPC_RSYNC_OPTS*, default `-avuP`), the ssh options (*MU_HPC_SSH_OPTS*, default `-Y`), the Python interpreter (*MU_PYTHON*), and the venv location (*MU_PY_VENV*, default `~/.cache/mayhl_utils/venv`). Override any of them in *config.env* if needed.
+    [[cluster]]
+    name   = "alpha"
+    domain = "alpha.example.mil"
+    nodes  = ["node1", "node2"]
 
-The generated ssh and copy aliases are cached and regenerate automatically when *connect.sh* or *config.env* change. To force a refresh, run *mu_connect_refresh*.
+    [[cluster]]
+    name   = "beta"
+    domain = "beta.example.mil"
+    nodes  = ["node3"]
 
-## SSH to an HPC <a name='ssh'></a>
-An alias is created for each configured node — simply type its name to connect. On a local workstation, a Kerberos ticket is obtained automatically (via *pkinit*) if you do not already have one, e.g.
+Transfer knobs (`[transfer] rsync_opts`, `ssh_transfer_opts`) have sensible defaults and rarely need changing. Which ssh binary to use is a platform seam handled by the platform module (`MU_SYSTEM` picks `local`/`hpc`); on a workstation a Kerberos ticket is obtained automatically via `pkinit` when needed.
 
-    user@laptop: node1
+## Per-node commands <a name='node'></a>
+`mu shell-init` (run automatically from `init.sh`) generates one dispatcher function per configured node. For a node named `node1`:
+
+| Form | Does |
+|------|------|
+| `node1` | ssh login (Kerberos handled automatically) |
+| `node1 push <local> <remote>` | copy local → node1 |
+| `node1 pull <remote> <local>` | copy node1 → local |
+| `node1 <cmd> …` | run `<cmd>` on node1 over ssh (a login shell, so modules/`PATH` load) |
+
+For example:
+
+    user@laptop: node1                                   # interactive login
+    user@laptop: node1 push ./run42 /p/work/me/run42     # copy up
+    user@laptop: node1 pull /p/work/me/run42/out ./out   # copy down
+    user@laptop: node1 qstat                             # run a scheduler command remotely
 
 > **NOTE:** Nested tunnels do not work; connect to one HPC at a time.
 
-## Copying Files Between HPCs <a name='rsync'></a>
-Files are copied via [rsync](https://rsync.samba.org/). Two commands are created for each node: *cpName*, copy from node 'Name' to the current machine; and *cp2Name*, copy to node 'Name' from the current machine (the *2* is a mnemonic for "to"). For example,
-
-    user@laptop: cpNode1 /p/work/me/run42/out ./out
-    user@laptop: cp2Node1 ./case.in /p/home/me/case
-
-Both authenticate automatically and stream rsync's output (and any ssh prompts) straight to the terminal.
-
 ## The mu CLI <a name='mu'></a>
-For richer, flag-driven transfers, the *mu* command (a Typer CLI backed by the venv) provides the same copies with a live progress bar, dry-run, and filters:
-
-    user@laptop: mu cp push node1 ./run42 /p/work/me/run42
-    user@laptop: mu cp pull node1 /p/work/me/run42/out ./out
-    user@laptop: mu cp nodes
-
-*mu cp push* copies local to node, *mu cp pull* copies node to local, and *mu cp nodes* prints a table of the configured nodes. The node may be a bare name (which tab-completes) or an explicit user@host. Useful options include *--dry-run* (*-n*) to preview, *--exclude PATTERN* to skip files, *--delete* to remove extraneous files at the destination, and *--bwlimit RATE* to cap bandwidth. Add *-h* to any command for help. For example,
+`mu` is the Go engine. The `push`/`pull` shorthands above are just `mu cp`, which you can also call directly for flags plus a live progress bar and a completion summary:
 
     user@laptop: mu cp push node1 ./run42 /p/work/me/run42 -n --exclude '*.o'
+    user@laptop: mu cp pull node1 /p/work/me/run42/out ./out
+
+Useful options: `--dry-run`/`-n` (preview), `--exclude PATTERN`, `--delete`, `--bwlimit RATE`, `-v` (per-file output); add `-h` to any command for help. Top-level commands: `mu cp`, `mu sshfs`, `mu tar`, `mu hpc`, `mu shell-init`.
+
+## SSHFS mounts <a name='sshfs'></a>
+Mount an HPC directory locally over sshfs. Register a mount once, then use the `h*` shortcuts:
+
+    user@laptop: mu sshfs add data node1 /p/work/me/data   # register (name → node:path)
+    user@laptop: hcd data                                  # mount (if needed) + cd into it
+    user@laptop: hls                                       # list mounts with live status
+    user@laptop: hum data                                  # unmount
+
+`hcd`/`hadd`/`hls`/`hum` are thin shortcuts over `mu sshfs mount`+`cd` / `add` / `list` / `umount`. Every filesystem-touching operation is timeout-bounded, so a hung mount reports a status instead of freezing the terminal.
 
 ## Quick Tar <a name='qtar'></a>
-To quickly put a folder into a tarball or extract the files from a tarball (with or without gzip compression), use the wrapper commands *qtar* (no compression) and *gtar* (with compression). The commands check for a *.tar* or *.tar.gz* file extension to determine whether to run in extract mode. For example,
+`qtar` (no compression) and `gtar` (gzip) create a tarball from a folder or extract one — the mode is inferred from a `.tar`/`.tar.gz` extension — with a live progress bar:
 
-    user@hpc: qtar FOLDER
-    user@hpc: gtar ARCHIVE.tar.gz
+    user@host: qtar FOLDER              # → FOLDER.tar
+    user@host: gtar ARCHIVE.tar.gz      # extract
 
-> **NOTE:** In extraction mode *gtar* and *qtar* are equivalent.
+> **NOTE:** In extraction mode `qtar` and `gtar` are equivalent (compression is auto-detected).
 
-#### Background Mode
-For larger folders/archives, the commands *bqtar* and *bgtar* execute their respective commands in the background at low priority. Output is piped to a *.log* file.
+`bqtar` / `bgtar` run their respective commands in the **background at low priority** (`nice`), logging to a `.log` file. All four are thin shims over `mu tar`, which wraps the system `tar` and meters it with the house progress bar.
 
-> **NOTE:** Low-priority mode applies the *nice* command.
+## HPC info & status <a name='hpc'></a>
+`mu hpc` aggregates cross-cluster info — run it from your workstation to reach every cluster:
 
-#### Python & tqdm
-If the Python package [tqdm](https://tqdm.github.io/) is available (it is installed into the toolkit venv by *mu_py_bootstrap*), *qtar* and *gtar* provide progress bars. An example of the extended output is below,
+    user@laptop: mu hpc nodes        # table of configured nodes
+    user@laptop: mu hpc nodes -s     # + ssh reachability probe (● up / ○ down)
+    user@laptop: mu hpc ticket       # local Kerberos ticket status (--renew runs pkinit)
 
-    user@hpc: gtar FOLDER
-    Processing:  31%|███            |  112M/365M [00:05<00:15, 17.2MB/s]
-    Compressed:   7%|█              | 24.8M/365M [00:05<01:21, 4.38MB/s]
-
-> **NOTE:** The Compressed progress bar will not fill up but gives the size of the compressed archive.
-
-## Status <a name='status'></a>
-The command *mu_status* prints a compact summary (system, root, git revision, ssh binary, user, clusters), and *mu_ctx* prints a detailed per-cluster listing of domains and nodes.
+The shell commands `mu_status` (compact) and `mu_ctx` (per-cluster detail) print environment summaries.
 
 ## Command Summary <a name='summary'></a>
 
-The short shell commands are the everyday drivers; where a richer Typer form
-exists (progress bar, flags, tab-completion), it is listed alongside. The *Where*
-column notes whether a command applies on a local workstation, an HPC, or both.
+The short shell commands are the everyday drivers; where a richer `mu` form exists (progress bar, flags, tab-completion) it is listed alongside. The *Where* column notes whether a command applies on a local workstation, an HPC, or both.
 
-#### Bootstrap & Init
+#### Per-node (generated by `mu shell-init`)
 
-| Command | Typer equivalent | Where | Description |
-|---------|------------------|-------|-------------|
-| `mu_py_bootstrap` | — | both | create or refresh the Python venv |
-| `mu_connect_refresh` | — | both | regenerate the ssh/copy aliases |
-| `mu_kitty_bootstrap` | — | local | push kitty terminfo to each configured node |
+| Command | Engine form | Where | Description |
+|---------|-------------|-------|-------------|
+| `<node>` | — | both | ssh login (Kerberos handled automatically) |
+| `<node> push <src> <dst>` | `mu cp push <node> <src> <dst>` | both | copy local → node |
+| `<node> pull <src> <dst>` | `mu cp pull <node> <src> <dst>` | both | copy node → local |
+| `<node> <cmd>` | — | both | run `<cmd>` on the node over ssh |
 
-#### HPC — Connectivity & Transfers
+#### SSHFS mounts (local)
 
-| Command | Typer equivalent | Where | Description |
-|---------|------------------|-------|-------------|
-| `<node>` | — | both | ssh to a configured node (Kerberos handled automatically) |
-| `cp2<Node> <src> <dst>` | `mu cp push <node> <src> <dst>` | both | copy *to* the node (here → node) |
-| `cp<Node> <src> <dst>` | `mu cp pull <node> <src> <dst>` | both | copy *from* the node (node → here) |
-| — | `mu cp nodes` | both | list the configured nodes |
+| Command | Engine form | Where | Description |
+|---------|-------------|-------|-------------|
+| `hcd <name>` | `mu sshfs mount <name>` + `cd` | local | mount (if needed) and cd in |
+| `hadd <name> <node> <path>` | `mu sshfs add` | local | register a mount |
+| `hls` | `mu sshfs list` | local | list mounts with live status |
+| `hum <name>` | `mu sshfs umount` | local | unmount |
 
-#### General
+#### Tar
 
-| Command | Typer equivalent | Where | Description |
-|---------|------------------|-------|-------------|
-| `qtar <dir\|archive>` | — | both | create or extract a `.tar` (no compression) |
-| `gtar <dir\|archive>` | — | both | create or extract a `.tar.gz` (gzip) |
+| Command | Engine form | Where | Description |
+|---------|-------------|-------|-------------|
+| `qtar <dir\|archive>` | `mu tar` | both | create or extract a `.tar` |
+| `gtar <dir\|archive>` | `mu tar -z` | both | create or extract a `.tar.gz` |
 | `bqtar` / `bgtar` | — | both | background, low-priority `qtar` / `gtar` |
-| `mu_status` / `mu_ctx` | — | both | compact / detailed environment summary |
 
-> **NOTE:** Add *-h* to any `mu` command for help. A `cp2<Node>` alias is
-> `mu cp push` with the node pre-bound; the two forms do the same transfer.
+#### HPC info, status & setup
+
+| Command | Where | Description |
+|---------|-------|-------------|
+| `mu hpc nodes [-s]` | local | node inventory (`-s` = ssh reachability) |
+| `mu hpc ticket [--renew]` | local | Kerberos ticket status / obtain via pkinit |
+| `mu_status` / `mu_ctx` | both | compact / detailed environment summary |
+| `mu shell-init` | both | emit the shell integration (auto-`eval`'d by `init.sh`) |
+| `mu_kitty_bootstrap` | local | push kitty terminfo to each configured node |
+
+> **NOTE:** Add `-h` to any `mu` command for help. `node1 push …` and `mu cp push node1 …` do the same transfer — the per-node form is a generated shorthand.
