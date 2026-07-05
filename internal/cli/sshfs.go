@@ -20,6 +20,14 @@ func sshfsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sshfs",
 		Short: "Mount HPC dirs locally over sshfs (macOS/fuse-t).",
+		Long: `Mount HPC dirs locally over sshfs (macOS/fuse-t).
+
+Shortcuts (shell functions — not 1:1 with the subcommands below):
+  hcd <name>   mount if needed + cd into it   (mu sshfs mount)
+  hls          list mounts with live status   (mu sshfs list)
+  hadd         register a new mount           (mu sshfs add)
+  hset         change/repoint a mount         (mu sshfs set)
+  hum          unmount                        (mu sshfs umount)`,
 	}
 	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsSetCmd(), sshfsRmCmd())
 	return c
@@ -36,7 +44,7 @@ func mountCompletion(_ *cobra.Command, args []string, toComplete string) ([]stri
 func sshfsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List configured mounts with live status. (shortcut: hls)",
+		Short: "List configured mounts with live status.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			reg := sshfs.ReadRegistry()
@@ -66,7 +74,7 @@ func sshfsMountCmd() *cobra.Command {
 	var verbose bool
 	c := &cobra.Command{
 		Use:               "mount <name>",
-		Short:             "Mount a configured name. Auto-remounts a stale mount. (shortcut: hcd — mounts + cds)",
+		Short:             "Mount a configured name. Auto-remounts a stale mount.",
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: mountCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -192,7 +200,7 @@ func runMount(name string, verbose bool) int {
 func sshfsUmountCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "umount <name>",
-		Short:             "Unmount a mount. (shortcut: hum)",
+		Short:             "Unmount a mount.",
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: mountCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -235,7 +243,7 @@ func sshfsAddCmd() *cobra.Command {
 	var readOnly bool
 	c := &cobra.Command{
 		Use:   "add <name> <node> <path>",
-		Short: "Register a new mount (name → node:path). Does not mount. (shortcut: hadd)",
+		Short: "Register a new mount (name → node:path). Does not mount.",
 		Args:  cobra.ExactArgs(3),
 		ValidArgsFunction: func(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 1 { // completing the node arg
@@ -277,7 +285,7 @@ func sshfsSetCmd() *cobra.Command {
 	var ro, rw bool
 	c := &cobra.Command{
 		Use:   "set <name>",
-		Short: "Change an existing mount's node/path or swap ro↔rw. Remounts if live. (shortcut: hset)",
+		Short: "Change an existing mount's node/path or swap ro↔rw. Remounts if live.",
 		Long: `Change an existing mount's target or access mode in the registry.
 
 Only the flags you pass change:
