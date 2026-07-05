@@ -22,15 +22,19 @@ func TestFrameworkLogFormat(t *testing.T) {
 	t.Setenv("MU_LOG_FILE", logf)
 	ResetLoggerForTest()
 
-	Info("hello")           // default scope "mu"
-	Scoped("cp").OK("done") // scoped
+	Scoped("mu").Info("hello") // scoped ⇒ logged
+	EventOK("cp", "done")      // log-only event
+	OK("ephemeral")            // unscoped ⇒ terminal only, NOT logged
 
 	got := readFile(t, logf)
 	// [ts] [level(pad5)] [scope] msg
 	for _, want := range []string{"[INFO ] [mu] hello", "[OK   ] [cp] done"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("framework.log missing %q in:\n%s", want, got)
+			t.Errorf("event log missing %q in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "ephemeral") {
+		t.Errorf("unscoped OK() must not be logged, but was:\n%s", got)
 	}
 	if !strings.HasPrefix(got, "[20") { // leading ISO timestamp
 		t.Errorf("expected leading [timestamp], got:\n%s", got)

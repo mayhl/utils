@@ -47,6 +47,9 @@ func TestCommandTree(t *testing.T) {
 		{"hpc", "nodes"},
 		{"hpc", "ticket"},
 		{"shell-init"},
+		{"log"},
+		{"log", "write"},
+		{"log", "clear"},
 	} {
 		find(t, root, p...)
 	}

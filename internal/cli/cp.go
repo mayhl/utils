@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -70,7 +71,21 @@ func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error
 	if !push {
 		src, dst, label = target+":"+a, b, "pull "+node
 	}
-	os.Exit(rsync.Run(rsync.BuildArgs(src, dst, o), label, verbose))
+	code, summary := rsync.Run(rsync.BuildArgs(src, dst, o), label, verbose)
+	// Durable event → events.log (log-only: the progress bar + summary already
+	// handled the terminal). Skip a dry-run; it moved nothing.
+	if !o.DryRun {
+		if code == 0 {
+			msg := label
+			if summary != "" {
+				msg += " — " + summary
+			}
+			render.EventOK("cp", msg)
+		} else {
+			render.EventErr("cp", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
+		}
+	}
+	os.Exit(code)
 	return nil
 }
 

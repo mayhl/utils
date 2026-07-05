@@ -20,8 +20,12 @@ func TestRunLocalTransfer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "b.txt"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rc := Run([]string{"-a", src + "/", dst + "/"}, "test-copy", false); rc != 0 {
+	rc, summary := Run([]string{"-a", src + "/", dst + "/"}, "test-copy", false)
+	if rc != 0 {
 		t.Fatalf("Run rc=%d", rc)
+	}
+	if summary == "" {
+		t.Error("expected a non-empty stats summary (for the event-log entry)")
 	}
 	if _, err := os.Stat(filepath.Join(dst, "a.bin")); err != nil {
 		t.Errorf("a.bin not copied: %v", err)

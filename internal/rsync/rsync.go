@@ -112,20 +112,22 @@ func BuildArgs(src, dst string, o Opts) []string {
 	return args
 }
 
-// Run executes rsync with the given args and returns its exit code. The default
-// mode shows the aggregate progress bar; verbose streams raw per-file rsync
-// (-vP) straight to the terminal, which can't fold into an aggregate bar. In
-// both modes stderr stays attached so ssh host-key prompts and errors surface.
-func Run(args []string, label string, verbose bool) int {
+// Run executes rsync with the given args and returns its exit code plus a one-line
+// human summary (transferred/total files, size, rate — empty in verbose mode or on
+// failure) for the caller's event log. The default mode shows the aggregate progress
+// bar; verbose streams raw per-file rsync (-vP) straight to the terminal, which
+// can't fold into an aggregate bar. In both modes stderr stays attached so ssh
+// host-key prompts and errors surface.
+func Run(args []string, label string, verbose bool) (int, string) {
 	if verbose {
 		cmd := exec.Command("rsync", append([]string{"-vP"}, args...)...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		return exitCode(cmd.Run())
+		return exitCode(cmd.Run()), ""
 	}
 	return runProgress(args, label)
 }
 
-func runProgress(args []string, label string) int {
+func runProgress(args []string, label string) (int, string) {
 	// -v surfaces each filename (→ the bar's live label); --stats yields the
 	// end-of-run block we parse into a house summary. Both ride the same stdout
 	// pipe as the progress2 aggregate line.
@@ -133,12 +135,12 @@ func runProgress(args []string, label string) int {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		render.Err(err.Error())
-		return 1
+		return 1, ""
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		render.Err(err.Error())
-		return 1
+		return 1, ""
 	}
 
 	bar := render.NewProgressBar(label)
@@ -162,12 +164,14 @@ func runProgress(args []string, label string) int {
 	}
 	bar.Finish()
 	code := exitCode(cmd.Wait())
+	var summary string
 	if code == 0 {
 		if parts := statsSummary(stats); len(parts) > 0 {
 			render.Summary(label, parts)
+			summary = strings.Join(parts, ", ")
 		}
 	}
-	return code
+	return code, summary
 }
 
 // looksLikeStats matches the lines of rsync's --stats block (and the final
