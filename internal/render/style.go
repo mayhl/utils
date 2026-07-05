@@ -38,18 +38,9 @@ func logLine(utf, ascii string, colors text.Colors, msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", tag, msg)
 }
 
-// Info, OK, Warn, and Err mirror mu_log's tiers (glyphs → ✓ ! ✗; INFO cyan,
-// OK green, WARN yellow, ERROR red).
-func Info(msg string) { logLine("→", "[INFO]", text.Colors{text.FgCyan}, msg) }
-
-// OK prints a house-style OK line to stderr.
-func OK(msg string) { logLine("✓", "[OK]", text.Colors{text.FgGreen, text.Bold}, msg) }
-
-// Warn prints a house-style WARN line to stderr.
-func Warn(msg string) { logLine("!", "[WARN]", text.Colors{text.FgYellow, text.Bold}, msg) }
-
-// Err prints a house-style ERROR line to stderr.
-func Err(msg string) { logLine("✗", "[ERROR]", text.Colors{text.FgRed, text.Bold}, msg) }
+// Info, OK, Warn, Err (the log tiers) live in log.go — they route through the
+// slog houseHandler so every line also lands in framework.log. logLine below is
+// the shared rendering primitive they and renderTier use.
 
 // Detail prints a dim, glyph-less supporting line to stderr (e.g. the local/remote
 // block under a verbose sshfs mount).
