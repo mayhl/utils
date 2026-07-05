@@ -1,17 +1,6 @@
 #!/usr/bin/env sh
 # shared/utils.sh — small portable helpers.
 
-# rich spinner around a command:  spinner "<message>" <command> [args...]
-# Falls back to running the command plainly if the Python venv isn't set up.
-spinner() {
-  if [ -x "${MU_PY_VENV}/bin/python" ]; then
-    mu_py "${MU_ROOT}/lib/py/spinner.py" "$@"
-  else
-    shift 2> /dev/null
-    "$@"
-  fi
-}
-
 # kill -9 every process whose name matches a pattern
 gkill() {
   local pids

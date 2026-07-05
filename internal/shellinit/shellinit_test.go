@@ -29,6 +29,17 @@ nodes = ["node2"]
 
 	out := Generate()
 
+	// Config exports (the bridge that lets config.env be retired).
+	for _, want := range []string{
+		`export MU_HPC_UNAME="alice"`,
+		`export MU_CLUSTERS="alpha beta"`,
+		`export MU_CLUSTER_ALPHA_DOMAIN="alpha.example.mil"`,
+		`export MU_CLUSTER_ALPHA_NODES="login-c mike"`, // nodes sorted
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing export %q in:\n%s", want, out)
+		}
+	}
 	if !strings.Contains(out, "_mu_node() {") {
 		t.Error("missing shared dispatcher helper")
 	}

@@ -1,6 +1,0 @@
-# Python deps for the toolkit's venv (installed by mu_py_bootstrap).
-# Floor+ceiling pinned for local<->HPC parity. For a fully-hashed lock you can
-# (dev-side, optional) run:  uv pip compile requirements.in > requirements.txt
-rich>=13,<14
-typer>=0.12,<1
-tqdm>=4.66,<5
