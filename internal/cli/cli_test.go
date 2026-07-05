@@ -32,11 +32,20 @@ func TestCommandTree(t *testing.T) {
 		t.Errorf("root name = %q, want mu", root.Name())
 	}
 	for _, p := range [][]string{
-		{"cp"}, {"cp", "push"}, {"cp", "pull"},
-		{"sshfs"}, {"sshfs", "list"}, {"sshfs", "mount"}, {"sshfs", "umount"},
-		{"sshfs", "path"}, {"sshfs", "add"}, {"sshfs", "rm"},
+		{"cp"},
+		{"cp", "push"},
+		{"cp", "pull"},
+		{"sshfs"},
+		{"sshfs", "list"},
+		{"sshfs", "mount"},
+		{"sshfs", "umount"},
+		{"sshfs", "path"},
+		{"sshfs", "add"},
+		{"sshfs", "rm"},
 		{"tar"},
-		{"hpc"}, {"hpc", "nodes"}, {"hpc", "ticket"},
+		{"hpc"},
+		{"hpc", "nodes"},
+		{"hpc", "ticket"},
 		{"shell-init"},
 	} {
 		find(t, root, p...)
