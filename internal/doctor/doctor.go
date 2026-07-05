@@ -94,11 +94,14 @@ func checkConfig() Result {
 	if len(defs) == 0 {
 		return Result{Name: "config", Status: Warn, Detail: "no clusters configured (config.toml?)"}
 	}
-	names := make([]string, len(defs))
+	var b strings.Builder
 	for i, d := range defs {
-		names[i] = d.Name
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "info\t%s\t%d node(s)", d.Name, len(d.Nodes)) // TSV → -v sub-table
 	}
-	return Result{Name: "config", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: strings.Join(names, ", ")}
+	return Result{Name: "config", Status: OK, Detail: fmt.Sprintf("%d cluster(s)", len(defs)), Verbose: b.String()}
 }
 
 func checkTicket() Result {
@@ -111,11 +114,11 @@ func checkTicket() Result {
 	case !info.Expires.IsZero() && time.Until(info.Expires) <= 0:
 		return Result{Name: "ticket", Status: Warn, Detail: "expired — mu hpc ticket --renew"}
 	default:
-		v := ""
+		detail := info.Principal // expiry folded into the row — scalar, no verbose block
 		if !info.Expires.IsZero() {
-			v = "expires " + info.Expires.Format("Jan 2 15:04")
+			detail += " · expires " + info.Expires.Format("Jan 2 15:04")
 		}
-		return Result{Name: "ticket", Status: OK, Detail: info.Principal, Verbose: v}
+		return Result{Name: "ticket", Status: OK, Detail: detail}
 	}
 }
 
@@ -175,8 +178,8 @@ func runPlugin(dir, section, name string) Result {
 	full := strings.TrimRight(string(out), "\n")
 	detail := lastLine(full)
 	verbose := ""
-	if strings.Contains(full, "\n") { // multi-line output → keep it all for -v
-		verbose = full
+	if i := strings.LastIndex(full, "\n"); i >= 0 { // lines above the detail line → -v
+		verbose = full[:i]
 	}
 	status := OK
 	if err != nil {

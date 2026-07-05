@@ -42,9 +42,15 @@ func doctorCmd() *cobra.Command {
 					if r.Verbose == "" {
 						continue
 					}
-					fmt.Printf("\n%s:\n", r.Name)
-					for _, ln := range strings.Split(r.Verbose, "\n") {
-						fmt.Printf("  %s\n", ln)
+					fmt.Println()
+					// Tabular verbose (TSV rows) → a real sub-table; prose → text block.
+					if rows, ok := verboseRows(r.Verbose); ok {
+						render.StatusTable(r.Name, rows)
+					} else {
+						fmt.Printf("%s:\n", r.Name)
+						for _, ln := range strings.Split(r.Verbose, "\n") {
+							fmt.Printf("  %s\n", ln)
+						}
 					}
 				}
 			}
@@ -68,6 +74,31 @@ func doctorCmd() *cobra.Command {
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
 	return c
+}
+
+// verboseRows parses tab-separated verbose ("level\tname\tdetail" per line) into
+// StatusRows for a sub-table. Returns ok=false unless every non-empty line is TSV, so
+// prose verbose (config clusters, ticket expiry) falls back to the plain text block.
+func verboseRows(v string) ([]render.StatusRow, bool) {
+	var rows []render.StatusRow
+	for _, ln := range strings.Split(v, "\n") {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		f := strings.Split(ln, "\t")
+		if len(f) < 2 {
+			return nil, false
+		}
+		rows = append(rows, render.StatusRow{
+			Level:  f[0],
+			Name:   f[1],
+			Detail: strings.TrimSpace(strings.Join(f[2:], " ")),
+		})
+	}
+	if len(rows) == 0 {
+		return nil, false
+	}
+	return rows, true
 }
 
 func levelStr(s doctor.Status) string {
