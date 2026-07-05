@@ -23,27 +23,26 @@ func doctorCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			results, overall := doctor.Run()
 
-			// One table per section, sections in first-seen order.
-			var order []string
-			groups := map[string][]render.StatusRow{}
-			for _, r := range results {
-				if _, seen := groups[r.Section]; !seen {
-					order = append(order, r.Section)
-				}
-				groups[r.Section] = append(groups[r.Section],
-					render.StatusRow{Level: levelStr(r.Status), Name: r.Name, Detail: r.Detail})
-			}
-			for _, sec := range order {
-				render.StatusTable(titleCase(sec), groups[sec])
-			}
-
 			if verbose {
+				// Verbose: split into separate tables — one per section, then a detail
+				// table per check (TSV verbose → sub-table; prose → text block).
+				var order []string
+				groups := map[string][]render.StatusRow{}
+				for _, r := range results {
+					if _, seen := groups[r.Section]; !seen {
+						order = append(order, r.Section)
+					}
+					groups[r.Section] = append(groups[r.Section],
+						render.StatusRow{Level: levelStr(r.Status), Name: r.Name, Detail: r.Detail})
+				}
+				for _, sec := range order {
+					render.StatusTable(titleCase(sec), groups[sec])
+				}
 				for _, r := range results {
 					if r.Verbose == "" {
 						continue
 					}
 					fmt.Println()
-					// Tabular verbose (TSV rows) → a real sub-table; prose → text block.
 					if rows, ok := verboseRows(r.Verbose); ok {
 						render.StatusTable(r.Name, rows)
 					} else {
@@ -53,6 +52,13 @@ func doctorCmd() *cobra.Command {
 						}
 					}
 				}
+			} else {
+				// Default: one combined table of every check.
+				rows := make([]render.StatusRow, len(results))
+				for i, r := range results {
+					rows[i] = render.StatusRow{Level: levelStr(r.Status), Name: r.Name, Detail: r.Detail}
+				}
+				render.StatusTable("mu doctor", rows)
 			}
 
 			ok, warn, fail := tally(results)
