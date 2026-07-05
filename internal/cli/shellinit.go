@@ -11,7 +11,7 @@ import (
 func shellInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "shell-init",
-		Short: "Emit shell integration (per-node dispatchers) to eval at startup.",
+		Short: "Emit shell integration to eval at startup.",
 		Long: "Print the shell integration generated from config.toml — a per-node\n" +
 			"dispatcher for every configured node. Add to your shell rc:\n\n" +
 			"    eval \"$(mu shell-init)\"\n\n" +

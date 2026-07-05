@@ -18,7 +18,7 @@ const probeTimeout = 2 * time.Second
 func hpcCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "hpc",
-		Short: "Cross-cluster HPC info (nodes/reachability; queue/storage later).",
+		Short: "Cross-cluster HPC info (nodes, reachability, ticket).",
 		Long: "Aggregate info across the configured HPC clusters. Local-primary — run it from your\n" +
 			"workstation to reach every cluster; on a login node you'll only see what's\n" +
 			"reachable from there.",
