@@ -56,6 +56,13 @@ func cfg() *file {
 	return loaded
 }
 
+// ResetForTest clears the memoized config so a test can repoint MU_CONFIG_FILE at
+// a fresh file and reload. Test-only: config is otherwise loaded once per process.
+func ResetForTest() {
+	loaded = nil
+	loadOnce = sync.Once{}
+}
+
 func load() {
 	path := configPath()
 	if path == "" {

@@ -14,8 +14,15 @@ import (
 )
 
 // The dispatcher: bare `<node>` connects (interactive ssh), `<node> push|pull`
-// transfer via the engine, and `<node> <anycmd>` runs that command over ssh. It
-// leans on the shell framework's seam helpers (mu_auth, mu_ssh_login, $MU_SSH).
+// transfer via the engine, and `<node> <anycmd>` runs that command over ssh. A
+// leading pure-integer arg pins a numbered login node — `<node> N` rewrites the
+// target's node segment to `<node>NN` (zero-padded, per the 01,02,… convention),
+// then the rest of the grammar composes (bare → connect, else → remote-exec).
+// push/pull stay node-level (mu cp resolves its own target). It leans on the shell
+// framework's seam helpers (mu_auth, mu_ssh_login, $MU_SSH).
+//
+// The numeric guard uses a portable `case *[!0-9]*` test (no extglob) so it works
+// in both bash and zsh. `<node> -h|--help` prints the grammar.
 //
 // Remote-exec runs `bash -lc` (login shell) so HPC modules/scheduler load from
 // /etc/profile.d — which `zsh -l` does NOT source. That login profile spews a
@@ -23,13 +30,36 @@ import (
 // MU_SSH_STDERR_FILTER (default drops that message; process substitution keeps the
 // command's exit code and lets real errors through). TEMPORARY workaround for the
 // cluster's /etc/profile.d — see the dbus-filter note.
-const helper = `_mu_node() {
+const helper = `_mu_node_help() {
+  local n=$1
+  printf '%s\n' \
+    "$n - HPC shorthand for the '$n' cluster" \
+    "  $n                connect (interactive ssh, default login)" \
+    "  $n N              connect to login node N ($n 3 -> ${n}03)" \
+    "  $n <cmd>          run <cmd> on $n over ssh" \
+    "  $n N <cmd>        run <cmd> on login node N" \
+    "  $n push SRC DST   upload   (mu cp push)" \
+    "  $n pull SRC DST   download (mu cp pull)" \
+    "  $n -h | --help    show this help"
+}
+_mu_node() {
   local node=$1 target=$2; shift 2
   case ${1:-} in
+    -h|--help) _mu_node_help "$node" ;;
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
     "")   mu_auth && mu_ssh_login "$target" ;;
-    *)    mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2) ;;
+    *)
+      case $1 in
+        ''|*[!0-9]*) : ;;
+        *) target="${target%%.*}$(printf '%02d' "$1").${target#*.}"; shift ;;
+      esac
+      if [ "$#" -eq 0 ]; then
+        mu_auth && mu_ssh_login "$target"
+      else
+        mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2)
+      fi
+      ;;
   esac
 }
 `
