@@ -93,6 +93,7 @@ func addTransferFlags(cmd *cobra.Command, o *rsync.Opts, verbose *bool) {
 	f := cmd.Flags()
 	f.BoolVarP(&o.DryRun, "dry-run", "n", false, "show what would transfer")
 	f.StringArrayVar(&o.Exclude, "exclude", nil, "rsync exclude pattern (repeatable)")
+	f.BoolVar(&o.ExcludeHidden, "exclude-hidden", false, "skip dotfiles/dot-dirs (adds --exclude '.*')")
 	f.BoolVar(&o.Delete, "delete", false, "delete extraneous files on the destination")
 	f.StringVar(&o.Bwlimit, "bwlimit", "", "rsync bandwidth limit, e.g. 10m")
 	f.BoolVarP(&o.Compress, "compress", "z", false, "compress in transit (skip for pre-compressed data)")

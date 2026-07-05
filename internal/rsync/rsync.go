@@ -22,15 +22,16 @@ import (
 
 // Opts are the named transfer flags exposed on `mu cp push/pull`.
 type Opts struct {
-	DryRun     bool
-	Exclude    []string
-	Delete     bool
-	Bwlimit    string
-	Compress   bool
-	Checksum   bool
-	Timeout    int
-	PartialDir bool
-	Ropt       []string
+	DryRun        bool
+	Exclude       []string
+	ExcludeHidden bool
+	Delete        bool
+	Bwlimit       string
+	Compress      bool
+	Checksum      bool
+	Timeout       int
+	PartialDir    bool
+	Ropt          []string
 }
 
 // partialDir keeps rsync's cross-run partials out of the destination tree.
@@ -99,6 +100,9 @@ func BuildArgs(src, dst string, o Opts) []string {
 	flag(o.PartialDir, []string{"--partial-dir=" + partialDir}, "--partial-dir")
 	for _, ex := range o.Exclude {
 		named = append(named, "--exclude", ex)
+	}
+	if o.ExcludeHidden { // skip dotfiles/dot-dirs at any depth
+		named = append(named, "--exclude", ".*")
 	}
 	if o.DryRun {
 		named = append(named, "--dry-run")
