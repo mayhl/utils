@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -30,7 +31,10 @@ func RemoteExec(target, remoteCmd string) (string, error) {
 	if s := filterStderr(stderr.String()); s != "" {
 		fmt.Fprint(os.Stderr, s)
 	}
-	return stdout.String(), err
+	if err != nil {
+		return stdout.String(), errors.New(classify(target, err))
+	}
+	return stdout.String(), nil
 }
 
 // RemoteExecTimeout is RemoteExec bounded by a deadline — for concurrent
@@ -60,7 +64,7 @@ func RemoteExecTimeout(target, remoteCmd string, timeout time.Duration) (string,
 		if msg := firstLine(filterStderr(stderr.String())); msg != "" {
 			return stdout.String(), errors.New(msg)
 		}
-		return stdout.String(), err
+		return stdout.String(), errors.New(classify(target, err))
 	}
 	return stdout.String(), nil
 }
@@ -73,6 +77,60 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// reachTimeout bounds the on-failure reachability probe.
+const reachTimeout = 3 * time.Second
+
+// classify turns a bare remote-exec failure (no remote stderr to show) into a human
+// reason. It runs ONLY on the error path: a quick TCP dial of the login node's ssh
+// port distinguishes an unreachable host (down/network) from a host that answered
+// but couldn't log us in (auth/ticket). Assumes direct-to-login-node ssh (no proxy),
+// so the dialed endpoint is the one ssh uses.
+func classify(target string, err error) string {
+	if !reachable(hostOf(target)) {
+		return "unreachable (host down or network)"
+	}
+	return exitText(err)
+}
+
+// hostOf strips any "user@" from an ssh target, leaving the host to dial.
+func hostOf(target string) string {
+	if i := strings.LastIndex(target, "@"); i >= 0 {
+		return target[i+1:]
+	}
+	return target
+}
+
+// reachable reports whether the host's ssh port accepts a TCP connection.
+func reachable(host string) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "22"), reachTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// exitText names a failure once the host is known reachable, so the cause is the
+// login itself. ssh's catch-all 255 then means a Kerberos problem — a missing ticket
+// (the common, fixable case, detected locally) or one the server rejected.
+func exitText(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		switch ee.ExitCode() {
+		case 255:
+			if info, ok := Ticket(); ok && !info.Present {
+				return "no Kerberos ticket — run `mu hpc ticket --renew`"
+			}
+			return "authentication failed — ticket expired or rejected (check `mu hpc ticket`)"
+		case 127:
+			return "scheduler command not found on PATH"
+		case 126:
+			return "permission denied"
+		}
+	}
+	return err.Error()
 }
 
 // singleQuote wraps s for a POSIX shell in single quotes, escaping embedded quotes.
