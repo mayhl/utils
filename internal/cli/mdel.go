@@ -70,7 +70,7 @@ func mstatInteractive(node string, who userSel) error {
 	if !render.Interactive() {
 		return fmt.Errorf("mstat -i needs a terminal (stdin is not a tty)")
 	}
-	label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
+	label, scheduler, snapshot, run, capture := queueTargetCtx(node, who)
 	interval := 2 * time.Second
 	if node != "" { // remote fetch: ssh + Kerberos per tick → don't hammer it
 		interval = 15 * time.Second
@@ -83,6 +83,7 @@ func mstatInteractive(node string, who userSel) error {
 			jobs, _ := snapshot() // tolerate a blip; the picker keeps its last frame
 			return jobSelectRows(jobs)
 		},
+		Detail: func(id string) string { return jobDetailCard(scheduler, capture, id) },
 	})
 	if err != nil {
 		return err
@@ -239,6 +240,26 @@ func jobSelectRows(jobs []queue.Job) []render.SelectRow {
 		}
 	}
 	return rows
+}
+
+// jobDetailCard fetches one job's full detail (qstat -f / scontrol show job) via the
+// target's capture func and renders it as the house card string — the `i` inspect
+// overlay in `mstat -i`, the same card `minfo` prints. Errors return a one-line notice
+// so the picker shows something rather than a blank overlay.
+func jobDetailCard(scheduler string, capture func(string) (string, error), id string) string {
+	cmd := detailCmd(scheduler, []string{id})
+	if cmd == "" {
+		return "no scheduler configured — cannot fetch detail"
+	}
+	out, err := capture(cmd)
+	if err != nil {
+		return "detail fetch failed: " + err.Error()
+	}
+	details := queue.ParseDetails(scheduler, out)
+	if len(details) == 0 {
+		return "no detail reported for " + id
+	}
+	return render.RenderJobDetailCard(toDetailView(details[0]))
 }
 
 // elapWall pairs elapsed with requested walltime as "elap / wall" (mirroring the

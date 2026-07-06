@@ -57,3 +57,27 @@ func TestRefreshHonorsFilter(t *testing.T) {
 		t.Errorf("refresh dropped the active filter: visible=%+v", m.visible)
 	}
 }
+
+// A detailMsg opens the inspect overlay; a blank fetch result falls back to a notice
+// so the overlay is never empty.
+func TestDetailMsgOpensOverlay(t *testing.T) {
+	spec := SelectSpec{Verb: "cancel", Columns: []string{"ID"}, Fetch: func() []SelectRow { return nil }}
+	m := newSelectModel(spec, []SelectRow{row("1", "1")})
+	m.detailLoading = true
+
+	nm, _ := m.Update(detailMsg{text: "the card"})
+	m = nm.(selectModel)
+	if m.detailLoading {
+		t.Error("detailLoading not cleared when the fetch landed")
+	}
+	if m.detail != "the card" {
+		t.Errorf("overlay text = %q, want %q", m.detail, "the card")
+	}
+
+	m.detailLoading = true
+	nm, _ = m.Update(detailMsg{text: "   "})
+	m = nm.(selectModel)
+	if m.detail == "" || m.detail == "   " {
+		t.Errorf("blank fetch should fall back to a notice, got %q", m.detail)
+	}
+}

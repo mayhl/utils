@@ -34,6 +34,11 @@ type SelectSpec struct {
 	Columns  []string
 	Fetch    func() []SelectRow
 	Interval time.Duration // refresh cadence; 0 → default (refreshInterval). Slow it for remote fetches.
+	// Detail, when set, enables the `i` inspect key: it maps a row ID to a rendered
+	// detail block (e.g. the job card) shown as a modal overlay, dismissed by any key.
+	// Called off the UI loop (it may ssh), so a slow fetch doesn't freeze the picker.
+	// nil → no `i` key (e.g. the process picker has no card).
+	Detail func(id string) string
 }
 
 // Select runs the interactive picker and returns the IDs the user marked (nil if
@@ -75,6 +80,8 @@ type selectModel struct {
 	top           int // scroll offset into visible
 	filter        string
 	filtering     bool
+	detail        string // inspect overlay text; "" = list view
+	detailLoading bool   // Detail fetch in flight (overlay shows a spinner-less notice)
 	interval      time.Duration
 	width, height int
 	confirmed     bool
@@ -131,11 +138,25 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.clampScroll()
 	case tickMsg:
-		if !m.filtering { // don't churn the list under the filter box
+		if !m.filtering && m.detail == "" && !m.detailLoading { // don't churn under the filter box or the overlay
 			m.refresh()
 		}
 		return m, tickCmd(m.interval)
+	case detailMsg:
+		m.detailLoading = false
+		m.detail = msg.text
+		if strings.TrimSpace(m.detail) == "" {
+			m.detail = "(no detail available)"
+		}
+		return m, nil
 	case tea.KeyPressMsg:
+		if m.detailLoading { // ignore keys until the fetch lands
+			return m, nil
+		}
+		if m.detail != "" { // any key dismisses the inspect overlay
+			m.detail = ""
+			return m, nil
+		}
 		if m.filtering {
 			return m.updateFilter(msg), nil
 		}
@@ -174,9 +195,24 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "/":
 			m.filtering = true
+		case "i": // inspect the cursor row (job card); async so a remote fetch doesn't freeze
+			if m.spec.Detail != nil && m.cursor < len(m.visible) {
+				id := m.rows[m.visible[m.cursor]].ID
+				m.detailLoading = true
+				return m, fetchDetailCmd(m.spec.Detail, id)
+			}
 		}
 	}
 	return m, nil
+}
+
+// detailMsg carries the result of a Detail fetch back onto the UI loop.
+type detailMsg struct{ text string }
+
+// fetchDetailCmd runs the (possibly slow / ssh-backed) Detail lookup off the UI loop
+// and delivers the rendered block as a detailMsg.
+func fetchDetailCmd(fn func(string) string, id string) tea.Cmd {
+	return func() tea.Msg { return detailMsg{fn(id)} }
 }
 
 // updateFilter handles keystrokes while the filter box is active.
@@ -252,6 +288,13 @@ var (
 )
 
 func (m selectModel) View() tea.View {
+	if m.detailLoading {
+		return tea.NewView(selFoot.Render("Loading detail" + aglyph("…", "...")))
+	}
+	if m.detail != "" {
+		back := aglyph("↩", "<") + " press any key to go back"
+		return tea.NewView(m.detail + "\n" + selFoot.Render(back))
+	}
 	w := m.colWidths()
 	last := len(w) - 1
 	inner := m.width - 4 // rounded border (2) + padding (2)
@@ -306,8 +349,11 @@ func (m selectModel) View() tea.View {
 	if m.filtering {
 		out += "\n" + selFilter.Render("/"+m.filter+aglyph("▏", "|"))
 	}
-	foot := aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" +
-		dot + "/ filter" + dot + "enter " + m.spec.Verb + dot + "q cancel"
+	foot := aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" + dot + "/ filter"
+	if m.spec.Detail != nil {
+		foot += dot + "i info"
+	}
+	foot += dot + "enter " + m.spec.Verb + dot + "q cancel"
 	out += "\n" + selFoot.Render(foot)
 	return tea.NewView(out)
 }

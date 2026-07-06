@@ -26,8 +26,21 @@ type JobDetailView struct {
 // (tables stay compact; the card has room for the full date). Its `--raw`/`--json` twins
 // live in the minfo command; this is the pretty default.
 func JobDetailCard(d JobDetailView) {
-	t := table.NewWriter()
+	t := newDetailTable(d)
 	t.SetOutputMirror(os.Stdout)
+	t.Render()
+}
+
+// RenderJobDetailCard returns the house card as a string instead of printing it —
+// used by the interactive picker's `i` inspect overlay. Same card as JobDetailCard.
+func RenderJobDetailCard(d JobDetailView) string {
+	return newDetailTable(d).Render()
+}
+
+// newDetailTable builds the detail card's table (title + label/value rows + column
+// config) without an output target; callers print it or capture the rendered string.
+func newDetailTable(d JobDetailView) table.Writer {
+	t := table.NewWriter()
 	applyStyle(t)
 	t.SetTitle(detailTitle(d))
 
@@ -72,7 +85,7 @@ func JobDetailCard(d JobDetailView) {
 		cols = append(cols, table.ColumnConfig{Number: 2, WidthMax: valueMax, WidthMaxEnforcer: text.WrapText})
 	}
 	t.SetColumnConfigs(cols)
-	t.Render()
+	return t
 }
 
 // detailTitle is the card's header: "Job <short> · <state badge> · <cluster>".
