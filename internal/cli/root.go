@@ -33,6 +33,6 @@ func Root() *cobra.Command {
 	}
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
-	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd(), doctorCmd())
+	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd(), doctorCmd(), psCmd())
 	return root
 }
