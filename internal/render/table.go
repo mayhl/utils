@@ -11,20 +11,36 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/config"
 )
 
+// applyStyle sets the house rounded style, or a borderless tab-aligned style when
+// plainMode() (MU_RENDER=plain / --plain / piped). Plain implies no color — the
+// status glyph (or MU_ASCII label) still carries meaning.
+func applyStyle(t table.Writer) {
+	if plainMode() {
+		s := table.StyleDefault
+		s.Options.DrawBorder = false
+		s.Options.SeparateColumns = false
+		s.Options.SeparateHeader = false
+		t.SetStyle(s)
+		text.DisableColors()
+		return
+	}
+	t.SetStyle(table.StyleRounded)
+	if colorOff() {
+		text.DisableColors()
+	}
+}
+
 // NodesTable renders `mu hpc nodes`: a framed username line plus a
 // Cluster/Node/Host table (magenta cluster, bold-green node, cyan host, one
 // cluster label per group, dividers between clusters). When status is non-empty
 // (from `-s`), a reachability column is added — ● up (green) / ○ down (red),
 // keyed by node name.
 func NodesTable(defs []config.Cluster, user string, status map[string]string) {
-	if colorOff() {
-		text.DisableColors()
-	}
 	withStatus := len(status) > 0
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.SetStyle(table.StyleRounded)
+	applyStyle(t)
 	// Username lives inside the title (like the sshfs list's LOCAL PATH line),
 	// rather than in a separate box above the table.
 	t.SetTitle("HPC Nodes\nUsername: " + user)
@@ -70,12 +86,9 @@ type StatusRow struct {
 // StatusTable renders a titled rounded table of check rows, the status column a
 // glyph colored by level. Used by `mu doctor` (one table per section).
 func StatusTable(title string, rows []StatusRow) {
-	if colorOff() {
-		text.DisableColors()
-	}
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.SetStyle(table.StyleRounded)
+	applyStyle(t)
 	// House accents: cyan-bold title, cyan headers, dim frame, bold-magenta check
 	// name, white detail — the colored status glyph still carries the verdict.
 	t.Style().Title.Colors = text.Colors{text.FgCyan, text.Bold}

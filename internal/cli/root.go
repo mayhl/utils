@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
+
+	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
 // HelpColorScheme themes fang's help/usage in the house language: ANSI colors
@@ -29,6 +31,8 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
+		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
 	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd(), doctorCmd())
 	return root
 }

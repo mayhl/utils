@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
@@ -25,6 +26,26 @@ func glyph(utf, ascii string) string {
 // dumb terminal). go-pretty honors this globally when we disable its colors.
 func colorOff() bool {
 	return os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb"
+}
+
+// PlainFlag is bound to the root command's --plain: force borderless tables.
+var PlainFlag bool
+
+// plainMode reports whether tables render borderless/tab-aligned instead of the
+// house rounded box. Precedence: --plain > MU_RENDER=plain|pretty > auto (plain
+// unless stdout is a TTY, so piped/redirected/CI output stays parseable). Mirrors
+// the MU_RENDER contract in gsw (git-signwip.sh).
+func plainMode() bool {
+	if PlainFlag {
+		return true
+	}
+	switch os.Getenv("MU_RENDER") {
+	case "plain":
+		return true
+	case "pretty":
+		return false
+	}
+	return !term.IsTerminal(os.Stdout.Fd())
 }
 
 // logLine prints one house-style status line to stderr: a colored glyph tag
