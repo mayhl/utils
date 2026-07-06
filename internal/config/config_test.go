@@ -64,29 +64,28 @@ nodes  = ["node2"]
 	}
 }
 
-func TestEnvFallback(t *testing.T) {
-	t.Setenv("MU_CONFIG_FILE", "") // no file → env
+func TestNoConfigUsesDefaults(t *testing.T) {
+	// No config.toml (env encoding is retired) → empty clusters + built-in
+	// scalar defaults. MU_ROOT is cleared so the dev shell's real config.toml
+	// isn't picked up.
+	t.Setenv("MU_CONFIG_FILE", "")
 	t.Setenv("MU_ROOT", "")
-	t.Setenv("MU_HPC_UNAME", "bob")
-	t.Setenv("MU_CLUSTERS", "alpha")
-	t.Setenv("MU_CLUSTER_ALPHA_DOMAIN", "alpha.example.mil")
-	t.Setenv("MU_CLUSTER_ALPHA_NODES", "mike login-c")
-	// Clear scalars the dev shell may have exported, so the default-fallback
-	// assertions below test the true defaults, not inherited values.
-	t.Setenv("MU_HPC_RSYNC_OPTS", "")
-	t.Setenv("MU_SSHFS_ROOT", "")
 	reset()
 
-	if User() != "bob" {
-		t.Errorf("User = %q", User())
+	if User() != "?" {
+		t.Errorf("User = %q, want ?", User())
 	}
-	defs := ClusterDefs()
-	if len(defs) != 1 || len(defs[0].Nodes) != 2 {
-		t.Fatalf("env clusters = %+v", defs)
+	if defs := ClusterDefs(); len(defs) != 0 {
+		t.Errorf("ClusterDefs = %+v, want empty", defs)
 	}
-	// Unset scalars fall back to defaults.
-	if RsyncOpts() != "-au --partial" || SSHFSRoot() != "~/hpc_sshfs" {
-		t.Errorf("defaults wrong: %q / %q", RsyncOpts(), SSHFSRoot())
+	if RsyncOpts() != "-au --partial" {
+		t.Errorf("RsyncOpts = %q", RsyncOpts())
+	}
+	if SSHTransferOpts() != "-q" {
+		t.Errorf("SSHTransferOpts = %q", SSHTransferOpts())
+	}
+	if SSHFSRoot() != "~/hpc_sshfs" {
+		t.Errorf("SSHFSRoot = %q", SSHFSRoot())
 	}
 }
 

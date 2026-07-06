@@ -46,7 +46,6 @@ luac.out
 *.x86_64
 *.hex
 
-config.env
 config.toml
 
 custom.sh

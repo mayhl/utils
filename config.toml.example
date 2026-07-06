@@ -5,10 +5,9 @@
 #
 #     cp config.toml.example config.toml
 #
-# The mu engine reads config.toml when present, else falls back to the legacy
-# config.env environment variables, so the migration is non-breaking. Platform
-# seams (MU_SSH — ossh vs ssh by mode) and terminal state (NO_COLOR, COLUMNS, …)
-# are NOT set here; they stay environment-sourced.
+# The mu engine reads config.toml directly (any omitted value falls back to a
+# built-in default). Platform seams (MU_SSH — ossh vs ssh by mode) and terminal
+# state (NO_COLOR, COLUMNS, …) are NOT set here; they stay environment-sourced.
 
 hpc_user = "your_hpc_username"
 

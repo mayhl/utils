@@ -15,9 +15,8 @@
 . "${MU_ROOT}/lib/launcher.sh"
 mkdir -p "${HOME}/.cache/mayhl_utils"
 
-# ---- config: tracked defaults; the cluster/user config lives in config.toml,
-# read by the mu engine and exported to the shell by `mu shell-init` below -----
-[ -f "${MU_ROOT}/defaults.env" ] && . "${MU_ROOT}/defaults.env"
+# ---- config: cluster inventory + machine identity live in config.toml, read by
+# the mu engine and exported to the shell by `mu shell-init` below --------------
 [ -f "${MU_ROOT}/config.toml" ] || [ -n "${MU_CONFIG_FILE}" ] ||
   mu_log "WARN" "No config.toml found; copy config.toml.example to config.toml and fill it in."
 

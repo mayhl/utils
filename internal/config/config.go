@@ -1,8 +1,9 @@
 // Package config is the single config layer for the mu engine. It reads a
-// structured config.toml when present, falling back per-value to the inherited
-// shell environment (the legacy config.env encoding) so nothing breaks during the
-// migration. Platform seams (MU_SSH — ossh/ssh by mode) and terminal state
-// (NO_COLOR/COLUMNS/…) are NOT config-file material and stay env-sourced.
+// structured config.toml; when a value is absent it falls back to a built-in
+// default. config.toml is the sole source — the legacy config.env / MU_* env
+// encoding is retired (shell consumers get the values from `mu shell-init`, which
+// re-exports config.toml). Platform seams (MU_SSH — ossh/ssh by mode) and terminal
+// state (NO_COLOR/COLUMNS/…) are NOT config-file material and stay env-sourced.
 package config
 
 import (
@@ -10,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/pelletier/go-toml/v2"
@@ -50,7 +50,7 @@ var (
 )
 
 // cfg returns the parsed config.toml, or nil if none is present/parseable (→
-// callers fall back to the environment). Loaded once per process.
+// callers use built-in defaults). Loaded once per process.
 func cfg() *file {
 	loadOnce.Do(load)
 	return loaded
@@ -74,14 +74,14 @@ func load() {
 	}
 	var f file
 	if err := toml.Unmarshal(data, &f); err != nil {
-		fmt.Fprintf(os.Stderr, "mu: %s: %v (falling back to environment)\n", path, err)
+		fmt.Fprintf(os.Stderr, "mu: %s: %v (using built-in defaults)\n", path, err)
 		return
 	}
 	loaded = &f
 }
 
 // configPath resolves the config file: $MU_CONFIG_FILE, else $MU_ROOT/config.toml
-// if it exists, else "" (no file → env fallback).
+// if it exists, else "" (no file → built-in defaults, empty cluster list).
 func configPath() string {
 	if p := os.Getenv("MU_CONFIG_FILE"); p != "" {
 		return p
@@ -95,47 +95,32 @@ func configPath() string {
 	return ""
 }
 
-// ClusterDefs yields the configured clusters, from config.toml when present else
-// the MU_CLUSTERS + MU_CLUSTER_<UPPER>_{DOMAIN,NODES} env encoding. A cluster with
-// no domain is skipped, matching the shell codegen and old Python resolver.
+// ClusterDefs yields the configured clusters from config.toml, order preserved. A
+// cluster with no domain is skipped, matching the shell codegen and old resolver.
 func ClusterDefs() []Cluster {
-	if f := cfg(); f != nil && len(f.Clusters) > 0 {
-		out := make([]Cluster, 0, len(f.Clusters))
-		for _, c := range f.Clusters {
-			if c.Domain == "" {
-				continue
-			}
-			nodes := append([]string(nil), c.Nodes...)
-			sort.Strings(nodes)
-			out = append(out, Cluster{Name: c.Name, Domain: c.Domain, Nodes: nodes})
-		}
-		return out
+	f := cfg()
+	if f == nil {
+		return nil
 	}
-	return clusterDefsFromEnv()
-}
-
-func clusterDefsFromEnv() []Cluster {
-	var out []Cluster
-	for _, c := range strings.Fields(os.Getenv("MU_CLUSTERS")) {
-		cu := strings.ToUpper(c)
-		domain := os.Getenv("MU_CLUSTER_" + cu + "_DOMAIN")
-		if domain == "" {
+	out := make([]Cluster, 0, len(f.Clusters))
+	for _, c := range f.Clusters {
+		if c.Domain == "" {
 			continue
 		}
-		nodes := strings.Fields(os.Getenv("MU_CLUSTER_" + cu + "_NODES"))
+		nodes := append([]string(nil), c.Nodes...)
 		sort.Strings(nodes)
-		out = append(out, Cluster{Name: c, Domain: domain, Nodes: nodes})
+		out = append(out, Cluster{Name: c.Name, Domain: c.Domain, Nodes: nodes})
 	}
 	return out
 }
 
-// HPCUser is the raw HPC login name (config.toml hpc_user or MU_HPC_UNAME),
-// possibly empty. Use for pkinit/targets; User() is the display form.
+// HPCUser is the raw HPC login name (config.toml hpc_user), possibly empty. Use
+// for pkinit/targets; User() is the display form.
 func HPCUser() string {
-	if f := cfg(); f != nil && f.HPCUser != "" {
+	if f := cfg(); f != nil {
 		return f.HPCUser
 	}
-	return os.Getenv("MU_HPC_UNAME")
+	return ""
 }
 
 // User is the HPC login name for display, or "?" when unset.
@@ -146,36 +131,28 @@ func User() string {
 	return "?"
 }
 
-// RsyncOpts is the base transfer opts (config.toml, MU_HPC_RSYNC_OPTS, or default).
+// RsyncOpts is the base transfer opts (config.toml [transfer] rsync_opts, or the
+// built-in default). No -v/-P/--progress — the tool owns progress rendering.
 func RsyncOpts() string {
 	if f := cfg(); f != nil && f.Transfer.RsyncOpts != "" {
 		return f.Transfer.RsyncOpts
 	}
-	if v := os.Getenv("MU_HPC_RSYNC_OPTS"); v != "" {
-		return v
-	}
 	return "-au --partial"
 }
 
-// SSHTransferOpts is the ssh options for transfers (config.toml, env, or default).
+// SSHTransferOpts is the ssh options for transfers (config.toml, or default).
 func SSHTransferOpts() string {
 	if f := cfg(); f != nil && f.Transfer.SSHTransferOpts != "" {
 		return f.Transfer.SSHTransferOpts
 	}
-	if v := os.Getenv("MU_SSH_TRANSFER_OPTS"); v != "" {
-		return v
-	}
 	return "-q"
 }
 
-// SSHFSRoot is the local sshfs mount parent (config.toml, MU_SSHFS_ROOT, default).
-// The ~ is left unexpanded here; callers expand as needed.
+// SSHFSRoot is the local sshfs mount parent (config.toml [sshfs] root, or the
+// default). The ~ is left unexpanded here; callers expand as needed.
 func SSHFSRoot() string {
 	if f := cfg(); f != nil && f.SSHFS.Root != "" {
 		return f.SSHFS.Root
-	}
-	if v := os.Getenv("MU_SSHFS_ROOT"); v != "" {
-		return v
 	}
 	return "~/hpc_sshfs"
 }

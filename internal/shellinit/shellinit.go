@@ -99,9 +99,10 @@ func Generate() string {
 	return b.String()
 }
 
-// configExports mirrors config.toml back into the MU_* environment for shell code
-// that still reads it (the Go engine reads config.toml directly; this is the
-// bridge that lets config.env be retired). MU_SSH stays a platform seam.
+// configExports mirrors config.toml back into the MU_* environment for the legacy
+// shell code that still reads it (mu_auth, mu_status). The Go engine reads
+// config.toml directly; this is the bridge that replaced config.env. MU_SSH stays
+// a platform seam. TODO: retire this bridge once those shell consumers call `mu`.
 func configExports() string {
 	var b strings.Builder
 	if u := config.HPCUser(); u != "" {

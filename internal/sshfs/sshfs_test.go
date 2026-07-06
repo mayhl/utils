@@ -1,19 +1,35 @@
 package sshfs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/mayhl/mayhl_utils/internal/config"
 )
+
+// setRoot points the sshfs root at a temp dir via a throwaway config.toml — the
+// engine's only root source now that the MU_SSHFS_ROOT env fallback is retired.
+// ResetForTest drops the memoized config so the new file is read.
+func setRoot(t *testing.T, root string) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	body := fmt.Sprintf("[sshfs]\nroot = %q\n", root)
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", cfgPath)
+	t.Setenv("MU_ROOT", "")
+	config.ResetForTest()
+}
 
 // TestRegistryRoundTrip writes a registry (incl. a read-only entry and a path
 // with spaces) and reads it back, verifying tab-separated parsing and the ro flag.
 func TestRegistryRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("MU_CONFIG_FILE", "") // isolate from any ambient config.toml
-	t.Setenv("MU_ROOT", "")
-	t.Setenv("MU_SSHFS_ROOT", root)
+	setRoot(t, root)
 
 	in := map[string]Mount{
 		"proj":    {Node: "alpha", Path: "/p/work/proj", RO: false},
@@ -40,9 +56,7 @@ func TestRegistryRoundTrip(t *testing.T) {
 // are ignored, and a bare (non-ro) 3-field line parses as read-write.
 func TestReadRegistrySkipsCommentsAndBlanks(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("MU_CONFIG_FILE", "") // isolate from any ambient config.toml
-	t.Setenv("MU_ROOT", "")
-	t.Setenv("MU_SSHFS_ROOT", root)
+	setRoot(t, root)
 	body := "# a comment\n\nfoo\talpha\t/home/foo\nbar\tbeta\t/scratch/bar\tro\n"
 	if err := os.WriteFile(filepath.Join(root, "registry"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
