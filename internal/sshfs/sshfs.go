@@ -19,11 +19,13 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/config"
 )
 
-// Mount is one registry entry: where it points and whether it's read-only.
+// Mount is one registry entry: where it points, whether it's read-only, and the
+// groups it belongs to (a mount can be in several; empty for most).
 type Mount struct {
-	Node string
-	Path string
-	RO   bool
+	Node   string
+	Path   string
+	RO     bool
+	Groups []string
 }
 
 const statTimeout = 4 * time.Second // slower listing → treat the mount as hung
@@ -51,8 +53,11 @@ func MountsRoot() string          { return filepath.Join(Root(), "mounts") }
 func MountDir(name string) string { return filepath.Join(MountsRoot(), name) }
 
 // ReadRegistry parses the registry file into {name: Mount}. Lines are
-// `name<TAB>node<TAB>path[<TAB>ro]`; blanks and #-comments are skipped. A missing
-// file is an empty registry, not an error.
+// `name<TAB>node<TAB>path[<TAB>ro|rw[<TAB>groups]]`; blanks and #-comments are
+// skipped. A missing file is an empty registry, not an error. Field 4 is the
+// ro/rw marker (only "ro" means read-only); field 5, when present, is a
+// comma-separated group list — so a groups-bearing rw mount carries an explicit
+// "rw" in field 4 to hold the position. Old 3/4-field lines still parse.
 func ReadRegistry() map[string]Mount {
 	out := map[string]Mount{}
 	f, err := os.Open(RegistryPath())
@@ -69,10 +74,19 @@ func ReadRegistry() map[string]Mount {
 		parts := strings.Split(s, "\t")
 		if len(parts) >= 3 {
 			ro := len(parts) >= 4 && strings.TrimSpace(parts[3]) == "ro"
+			var groups []string
+			if len(parts) >= 5 {
+				for _, g := range strings.Split(parts[4], ",") {
+					if g = strings.TrimSpace(g); g != "" {
+						groups = append(groups, g)
+					}
+				}
+			}
 			out[strings.TrimSpace(parts[0])] = Mount{
-				Node: strings.TrimSpace(parts[1]),
-				Path: strings.TrimSpace(parts[2]),
-				RO:   ro,
+				Node:   strings.TrimSpace(parts[1]),
+				Path:   strings.TrimSpace(parts[2]),
+				RO:     ro,
+				Groups: groups,
 			}
 		}
 	}
@@ -86,8 +100,8 @@ func WriteRegistry(entries map[string]Mount) error {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString("# managed by `mu sshfs add` / `mu sshfs rm` — do not hand-edit lightly\n")
-	b.WriteString("# name\tnode\tremote-path\t[ro]\n")
+	b.WriteString("# managed by `mu sshfs add` / `mu sshfs rm` / `mu sshfs group` — do not hand-edit lightly\n")
+	b.WriteString("# name\tnode\tremote-path\t[ro|rw]\t[group,group,…]\n")
 	names := make([]string, 0, len(entries))
 	for n := range entries {
 		names = append(names, n)
@@ -96,7 +110,16 @@ func WriteRegistry(entries map[string]Mount) error {
 	for _, n := range names {
 		m := entries[n]
 		b.WriteString(n + "\t" + m.Node + "\t" + m.Path)
-		if m.RO {
+		// Groups need an explicit ro/rw marker in field 4 to hold field 5's position;
+		// without groups, keep the terse form (append "\tro" only when read-only).
+		switch {
+		case len(m.Groups) > 0:
+			access := "rw"
+			if m.RO {
+				access = "ro"
+			}
+			b.WriteString("\t" + access + "\t" + strings.Join(m.Groups, ","))
+		case m.RO:
 			b.WriteString("\tro")
 		}
 		b.WriteByte('\n')

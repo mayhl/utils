@@ -96,8 +96,10 @@ hcd() {
   for a in "$@"; do case "$a" in -*) ;; *) name=$a ;; esac done
   [ -n "$name" ] && cd "$(mu sshfs path "$name")"
 }
-hmt() { mu sshfs mount "$@"; }  # mount, no cd; hmt <name>… multi, hmt --all = all
+hmt() { mu sshfs mount "$@"; }  # mount, no cd; hmt <name>… / hmt @group / hmt --all
 hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
 hset() { mu sshfs set "$@"; }   # hset <name> [--node|--path|--ro|--rw]
 hum() { mu sshfs umount "$@"; } # unmount; hum --all = all live
+hgroup() { mu sshfs group "$@"; }     # hgroup <group> <name>…  add mounts to a group
+hungroup() { mu sshfs ungroup "$@"; } # hungroup <group> <name>…  remove
 alias hls='mu sshfs list'       # table with live status

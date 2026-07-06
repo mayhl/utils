@@ -12,10 +12,11 @@ import (
 )
 
 // MountRow is one row of the `mu sshfs list` table. Status is one of
-// "mounted" | "hung" | "unmounted".
+// "mounted" | "hung" | "unmounted". Groups is the comma-joined group list (may be
+// empty); the Groups column is shown only when at least one row has groups.
 type MountRow struct {
-	Name, Node, Path, Status string
-	RO                       bool
+	Name, Node, Path, Status, Groups string
+	RO                               bool
 }
 
 // MountsTable renders the sshfs mount list: name/node/remote-path/access/status.
@@ -34,13 +35,31 @@ func MountsTable(rows []MountRow, mountsRoot string) {
 	t.SetStyle(table.StyleRounded)
 	t.SetTitle("SSHFS Mounts\nLOCAL PATH: " + mountsRoot)
 
-	t.AppendHeader(table.Row{"Name", "Node", "Remote path", "Access", "Status"})
+	// The Groups column appears only when some mount has groups, so the common
+	// group-free listing keeps its original shape.
+	showGroups := false
+	for _, r := range rows {
+		if r.Groups != "" {
+			showGroups = true
+			break
+		}
+	}
+
+	header := table.Row{"Name", "Node", "Remote path", "Access", "Status"}
+	if showGroups {
+		header = table.Row{"Name", "Node", "Remote path", "Access", "Groups", "Status"}
+	}
+	t.AppendHeader(header)
 	for _, r := range rows {
 		access := "rw"
 		if r.RO {
 			access = "ro"
 		}
-		t.AppendRow(table.Row{r.Name, r.Node, r.Path, access, statusBadge(r.Status)})
+		if showGroups {
+			t.AppendRow(table.Row{r.Name, r.Node, r.Path, access, r.Groups, statusBadge(r.Status)})
+		} else {
+			t.AppendRow(table.Row{r.Name, r.Node, r.Path, access, statusBadge(r.Status)})
+		}
 	}
 
 	cols := []table.ColumnConfig{
@@ -48,8 +67,11 @@ func MountsTable(rows []MountRow, mountsRoot string) {
 		{Name: "Node", Colors: text.Colors{text.FgMagenta}},
 		{Name: "Remote path", Colors: text.Colors{text.FgCyan}},
 		{Name: "Access", Transformer: accessTransformer},
-		{Name: "Status", Transformer: statusTransformer},
 	}
+	if showGroups {
+		cols = append(cols, table.ColumnConfig{Name: "Groups", Colors: text.Colors{text.FgBlue}})
+	}
+	cols = append(cols, table.ColumnConfig{Name: "Status", Transformer: statusTransformer})
 	fitPathColumn(cols, rows)
 	t.SetColumnConfigs(cols)
 	t.Render()
@@ -99,13 +121,20 @@ func fitPathColumn(cols []table.ColumnConfig, rows []MountRow) {
 	nameW, nodeW := len("Name"), len("Node")
 	accessW := len("Access")
 	statusW := text.StringWidth(statusBadge("unmounted")) // widest badge
+	groupsW := 0
 	for _, r := range rows {
 		nameW = max(nameW, text.StringWidth(r.Name))
 		nodeW = max(nodeW, text.StringWidth(r.Node))
+		groupsW = max(groupsW, text.StringWidth(r.Groups))
+	}
+	if groupsW > 0 {
+		groupsW = max(groupsW, len("Groups"))
 	}
 	// StyleRounded overhead per column: 2 padding + a border glyph → 3*ncols + 1.
+	// len(cols) already reflects the Groups column when present, so overhead scales;
+	// groupsW is 0 when that column is absent.
 	overhead := 3*len(cols) + 1
-	budget := tw - (nameW + nodeW + accessW + statusW + overhead)
+	budget := tw - (nameW + nodeW + accessW + statusW + groupsW + overhead)
 	if budget < 8 {
 		budget = 8 // floor: a narrow terminal still shows a stub, not nothing
 	}

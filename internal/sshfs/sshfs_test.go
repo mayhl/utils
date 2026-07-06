@@ -34,6 +34,10 @@ func TestRegistryRoundTrip(t *testing.T) {
 	in := map[string]Mount{
 		"proj":    {Node: "alpha", Path: "/p/work/proj", RO: false},
 		"data_ro": {Node: "beta", Path: "/archive/data set", RO: true},
+		// groups on an rw mount (an explicit "rw" marker must hold field 4's position)
+		// and on a ro mount, incl. multi-membership.
+		"grp_rw": {Node: "gamma", Path: "/p/work/g", RO: false, Groups: []string{"a", "b"}},
+		"grp_ro": {Node: "delta", Path: "/p/work/d", RO: true, Groups: []string{"x"}},
 	}
 	if err := WriteRegistry(in); err != nil {
 		t.Fatalf("write: %v", err)
@@ -67,6 +71,30 @@ func TestReadRegistrySkipsCommentsAndBlanks(t *testing.T) {
 	}
 	if reg["foo"].RO || !reg["bar"].RO {
 		t.Errorf("ro flags wrong: %v", reg)
+	}
+}
+
+// TestReadRegistryGroups checks the 5-field group encoding parses, an explicit "rw"
+// marker keeps a group-bearing rw mount read-write, and an old 4-field ro line (no
+// group field) still reads with nil groups (backward compat).
+func TestReadRegistryGroups(t *testing.T) {
+	root := t.TempDir()
+	setRoot(t, root)
+	body := "g_rw\talpha\t/p/a\trw\tproj,navy\n" +
+		"g_ro\tbeta\t/p/b\tro\tproj\n" +
+		"old_ro\tgamma\t/p/c\tro\n"
+	if err := os.WriteFile(filepath.Join(root, "registry"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := ReadRegistry()
+	if got := reg["g_rw"]; got.RO || !reflect.DeepEqual(got.Groups, []string{"proj", "navy"}) {
+		t.Errorf("g_rw = %#v", got)
+	}
+	if got := reg["g_ro"]; !got.RO || !reflect.DeepEqual(got.Groups, []string{"proj"}) {
+		t.Errorf("g_ro = %#v", got)
+	}
+	if got := reg["old_ro"]; !got.RO || got.Groups != nil {
+		t.Errorf("old_ro backward-compat = %#v", got)
 	}
 }
 
