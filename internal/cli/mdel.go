@@ -36,7 +36,7 @@ func queueKillCmd() *cobra.Command {
 				os.Exit(2)
 			}
 			who := userSel{all: allUsers, list: userList}
-			label, scheduler, snapshot, run := queueTargetCtx(node, who)
+			label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
 			jobs, err := snapshot()
 			if err != nil {
 				render.Err(fmt.Sprintf("%s: queue fetch failed: %v", label, err))
@@ -70,7 +70,7 @@ func mstatInteractive(node string, who userSel) error {
 	if !render.Interactive() {
 		return fmt.Errorf("mstat -i needs a terminal (stdin is not a tty)")
 	}
-	label, scheduler, snapshot, run := queueTargetCtx(node, who)
+	label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
 	interval := 2 * time.Second
 	if node != "" { // remote fetch: ssh + Kerberos per tick → don't hammer it
 		interval = 15 * time.Second
@@ -142,10 +142,12 @@ func cancelJobs(label, scheduler string, matched []queue.Job, run func(string) e
 
 // queueTargetCtx resolves the single target cluster: its label, scheduler, a
 // snapshot() that fetches its current jobs (returns an error rather than exiting, so
-// the live picker tolerates a blip), and a run() that executes a cancel command
-// there — over remote-exec for --node, or a local shell on an HPC login node. It
-// exits only when there's no target at all: off-HPC without --node.
-func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot func() ([]queue.Job, error), run func(string) error) {
+// the live picker tolerates a blip), a run() that executes a mutating command there
+// with stderr surfaced (cancel/hold/release), and a capture() that returns a read
+// command's raw stdout (info/peek/hist) — over remote-exec for --node, or a local
+// shell on an HPC login node. It exits only when there's no target at all: off-HPC
+// without --node.
+func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot func() ([]queue.Job, error), run func(string) error, capture func(string) (string, error)) {
 	if node != "" {
 		target, err := hpc.Resolve(node)
 		if err != nil {
@@ -169,12 +171,18 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 			hpc.EnsureTicket()
 			out, err := hpc.RemoteExec(target, c)
 			if err != nil {
-				return fmt.Errorf("%s: cancel failed: %w", node, err)
+				return fmt.Errorf("%s: command failed: %w", node, err)
 			}
 			if s := strings.TrimSpace(out); s != "" {
 				render.Detail(s)
 			}
 			return nil
+		}
+		// capture runs an arbitrary read command over remote-exec and returns its raw
+		// stdout — the read verbs (minfo/mpeek/mhist) print/parse it themselves.
+		capture = func(c string) (string, error) {
+			hpc.EnsureTicket()
+			return hpc.RemoteExec(target, c)
 		}
 		return
 	}
@@ -198,12 +206,16 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 	run = func(c string) error {
 		out, err := exec.Command("bash", "-c", c).CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("%s: cancel failed: %w: %s", self, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("%s: command failed: %w: %s", self, err, strings.TrimSpace(string(out)))
 		}
 		if s := strings.TrimSpace(string(out)); s != "" {
 			render.Detail(s)
 		}
 		return nil
+	}
+	capture = func(c string) (string, error) {
+		out, err := exec.Command("bash", "-c", c).Output()
+		return string(out), err
 	}
 	return
 }

@@ -130,6 +130,13 @@ func frontDoors() string {
 		default: // "pbs"
 			doors = append(doors, stat, del)
 		}
+		// Scheduler-neutral read/state verbs — same name whatever the idiom (no clean
+		// squeue word for "info"/"peek"/"hold"/"history").
+		doors = append(
+			doors,
+			door{"minfo", `mu hpc queue info "$@"`},
+			door{"mpeek", `mu hpc queue peek "$@"`},
+		)
 	}
 
 	names := make([]string, len(doors))
