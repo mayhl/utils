@@ -83,7 +83,104 @@ func doctorCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
+	c.AddCommand(doctorFmtCmd())
 	return c
+}
+
+// doctorFmtCmd is the `mu doctor fmt` module: the formatter/linter/debug/LSP
+// matrix, each cell tagged by source and judged tier-aware (see doctor.FmtMatrix).
+func doctorFmtCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fmt",
+		Short: "Formatter/linter/debug/LSP matrix (mise enforced vs Mason editor).",
+		Long: "Show the formatter/linter/debug/LSP stack as a language × role matrix, each\n" +
+			"cell tagged by source: mise (the enforced fmt tier behind the git hook and\n" +
+			"`mu fmt`) vs Mason (nvim's editor copy). Verdicts are tier-aware — the mise fmt\n" +
+			"tier is opt-in, so a dormant mise isn't an error and Mason is the backup.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			rep := doctor.FmtMatrix()
+
+			cols := []string{"Language"}
+			for _, role := range doctor.RoleOrder {
+				cols = append(cols, role.String())
+			}
+			rows := make([]render.MatrixRow, len(rep.Rows))
+			for i, r := range rep.Rows {
+				cells := make([]render.MatrixCell, len(r.Cells))
+				for j, c := range r.Cells {
+					cells[j] = render.MatrixCell{
+						Defined: c.Defined,
+						Tool:    c.Tool,
+						Mise:    c.Mise,
+						Mason:   c.Mason,
+						Drift:   c.Drift,
+						Level:   levelStr(c.Status),
+					}
+				}
+				rows[i] = render.MatrixRow{Label: r.Lang, Level: levelStr(r.Status), Cells: cells}
+			}
+			render.Matrix(fmtBanner(rep.TierOn), cols, rows)
+
+			// Version drift + config tools the classifier didn't recognize, below the grid.
+			// Dedup by tool — a tool spanning two roles (ruff: format+lint) drifts once.
+			seen := map[string]bool{}
+			for _, r := range rep.Rows {
+				for _, c := range r.Cells {
+					if c.Drift && !seen[c.Tool] {
+						seen[c.Tool] = true
+						fmt.Printf("  drift  %s: mise %s ≠ mason %s\n", c.Tool, c.MiseVer, c.MasonVer)
+					}
+				}
+			}
+			if len(rep.Unknown) > 0 {
+				fmt.Printf("  unclassified in config.fmt.toml: %s\n", strings.Join(rep.Unknown, ", "))
+			}
+
+			ok, warn, fail := tallyMatrix(rep)
+			summary := fmt.Sprintf("fmt: %d ok, %d warn, %d fail", ok, warn, fail)
+			switch {
+			case fail > 0:
+				render.EventErr("doctor", summary)
+			case warn > 0:
+				render.EventWarn("doctor", summary)
+			default:
+				render.EventOK("doctor", summary)
+			}
+			if rep.Status == doctor.Fail {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+}
+
+// fmtBanner is the matrix title: name plus the current fmt-tier mode.
+func fmtBanner(tierOn bool) string {
+	if tierOn {
+		return "Formatter / Linter Matrix\nfmt tier: ON — mise enforced (git hook + mu fmt)"
+	}
+	return "Formatter / Linter Matrix\nfmt tier: OFF — Mason active · MU_MISE_FMT=1 to enforce via mise"
+}
+
+// tallyMatrix counts defined cells by verdict for the event summary.
+func tallyMatrix(rep doctor.FmtReport) (ok, warn, fail int) {
+	for _, r := range rep.Rows {
+		for _, c := range r.Cells {
+			if !c.Defined {
+				continue
+			}
+			switch c.Status {
+			case doctor.OK:
+				ok++
+			case doctor.Warn:
+				warn++
+			default:
+				fail++
+			}
+		}
+	}
+	return ok, warn, fail
 }
 
 // verboseRows parses tab-separated verbose ("level\tname\tdetail" per line) into
