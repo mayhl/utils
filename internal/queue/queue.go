@@ -110,10 +110,11 @@ func Parse(out string) []Job {
 	return ParseSLURM(out)
 }
 
-// pbsState maps a PBS single-letter state code to the normalized State.
+// pbsState maps a PBS job state code to the normalized State. Covers the full PBS
+// Pro / OpenPBS set so a live code never leaks through as a raw letter.
 func pbsState(code string) State {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
-	case "R":
+	case "R", "B": // R running; B = array parent whose subjobs have begun
 		return Running
 	case "Q":
 		return Queued
@@ -121,28 +122,34 @@ func pbsState(code string) State {
 		return Held
 	case "E":
 		return Exiting
-	case "C", "F":
+	case "C", "F", "X": // C completed (old PBS); F finished (PBS Pro); X subjob finished/expired
 		return Complete
-	case "W", "T":
+	case "W", "T", "M": // W waiting on exec time; T transiting; M moved to another server
 		return Waiting
-	case "S", "U":
+	case "S", "U": // S suspended; U suspended by keyboard/user activity (cycle-harvest)
 		return Suspended
 	default:
 		return Unknown
 	}
 }
 
-// slurmState maps a SLURM state code (ST column) to the normalized State.
+// slurmState maps a SLURM state code (ST column) or full word to the normalized
+// State. Covers the documented squeue state set so a live code never leaks through
+// as a raw abbreviation.
 func slurmState(code string) State {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
-	case "R", "RUNNING":
+	case "R", "RUNNING", "RS", "RESIZING":
 		return Running
-	case "PD", "PENDING":
+	case "PD", "PENDING", "CF", "CONFIGURING", "RQ", "REQUEUED", "RF", "REQUEUE_FED":
 		return Queued
-	case "CG", "COMPLETING":
+	case "CG", "COMPLETING", "SO", "STAGE_OUT", "SI", "SIGNALING":
 		return Exiting
-	case "CD", "COMPLETED", "CA", "CANCELLED", "F", "FAILED", "TO", "TIMEOUT", "NF", "OOM":
+	case "CD", "COMPLETED", "CA", "CANCELLED", "F", "FAILED", "TO", "TIMEOUT",
+		"NF", "NODE_FAIL", "OOM", "OUT_OF_MEMORY", "BF", "BOOT_FAIL", "DL", "DEADLINE",
+		"PR", "PREEMPTED", "RV", "REVOKED", "SE", "SPECIAL_EXIT":
 		return Complete
+	case "RD", "RESV_DEL_HOLD", "RH", "REQUEUE_HOLD":
+		return Held
 	case "S", "SUSPENDED", "ST", "STOPPED":
 		return Suspended
 	default:

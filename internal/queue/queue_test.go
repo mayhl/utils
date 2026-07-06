@@ -108,6 +108,45 @@ func TestPendingReason(t *testing.T) {
 	}
 }
 
+func TestPBSStateMap(t *testing.T) {
+	cases := map[string]State{
+		"R": Running, "B": Running,
+		"Q": Queued,
+		"H": Held,
+		"E": Exiting,
+		"C": Complete, "F": Complete, "X": Complete,
+		"W": Waiting, "T": Waiting, "M": Waiting,
+		"S": Suspended, "U": Suspended,
+		" r ": Running, // trimmed + case-folded
+		"Z":   Unknown, // unrecognized falls through
+	}
+	for code, want := range cases {
+		if got := pbsState(code); got != want {
+			t.Errorf("pbsState(%q) = %v, want %v", code, got, want)
+		}
+	}
+}
+
+func TestSLURMStateMap(t *testing.T) {
+	cases := map[string]State{
+		"R": Running, "RS": Running, "RESIZING": Running,
+		"PD": Queued, "CF": Queued, "RQ": Queued, "REQUEUE_FED": Queued,
+		"CG": Exiting, "SO": Exiting, "SIGNALING": Exiting,
+		"CD": Complete, "CA": Complete, "F": Complete, "TO": Complete,
+		"NF": Complete, "OOM": Complete, "BF": Complete, "DL": Complete,
+		"PR": Complete, "RV": Complete, "SE": Complete,
+		"RD": Held, "REQUEUE_HOLD": Held,
+		"S": Suspended, "ST": Suspended,
+		"pending": Queued,  // case-folded full word
+		"ZZ":      Unknown, // unrecognized falls through
+	}
+	for code, want := range cases {
+		if got := slurmState(code); got != want {
+			t.Errorf("slurmState(%q) = %v, want %v", code, got, want)
+		}
+	}
+}
+
 func TestShortID(t *testing.T) {
 	if got := shortID("1284[7].hpc1"); got != "1284[7]" {
 		t.Errorf("array id = %q", got)
