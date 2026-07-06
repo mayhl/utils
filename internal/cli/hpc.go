@@ -41,35 +41,44 @@ func hpcCmd() *cobra.Command {
 
 func hpcQueueCmd() *cobra.Command {
 	var node string
-	var allUsers, jsonOut, allClusters bool
+	var allUsers, jsonOut, local, fleet, all bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
-		Long: "Show a cluster's jobs as one normalized house table, regardless of\n" +
-			"scheduler. With --node, mu fetches it over remote-exec — picking qstat vs\n" +
-			"squeue from the cluster's configured scheduler:\n" +
-			"    mu hpc queue --node hpc1        # your jobs\n" +
-			"    mu hpc queue --node hpc1 -a     # all users\n\n" +
-			"On a login node with no --node and no pipe, mu runs the current cluster's\n" +
-			"scheduler locally — this is the `mstat` front-door. Otherwise it reads a\n" +
-			"listing from stdin (scheduler auto-detected) — the test/pipe-your-own seam:\n" +
-			"    hpc1 squeue | mu hpc queue\n\n" +
-			"--all collates every active cluster into one table (a Cluster column), fanning\n" +
-			"out concurrently with a per-cluster timeout; an unreachable cluster becomes a\n" +
-			"warning, not a hang:\n" +
-			"    mu hpc queue --all             # your jobs, every cluster\n" +
-			"    mu hpc queue --all -a          # all users, every cluster",
+		Long: "Show cluster jobs as one normalized house table, regardless of scheduler\n" +
+			"(PBS qstat / SLURM squeue). Three scopes select how wide to look:\n\n" +
+			"    --local   current cluster only, run locally — no ssh (default on HPC)\n" +
+			"    --fleet   collate across active clusters          (default off HPC)\n" +
+			"    --all     collate across every configured cluster, incl. inactive\n\n" +
+			"Bare `mstat` resolves by location: on a login node it's --local; off HPC,\n" +
+			"where there's no local scheduler, it's --fleet. --fleet/--all fan out\n" +
+			"concurrently with a per-cluster timeout, tagging each job with a Cluster\n" +
+			"column; an unreachable cluster degrades to a warning, never a hang:\n" +
+			"    mstat                          # local on HPC, fleet off it\n" +
+			"    mstat --fleet -a               # active clusters, all users\n" +
+			"    mstat --all                    # every configured cluster, incl. inactive\n\n" +
+			"--node fetches one cluster over remote-exec (qstat vs squeue from its\n" +
+			"configured scheduler); with neither --node nor a scope flag, a listing piped\n" +
+			"on stdin is parsed (scheduler auto-detected) — the test/pipe-your-own seam:\n" +
+			"    mu hpc queue --node hpc1\n" +
+			"    hpc1 squeue | mu hpc queue",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var jobs []queue.Job
 			var down []string
-			label := node
+			var label string
 			switch {
-			case allClusters:
-				jobs, down = collateJobs(allUsers)
-				label = "all clusters"
 			case node != "":
+				label = node
 				jobs = fetchJobs(node, allUsers)
+			case all:
+				label, jobs, down = collateJobs(config.ClusterDefs(), "all", allUsers)
+			case fleet:
+				label, jobs, down = collateJobs(config.ActiveClusters(), "fleet", allUsers)
+			case local:
+				// Explicit --local: current cluster, run locally. Off-HPC this warns
+				// and exits (no scheduler here) rather than silently widening.
+				label, jobs = fetchJobsLocal(allUsers)
 			case !term.IsTerminal(os.Stdin.Fd()):
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -77,9 +86,13 @@ func hpcQueueCmd() *cobra.Command {
 				}
 				jobs = queue.Parse(string(data))
 			default:
-				// No --node and no pipe → fetch the current cluster's queue locally
-				// (the on-cluster `mstat` path). Off-HPC this warns and exits.
-				label, jobs = fetchJobsLocal(allUsers)
+				// Bare mstat, no pipe → resolve by location: on a login node run the
+				// current cluster locally; off HPC (no local scheduler) fall to fleet.
+				if self, _ := currentCluster(); self != "" {
+					label, jobs = fetchJobsLocal(allUsers)
+				} else {
+					label, jobs, down = collateJobs(config.ActiveClusters(), "fleet", allUsers)
+				}
 			}
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
@@ -98,8 +111,11 @@ func hpcQueueCmd() *cobra.Command {
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
-	c.Flags().BoolVarP(&allClusters, "all", "A", false, "collate across all active clusters (distinct from -a all-users)")
+	c.Flags().BoolVar(&local, "local", false, "current cluster only, fetched locally (default on HPC)")
+	c.Flags().BoolVar(&fleet, "fleet", false, "collate across active clusters (default off HPC)")
+	c.Flags().BoolVar(&all, "all", false, "collate across every configured cluster, incl. inactive")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
+	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -137,14 +153,19 @@ type clusterResult struct {
 	err     error
 }
 
-// collateJobs fans out over the active clusters concurrently, each fetched with a
-// bounded timeout, and returns the merged jobs (tagged by cluster) plus "cluster:
-// reason" notes for any that failed — so a down cluster degrades to a warning, never a
-// hang or a total failure. The Kerberos ticket is ensured once up front.
-func collateJobs(allUsers bool) ([]queue.Job, []string) {
-	clusters := config.ActiveClusters()
+// collateJobs fans out over the given cluster set concurrently, each fetched with a
+// bounded timeout, and returns the display label plus the merged jobs (tagged by
+// cluster) and "cluster: reason" notes for any that failed — so a down cluster degrades
+// to a warning, never a hang or a total failure. The Kerberos ticket is ensured once up
+// front. scope is "fleet" (active set) or "all" (every configured cluster), driving both
+// the label and the empty-set message.
+func collateJobs(clusters []config.Cluster, scope string, allUsers bool) (string, []queue.Job, []string) {
 	if len(clusters) == 0 {
-		render.Warn("no active clusters configured — add clusters to config.toml")
+		if scope == "fleet" {
+			render.Warn("no active clusters configured — set `active = true` on a cluster, or use --all")
+		} else {
+			render.Warn("no clusters configured — add clusters to config.toml")
+		}
 		os.Exit(2)
 	}
 	hpc.EnsureTicket()
@@ -158,7 +179,12 @@ func collateJobs(allUsers bool) ([]queue.Job, []string) {
 		}(i)
 	}
 	wg.Wait()
-	return mergeResults(results)
+	label := scope
+	if scope == "all" {
+		label = "all clusters"
+	}
+	jobs, down := mergeResults(results)
+	return label, jobs, down
 }
 
 // fetchCluster fetches one cluster's queue from its representative node (Nodes[0])
