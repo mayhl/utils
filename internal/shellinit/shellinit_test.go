@@ -58,4 +58,72 @@ nodes = ["node2"]
 	if strings.Contains(out, "hpc1()") {
 		t.Error("self node (hpc1) should be skipped")
 	}
+	// Front-doors: mps/mkill always; the queue pair under the default (pbs) idiom.
+	for _, want := range []string{
+		`mps() { mu ps "$@"; }`,
+		`mkill() { mu ps kill "$@"; }`,
+		`mstat() { mu hpc queue "$@"; }`,
+		`mdel() { mu hpc queue kill "$@"; }`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing front-door %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "mqueue()") {
+		t.Error("pbs idiom should not emit mqueue")
+	}
+}
+
+// TestFrontDoorIdiom pins the [shell] queue_aliases switch: slurm REPLACES the queue
+// pair with mqueue/mcancel, both emits all four, and mps/mkill are idiom-independent.
+func TestFrontDoorIdiom(t *testing.T) {
+	cases := map[string]struct {
+		want    []string
+		notWant []string
+	}{
+		"slurm": {
+			want:    []string{`mqueue() { mu hpc queue "$@"; }`, `mcancel() { mu hpc queue kill "$@"; }`},
+			notWant: []string{"mstat()", "mdel()"},
+		},
+		"both": {
+			want: []string{"mstat()", "mdel()", "mqueue()", "mcancel()"},
+		},
+	}
+	for idiom, tc := range cases {
+		t.Run(idiom, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			body := `
+hpc_user = "alice"
+[shell]
+queue_aliases = "` + idiom + `"
+[[cluster]]
+name = "alpha"
+domain = "alpha.example.mil"
+nodes = ["hpc1"]
+`
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("MU_CONFIG_FILE", path)
+			t.Setenv("MU_NODE", "none")
+			config.ResetForTest()
+
+			out := Generate()
+			// mps/mkill are always present, whatever the idiom.
+			if !strings.Contains(out, `mps() { mu ps "$@"; }`) {
+				t.Errorf("mps missing under %q idiom:\n%s", idiom, out)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(out, w) {
+					t.Errorf("%q idiom missing %q in:\n%s", idiom, w, out)
+				}
+			}
+			for _, nw := range tc.notWant {
+				if strings.Contains(out, nw) {
+					t.Errorf("%q idiom should not emit %q in:\n%s", idiom, nw, out)
+				}
+			}
+		})
+	}
 }

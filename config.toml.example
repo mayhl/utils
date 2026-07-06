@@ -28,6 +28,14 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 # ossh = "/path/to/ossh/bin/ssh"     # Kerberos ssh build if it's a shell alias (give the
                                      # binary path); omit to use the system ssh on PATH
 
+[shell]
+# queue_aliases — which word the queue front-doors use (pure ergonomics; the engine
+# auto-detects each cluster's real scheduler regardless). mps/mkill are always defined.
+#   "pbs"   (default) → mstat / mdel      (qstat/qdel idiom)
+#   "slurm"           → mqueue / mcancel  (squeue/scancel idiom; REPLACES mstat/mdel)
+#   "both"            → all four
+# queue_aliases = "pbs"
+
 # One [[cluster]] block per HPC cluster. Order is preserved (array of tables) and drives
 # node resolution, the per-node shell dispatchers, and the queue plane.
 #   scheduler = "pbs" | "slurm"  — which command the live `mu hpc queue` fetch runs.

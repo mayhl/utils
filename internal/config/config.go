@@ -42,6 +42,9 @@ type file struct {
 	SSH struct {
 		OSSH string `toml:"ossh"`
 	} `toml:"ssh"`
+	Shell struct {
+		QueueAliases string `toml:"queue_aliases"` // idiom for the queue front-door names: "pbs"|"slurm"|"both"
+	} `toml:"shell"`
 	Clusters []struct {
 		Name      string   `toml:"name"`
 		Domain    string   `toml:"domain"`
@@ -214,6 +217,23 @@ func OSSHPath() string {
 		return f.SSH.OSSH
 	}
 	return ""
+}
+
+// QueueAliases is the scheduler idiom for the queue front-door names (config.toml
+// [shell] queue_aliases): "pbs" (default) → mstat/mdel, "slurm" → mqueue/mcancel,
+// "both" → all four. Pure ergonomics — which word your fingers reach for; the engine
+// auto-detects each cluster's real scheduler regardless. "q" is a synonym for "both";
+// an unset/unrecognized value falls back to "pbs".
+func QueueAliases() string {
+	if f := cfg(); f != nil {
+		switch strings.ToLower(strings.TrimSpace(f.Shell.QueueAliases)) {
+		case "slurm":
+			return "slurm"
+		case "both", "q":
+			return "both"
+		}
+	}
+	return "pbs"
 }
 
 // SSHCommand is the transfer/transport ssh program. It's a platform SEAM (ossh on

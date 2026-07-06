@@ -98,14 +98,51 @@ func Generate() string {
 		}
 		b.WriteString("'\n")
 	}
-	// mstat — the queue front-door: bare runs the CURRENT cluster's scheduler locally
-	// (mu hpc queue with no --node), while `<node> mstat` routes through the per-node
-	// dispatcher above. Emitted whenever any cluster is configured (the nodes list can
-	// be empty when this shell is on the sole cluster, but mstat is still wanted).
-	if len(config.NodeNames()) > 0 {
-		b.WriteString("unalias mstat 2>/dev/null || :\n")
-		b.WriteString("eval '\nmstat() { mu hpc queue \"$@\"; }\n'\n")
+	b.WriteString(frontDoors())
+	return b.String()
+}
+
+// frontDoors emits the short shell front-doors for the process and queue planes:
+// mps/mkill (process — local, always) and the queue pair under the configured idiom
+// (config.toml [shell] queue_aliases) — mstat/mdel (pbs, default), mqueue/mcancel
+// (slurm), or both. Bare `mstat` runs the CURRENT cluster's scheduler locally (mu hpc
+// queue, no --node); `<node> mstat` routes through the per-node dispatcher above. The
+// queue pair is emitted only when a cluster is configured; mps/mkill always. Each uses
+// the unalias + nested-eval dance the dispatchers use — zsh won't define a function
+// over a live alias, and the nested eval defers parsing the def until the unalias runs
+// (no body contains a single quote).
+func frontDoors() string {
+	type door struct{ name, body string }
+	doors := []door{
+		{"mps", `mu ps "$@"`},
+		{"mkill", `mu ps kill "$@"`},
 	}
+	if len(config.NodeNames()) > 0 {
+		stat := door{"mstat", `mu hpc queue "$@"`}
+		del := door{"mdel", `mu hpc queue kill "$@"`}
+		queue := door{"mqueue", `mu hpc queue "$@"`}
+		cancel := door{"mcancel", `mu hpc queue kill "$@"`}
+		switch config.QueueAliases() {
+		case "slurm":
+			doors = append(doors, queue, cancel)
+		case "both":
+			doors = append(doors, stat, del, queue, cancel)
+		default: // "pbs"
+			doors = append(doors, stat, del)
+		}
+	}
+
+	names := make([]string, len(doors))
+	for i, d := range doors {
+		names[i] = d.name
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "unalias %s 2>/dev/null || :\n", strings.Join(names, " "))
+	b.WriteString("eval '\n")
+	for _, d := range doors {
+		fmt.Fprintf(&b, "%s() { %s; }\n", d.name, d.body)
+	}
+	b.WriteString("'\n")
 	return b.String()
 }
 
