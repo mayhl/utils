@@ -89,7 +89,7 @@ func (h *houseHandler) append(t time.Time, level slog.Level, scope, msg string) 
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	fmt.Fprintf(h.file, "[%s] [%-5s] [%s] %s\n",
+	_, _ = fmt.Fprintf(h.file, "[%s] [%-5s] [%s] %s\n",
 		t.Format("2006-01-02T15:04:05"), levelName(level), scope, msg)
 }
 

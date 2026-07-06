@@ -17,7 +17,7 @@ func TestProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	upHost, upPort, _ := net.SplitHostPort(ln.Addr().String())
 
 	// A second listener opened then immediately closed → that port is free, so a
@@ -27,7 +27,7 @@ func TestProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, downPort, _ := net.SplitHostPort(ln2.Addr().String())
-	ln2.Close()
+	_ = ln2.Close()
 
 	// probe dials a single port for all targets, so give both nodes the same host
 	// and distinguish reachability by pointing the "up" node at the live port.
@@ -52,7 +52,7 @@ func TestProbeConcurrentMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	ln.Close() // free the port → all dials refused → all "down"
+	_ = ln.Close() // free the port → all dials refused → all "down"
 
 	targets := make(map[string]string, 20)
 	for i := 'a'; i <= 't'; i++ {

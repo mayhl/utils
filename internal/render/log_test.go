@@ -12,7 +12,7 @@ import (
 // ~/.cache/mayhl_utils/framework.log; individual tests override per-case.
 func TestMain(m *testing.M) {
 	if os.Getenv("MU_LOG_FILE") == "" {
-		os.Setenv("MU_LOG_FILE", filepath.Join(os.TempDir(), "mu-render-test-default.log"))
+		_ = os.Setenv("MU_LOG_FILE", filepath.Join(os.TempDir(), "mu-render-test-default.log"))
 	}
 	os.Exit(m.Run())
 }

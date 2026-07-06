@@ -132,7 +132,7 @@ func viewLog(tier, scope, since string) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	tier = strings.ToUpper(strings.TrimSpace(tier))
 	var cutoff time.Time
