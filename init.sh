@@ -40,7 +40,7 @@ export MU_SYSTEM
 if mu_is_macos; then export MU_IS_MACOS=TRUE; else unset MU_IS_MACOS; fi
 
 # ---- connectivity: config as MU_* exports (incl. MU_OSSH) + per-node dispatchers
-# (mike / mike push|pull / mike <cmd>), generated from config.toml by the Go
+# (hpc1 / hpc1 push|pull / hpc1 <cmd>), generated from config.toml by the Go
 # engine. Runs BEFORE the platform seam so MU_OSSH is set when it resolves MU_SSH.
 # Replaces the old connect.sh alias codegen. -----------------------------------
 eval "$(mu shell-init)"

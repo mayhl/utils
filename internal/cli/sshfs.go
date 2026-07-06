@@ -365,8 +365,8 @@ writes land on tape.
 
 Examples:
   mu sshfs set scratch --path /archive/project/run   # fix a wrong path
-  mu sshfs set scratch --rw                                 # temporarily allow writes
-  mu sshfs set scratch --node hpc1                      # move to another node`,
+  mu sshfs set scratch --rw                           # temporarily allow writes
+  mu sshfs set scratch --node hpc1                    # move to another node`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: mountCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
