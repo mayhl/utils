@@ -96,7 +96,8 @@ hcd() {
   for a in "$@"; do case "$a" in -*) ;; *) name=$a ;; esac done
   [ -n "$name" ] && cd "$(mu sshfs path "$name")"
 }
+hmt() { mu sshfs mount "$@"; }  # mount, no cd; hmt <name>… multi, hmt --all = all
 hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
 hset() { mu sshfs set "$@"; }   # hset <name> [--node|--path|--ro|--rw]
-hum() { mu sshfs umount "$@"; } # unmount
+hum() { mu sshfs umount "$@"; } # unmount; hum --all = all live
 alias hls='mu sshfs list'       # table with live status

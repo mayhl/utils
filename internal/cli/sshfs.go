@@ -25,6 +25,7 @@ func sshfsCmd() *cobra.Command {
 
 Shortcuts (shell functions — not 1:1 with the subcommands below):
   hcd <name>   mount if needed + cd into it   (mu sshfs mount)
+  hmt <name>…  mount, no cd (hmt --all = all)  (mu sshfs mount)
   hls          list mounts with live status   (mu sshfs list)
   hadd         register a new mount           (mu sshfs add)
   hset         change/repoint a mount         (mu sshfs set)
@@ -73,18 +74,78 @@ func sshfsListCmd() *cobra.Command {
 
 func sshfsMountCmd() *cobra.Command {
 	var verbose bool
+	var all bool
 	c := &cobra.Command{
-		Use:               "mount <name>",
-		Short:             "Mount a configured name. Auto-remounts a stale mount.",
-		Args:              cobra.ExactArgs(1),
+		Use:   "mount <name>...",
+		Short: "Mount configured names (--all mounts every registered). Auto-remounts a stale mount.",
+		Args: func(_ *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return errors.New("cannot name a mount together with --all")
+				}
+				return nil
+			}
+			return cobra.MinimumNArgs(1)(nil, args)
+		},
 		ValidArgsFunction: mountCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			os.Exit(runMount(args[0], verbose))
+			names := args
+			if all {
+				names = registeredMountNames()
+				if len(names) == 0 {
+					render.Info("no mounts — add one with `mu sshfs add <name> <node> <path>`")
+					return nil
+				}
+			}
+			if len(names) == 1 && !all {
+				os.Exit(runMount(names[0], verbose, "", false)) // classic single-mount path (hcd uses this)
+			}
+			os.Exit(runMountBatch(names, verbose))
 			return nil
 		},
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show the remote target + verbose ssh output")
+	c.Flags().BoolVarP(&all, "all", "a", false, "mount every registered mount")
 	return c
+}
+
+// registeredMountNames returns all registered mount names, sorted.
+func registeredMountNames() []string {
+	reg := sshfs.ReadRegistry()
+	names := make([]string, 0, len(reg))
+	for n := range reg {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// runMountBatch mounts several names in sequence. Non-verbose, it collapses per-mount
+// chatter into one "Mounting <name>  N/M" progress line (the settle-spinner, relabelled)
+// with each mount's ✓/✗ result accumulating above it, then a final "mounted X/Y" summary.
+// Verbose skips the progress line and streams each mount in full (for host-key/Kerberos
+// prompts and debugging). Sequential, never parallel: a mount can prompt and draws its own
+// spinner, so concurrent would garble both. Returns non-zero if any mount failed.
+func runMountBatch(names []string, verbose bool) int {
+	total := len(names)
+	failed := 0
+	for i, name := range names {
+		var rc int
+		if verbose {
+			rc = runMount(name, true, "", false)
+		} else {
+			rc = runMount(name, false, fmt.Sprintf("Mounting %s  %d/%d", name, i, total), true)
+		}
+		if rc != 0 {
+			failed++
+		}
+	}
+	if failed > 0 {
+		render.Warn(fmt.Sprintf("mounted %d/%d (%d failed)", total-failed, total, failed))
+		return 1
+	}
+	render.OK(fmt.Sprintf("mounted %d/%d", total, total))
+	return 0
 }
 
 // Mount deadlines: a healthy sshfs daemonizes within a second or two, so these only
@@ -173,8 +234,11 @@ func runBounded(cmd *exec.Cmd, timeout time.Duration, fatal <-chan string) (int,
 
 // runMount ports sshfs.py's mount: idempotent, remounts a stale/hung mount, keeps
 // stdin/stderr on the terminal so host-key/Kerberos prompts are answerable, and
-// shows a spinner while sshfs settles (non-verbose only).
-func runMount(name string, verbose bool) int {
+// shows a spinner while sshfs settles (non-verbose only). spinLabel overrides the
+// settle-spinner text (batch mode passes a "Mounting <name>  N/M" progress label);
+// "" uses the default. quiet drops the pre-mount "connecting" line so a batch shows
+// just its progress bar + per-mount result lines.
+func runMount(name string, verbose bool, spinLabel string, quiet bool) int {
 	if _, err := exec.LookPath("sshfs"); err != nil {
 		render.Err("sshfs not found — install fuse-t + sshfs to use mu sshfs")
 		return 3
@@ -212,7 +276,9 @@ func runMount(name string, verbose bool) int {
 	if m.RO {
 		roTag = " (ro)"
 	}
-	render.Info(fmt.Sprintf("connecting %s → %s%s", name, m.Node, roTag))
+	if !quiet {
+		render.Info(fmt.Sprintf("connecting %s → %s%s", name, m.Node, roTag))
+	}
 	if verbose {
 		render.Detail("  local   " + mdir)
 		render.Detail("  remote  " + m.Path)
@@ -235,7 +301,11 @@ func runMount(name string, verbose bool) int {
 	} else {
 		w := &stderrScanner{fatal: make(chan string, 1)}
 		cmd.Stderr = w
-		sp := render.NewSpinner("mounting " + name + "…")
+		label := spinLabel
+		if label == "" {
+			label = "mounting " + name + "…"
+		}
+		sp := render.NewSpinner(label)
 		sp.Start()
 		rc, timedOut, reason = runBounded(cmd, timeout, w.fatal)
 		sp.Stop()
@@ -471,7 +541,7 @@ Examples:
 					render.Err(name + ": couldn't unmount to remount — unmount manually, then `hcd " + name + "`")
 					os.Exit(1)
 				}
-				os.Exit(runMount(name, false))
+				os.Exit(runMount(name, false, "", false))
 			}
 			return nil
 		},
