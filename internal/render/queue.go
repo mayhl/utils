@@ -17,7 +17,7 @@ import (
 type JobRow struct {
 	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
 	Start                                                         string // SLURM start (actual/estimate); shown as a Start column under --start
-	Cluster                                                       string // set only by cross-cluster collate → a leftmost Cluster column
+	Cluster                                                       string // collate source tag (cluster or fleet node) → the leftmost System column
 }
 
 // JobsTable renders a scheduler queue as the house table: ID / Name / Queue / NDS /
@@ -40,7 +40,7 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 
 	header := table.Row{}
 	if showCluster {
-		header = append(header, "Cluster")
+		header = append(header, "System")
 	}
 	header = append(header, "ID", "Name")
 	if showUser {
@@ -75,7 +75,7 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 	// ColumnConfigs match by header name, so listing Cluster is harmless when the
 	// column is absent (single-cluster views).
 	cols := []table.ColumnConfig{
-		{Name: "Cluster", Colors: text.Colors{text.FgCyan, text.Bold}},
+		{Name: "System", Colors: text.Colors{text.FgCyan, text.Bold}},
 		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
 		{Name: "Name", WidthMaxEnforcer: truncRight},
 		{Name: "User", Colors: text.Colors{text.FgBlue}},
@@ -149,7 +149,7 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 		userW = len("User")
 	}
 	if showCluster {
-		clusterW = len("Cluster")
+		clusterW = len("System")
 	}
 	if showStart {
 		startW = len("Start")

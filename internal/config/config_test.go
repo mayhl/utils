@@ -18,6 +18,7 @@ func TestTOMLReading(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	body := `
 hpc_user = "alice"
+fleet = ["hpc2", "node2"]
 
 [transfer]
 rsync_opts        = "-avz"
@@ -61,6 +62,9 @@ nodes  = ["node2"]
 	}
 	if tg := NodeTargets(); tg["hpc2"] != "alice@hpc2.alpha.example.mil" {
 		t.Errorf("NodeTargets[hpc2] = %q", tg["hpc2"])
+	}
+	if fl := Fleet(); len(fl) != 2 || fl[0] != "hpc2" || fl[1] != "node2" {
+		t.Errorf("Fleet = %v, want [hpc2 node2]", fl)
 	}
 }
 

@@ -30,7 +30,8 @@ type Cluster struct {
 // file is the config.toml schema. Clusters use an array-of-tables so their order
 // is preserved as authored (a map would iterate randomly).
 type file struct {
-	HPCUser  string `toml:"hpc_user"`
+	HPCUser  string   `toml:"hpc_user"`
+	Fleet    []string `toml:"fleet"` // node names --fleet queries (one fetch each); empty → fall back to active clusters
 	Transfer struct {
 		RsyncOpts       string `toml:"rsync_opts"`
 		SSHTransferOpts string `toml:"ssh_transfer_opts"`
@@ -136,6 +137,17 @@ func SchedulerFor(node string) string {
 		}
 	}
 	return ""
+}
+
+// Fleet is the explicit list of node names `--fleet` queries — one fetch per node, so a
+// DSRC whose nodes are separate schedulers (each its own queue) is collated in full rather
+// than collapsed to one representative node. Empty when unset → callers fall back to
+// one-node-per-active-cluster.
+func Fleet() []string {
+	if f := cfg(); f != nil {
+		return f.Fleet
+	}
+	return nil
 }
 
 // ActiveClusters is the subset flagged active (default true) — the set bare-mstat /

@@ -72,9 +72,9 @@ func hpcQueueCmd() *cobra.Command {
 				label = node
 				jobs = fetchJobs(node, allUsers)
 			case all:
-				label, jobs, down = collateJobs(config.ClusterDefs(), "all", allUsers)
+				label, jobs, down = collateJobs(clusterTargets(config.ClusterDefs()), "all", allUsers)
 			case fleet:
-				label, jobs, down = collateJobs(config.ActiveClusters(), "fleet", allUsers)
+				label, jobs, down = collateJobs(fleetScope(), "fleet", allUsers)
 			case local:
 				// Explicit --local: current cluster, run locally. Off-HPC this warns
 				// and exits (no scheduler here) rather than silently widening.
@@ -91,7 +91,7 @@ func hpcQueueCmd() *cobra.Command {
 				if self, _ := currentCluster(); self != "" {
 					label, jobs = fetchJobsLocal(allUsers)
 				} else {
-					label, jobs, down = collateJobs(config.ActiveClusters(), "fleet", allUsers)
+					label, jobs, down = collateJobs(fleetScope(), "fleet", allUsers)
 				}
 			}
 			if jsonOut {
@@ -112,7 +112,7 @@ func hpcQueueCmd() *cobra.Command {
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
 	c.Flags().BoolVar(&local, "local", false, "current cluster only, fetched locally (default on HPC)")
-	c.Flags().BoolVar(&fleet, "fleet", false, "collate across active clusters (default off HPC)")
+	c.Flags().BoolVar(&fleet, "fleet", false, "collate across the `fleet` node list, else active clusters (default off HPC)")
 	c.Flags().BoolVar(&all, "all", false, "collate across every configured cluster, incl. inactive")
 	c.Flags().BoolVar(&start, "start", false, "add a Start column: actual start (running) or estimated start (pending); SLURM only")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
@@ -154,29 +154,74 @@ type clusterResult struct {
 	err     error
 }
 
-// collateJobs fans out over the given cluster set concurrently, each fetched with a
-// bounded timeout, and returns the display label plus the merged jobs (tagged by
-// cluster) and "cluster: reason" notes for any that failed — so a down cluster degrades
-// to a warning, never a hang or a total failure. The Kerberos ticket is ensured once up
-// front. scope is "fleet" (active set) or "all" (every configured cluster), driving both
-// the label and the empty-set message.
-func collateJobs(clusters []config.Cluster, scope string, allUsers bool) (string, []queue.Job, []string) {
-	if len(clusters) == 0 {
+// queueTarget is one collate fetch: which node to run the scheduler on and the label
+// each returned job is tagged with. label is the cluster name (cluster scopes) or the
+// node/system name (an explicit `fleet` list), so a DSRC split across separate schedulers
+// stays distinguishable in the merged table.
+type queueTarget struct {
+	label     string
+	scheduler string
+	node      string // node name to resolve + fetch from ("" → no node configured)
+}
+
+// clusterTargets picks one representative node (Nodes[0]) per cluster — the scope used by
+// --all and by --fleet's fallback when no explicit `fleet` list is configured. Clusters
+// with no node/scheduler are kept so fetchTarget reports them as a warning, not a silent drop.
+func clusterTargets(cs []config.Cluster) []queueTarget {
+	t := make([]queueTarget, 0, len(cs))
+	for _, c := range cs {
+		node := ""
+		if len(c.Nodes) > 0 {
+			node = c.Nodes[0]
+		}
+		t = append(t, queueTarget{label: c.Name, scheduler: c.Scheduler, node: node})
+	}
+	return t
+}
+
+// fleetTargets builds one target per node in the explicit `fleet` list, each labeled by
+// its node/system name and carrying that node's cluster-declared scheduler.
+func fleetTargets(nodes []string) []queueTarget {
+	t := make([]queueTarget, 0, len(nodes))
+	for _, n := range nodes {
+		t = append(t, queueTarget{label: n, scheduler: config.SchedulerFor(n), node: n})
+	}
+	return t
+}
+
+// fleetScope resolves the --fleet target set: the explicit `fleet` node list when
+// configured (one fetch per listed system — so a multi-scheduler DSRC like navy isn't
+// collapsed to a single representative node), else a soft fallback to one node per active
+// cluster (never worse than the prior behavior).
+func fleetScope() []queueTarget {
+	if nodes := config.Fleet(); len(nodes) > 0 {
+		return fleetTargets(nodes)
+	}
+	return clusterTargets(config.ActiveClusters())
+}
+
+// collateJobs fans out over the given targets concurrently, each fetched with a bounded
+// timeout, and returns the display label plus the merged jobs (tagged by label) and
+// "label: reason" notes for any that failed — so a down target degrades to a warning,
+// never a hang or a total failure. The Kerberos ticket is ensured once up front. scope is
+// "fleet" or "all", driving both the label and the empty-set message.
+func collateJobs(targets []queueTarget, scope string, allUsers bool) (string, []queue.Job, []string) {
+	if len(targets) == 0 {
 		if scope == "fleet" {
-			render.Warn("no active clusters configured — set `active = true` on a cluster, or use --all")
+			render.Warn("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all")
 		} else {
 			render.Warn("no clusters configured — add clusters to config.toml")
 		}
 		os.Exit(2)
 	}
 	hpc.EnsureTicket()
-	results := make([]clusterResult, len(clusters))
+	results := make([]clusterResult, len(targets))
 	var wg sync.WaitGroup
-	for i := range clusters {
+	for i := range targets {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i] = fetchCluster(clusters[i], allUsers)
+			results[i] = fetchTarget(targets[i], allUsers)
 		}(i)
 	}
 	wg.Wait()
@@ -188,29 +233,29 @@ func collateJobs(clusters []config.Cluster, scope string, allUsers bool) (string
 	return label, jobs, down
 }
 
-// fetchCluster fetches one cluster's queue from its representative node (Nodes[0])
-// over the bounded remote-exec, tagging each job with the cluster name.
-func fetchCluster(c config.Cluster, allUsers bool) clusterResult {
-	if len(c.Nodes) == 0 {
-		return clusterResult{c.Name, nil, errors.New("no nodes configured")}
+// fetchTarget runs one target's scheduler over the bounded remote-exec, tagging each job
+// with the target's label.
+func fetchTarget(t queueTarget, allUsers bool) clusterResult {
+	if t.node == "" {
+		return clusterResult{t.label, nil, errors.New("no nodes configured")}
 	}
-	cmd, parse := fetchSpec(c.Scheduler, allUsers)
+	cmd, parse := fetchSpec(t.scheduler, allUsers)
 	if cmd == "" {
-		return clusterResult{c.Name, nil, errors.New("no scheduler configured")}
+		return clusterResult{t.label, nil, errors.New("no scheduler configured")}
 	}
-	target, err := hpc.Resolve(c.Nodes[0])
+	target, err := hpc.Resolve(t.node)
 	if err != nil {
-		return clusterResult{c.Name, nil, err}
+		return clusterResult{t.label, nil, err}
 	}
 	out, err := hpc.RemoteExecTimeout(target, cmd, collateTimeout)
 	if err != nil {
-		return clusterResult{c.Name, nil, err}
+		return clusterResult{t.label, nil, err}
 	}
 	jobs := parse(out)
 	for i := range jobs {
-		jobs[i].Cluster = c.Name
+		jobs[i].Cluster = t.label
 	}
-	return clusterResult{c.Name, jobs, nil}
+	return clusterResult{t.label, jobs, nil}
 }
 
 // mergeResults flattens per-cluster results into one job list (in cluster order) plus

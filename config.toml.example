@@ -11,6 +11,12 @@
 
 hpc_user = "your_hpc_username"
 
+# fleet — explicit node list that `--fleet` (and bare mstat off HPC) queries, one queue
+# fetch per node. Use when a DSRC's nodes are SEPARATE schedulers (each its own queue):
+# list every system so the collate doesn't collapse them to one representative node. Omit
+# to fall back to one node per active cluster. Each name must be a node defined below.
+# fleet = ["node-a", "node-d"]
+
 [transfer]
 rsync_opts        = "-au --partial"   # base rsync opts (NO -v/-P/--progress — the tool owns progress)
 ssh_transfer_opts = "-q"              # quiet ssh for transfers (suppress the login banner)
