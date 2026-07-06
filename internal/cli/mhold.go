@@ -55,7 +55,7 @@ func holdReleaseCmd(use, title, past string, release bool) *cobra.Command {
 // event-logs it. Reversible ops skip the confirm prompt cancel uses; the verb context
 // lives in the preview title and the logged past-tense message.
 func actOnJobs(label, title, past, cmd string, matched []queue.Job, run func(string) error) error {
-	render.JobsTable(title+" on "+label, config.User(), toJobRows(matched), false)
+	render.JobsTable(title+" on "+label, config.User(), toJobRows(matched), render.JobCols{})
 	if cmd == "" {
 		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
 		os.Exit(2)

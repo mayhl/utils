@@ -16,18 +16,26 @@ import (
 // anything unrecognized; the table maps it to a glyph + color.
 type JobRow struct {
 	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
-	Start                                                         string // SLURM start (actual/estimate); shown as a Start column under --start
+	Submit, Start, End                                            string // scheduler timestamps; shown as optional time columns per JobCols
 	Cluster                                                       string // collate source tag (cluster or fleet node) → the leftmost System column
+}
+
+// JobCols selects which optional time columns JobsTable shows. Start is the live
+// queue's est/actual start (mstat --start); Submit/End are finished-job stamps (mhist:
+// End by default, Submit+Start+End under --times). Each is a fixed opt-in column —
+// never shed by the terminal fit, it just consumes width budget.
+type JobCols struct {
+	Submit, Start, End bool
 }
 
 // JobsTable renders a scheduler queue as the house table: ID / Name / Queue / NDS /
 // State / Elap·Wall. The state cell is a glyph colored by state (● green running / ○
 // dim queued / ! yellow held / …); the title carries the cluster + a job-count
 // summary. Long names truncate on the right to keep the table from wrapping.
-func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
+func JobsTable(cluster, user string, rows []JobRow, cols JobCols) {
 	showUser := multipleUsers(rows)
 	showCluster := anyCluster(rows)
-	nameMax, showReason, showWall := planFit(rows, showUser, showCluster, showStart)
+	nameMax, showReason, showWall := planFit(rows, showUser, showCluster, cols)
 	wallHdr := "Elap / Wall"
 	if !showWall {
 		wallHdr = "Elap"
@@ -47,8 +55,14 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 		header = append(header, "User")
 	}
 	header = append(header, "Queue", "NDS", "State", wallHdr)
-	if showStart {
+	if cols.Submit {
+		header = append(header, "Submit")
+	}
+	if cols.Start {
 		header = append(header, "Start")
+	}
+	if cols.End {
+		header = append(header, "End")
 	}
 	t.AppendHeader(header)
 
@@ -66,28 +80,36 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 			cell = levelColors(lvl).Sprint(cell) // Sprint no-ops under DisableColors (plain/NO_COLOR)
 		}
 		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), cell)
-		if showStart {
-			row = append(row, startCell(r.Start))
+		if cols.Submit {
+			row = append(row, timeCell(r.Submit))
+		}
+		if cols.Start {
+			row = append(row, timeCell(r.Start))
+		}
+		if cols.End {
+			row = append(row, timeCell(r.End))
 		}
 		t.AppendRow(row)
 	}
 
-	// ColumnConfigs match by header name, so listing Cluster is harmless when the
-	// column is absent (single-cluster views).
+	// ColumnConfigs match by header name, so listing a column is harmless when it's
+	// absent (single-cluster / no-time-column views).
 	const nameCol = 2 // index of the Name config below (System, ID, Name, …)
-	cols := []table.ColumnConfig{
+	colCfg := []table.ColumnConfig{
 		{Name: "System", Colors: text.Colors{text.FgCyan, text.Bold}},
 		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
 		{Name: "Name", WidthMaxEnforcer: truncRight},
 		{Name: "User", Colors: text.Colors{text.FgBlue}},
 		{Name: "Queue", Colors: text.Colors{text.FgMagenta}},
 		{Name: "State", Transformer: jobStateTransformer},
+		{Name: "Submit", Colors: text.Colors{text.FgHiBlack}},
 		{Name: "Start", Colors: text.Colors{text.FgHiBlack}},
+		{Name: "End", Colors: text.Colors{text.FgHiBlack}},
 	}
 	if nameMax > 0 {
-		cols[nameCol].WidthMax = nameMax // cap Name (truncRight enforces it); ColumnConfigs match by Name so slice order is otherwise cosmetic
+		colCfg[nameCol].WidthMax = nameMax // cap Name (truncRight enforces it); ColumnConfigs match by Name so slice order is otherwise cosmetic
 	}
-	t.SetColumnConfigs(cols)
+	t.SetColumnConfigs(colCfg)
 	t.Render()
 }
 
@@ -137,7 +159,7 @@ func stateCell(r JobRow, showReason bool) string {
 // even a narrow terminal renders one clean, unwrapped table. It runs for both pretty and
 // --plain (both are human views that fit the terminal), no-opping only when the width
 // is unknown (piped/redirected), where full values flow — use --json for complete data.
-func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int, showReason, showWall bool) {
+func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax int, showReason, showWall bool) {
 	showReason, showWall = true, true
 	tw := termWidth()
 	if tw <= 0 {
@@ -147,15 +169,13 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 	const nameCap = 20 // hard ceiling on Name regardless of terminal room; longer names truncate
 	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
 	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
-	userW, clusterW, reasonW, wallW, startW := 0, 0, 0, 0, 0
+	userW, clusterW, reasonW, wallW := 0, 0, 0, 0
+	submitW, startW, endW := hdrW(cols.Submit, "Submit"), hdrW(cols.Start, "Start"), hdrW(cols.End, "End")
 	if showUser {
 		userW = len("User")
 	}
 	if showCluster {
 		clusterW = len("System")
-	}
-	if showStart {
-		startW = len("Start")
 	}
 	for _, r := range rows {
 		idW = max(idW, text.StringWidth(r.ID))
@@ -176,8 +196,14 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 		if strings.TrimSpace(r.ReqWall) != "" {
 			wallW = max(wallW, text.StringWidth(" / "+r.ReqWall))
 		}
-		if showStart {
-			startW = max(startW, text.StringWidth(startCell(r.Start)))
+		if cols.Submit {
+			submitW = max(submitW, text.StringWidth(timeCell(r.Submit)))
+		}
+		if cols.Start {
+			startW = max(startW, text.StringWidth(timeCell(r.Start)))
+		}
+		if cols.End {
+			endW = max(endW, text.StringWidth(timeCell(r.End)))
 		}
 	}
 	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
@@ -188,11 +214,9 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 	if showCluster {
 		nCols++
 	}
-	if showStart {
-		nCols++
-	}
-	// Start is opt-in, so it's a fixed column (never shed) — it just consumes budget.
-	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + startW + 3*nCols + 1) // for Name + reason + wall
+	nCols += boolN(cols.Submit) + boolN(cols.Start) + boolN(cols.End)
+	// Time columns are opt-in, so they're fixed (never shed) — they just consume budget.
+	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + submitW + startW + endW + 3*nCols + 1) // for Name + reason + wall
 	nameMax = min(nameW, nameCap)
 	for {
 		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)
@@ -220,6 +244,22 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 func boolW(on bool, w int) int {
 	if on {
 		return w
+	}
+	return 0
+}
+
+// boolN counts a flag as a column (1 when on, else 0).
+func boolN(on bool) int {
+	if on {
+		return 1
+	}
+	return 0
+}
+
+// hdrW seeds a time column's width with its header when shown, else 0.
+func hdrW(on bool, header string) int {
+	if on {
+		return len(header)
 	}
 	return 0
 }
@@ -366,11 +406,12 @@ func durSecs(s string) (int, bool) {
 	return days*86400 + secs, true
 }
 
-// startCell formats a SLURM start time for the Start column: an ISO 8601 stamp
-// "2006-01-02T15:04:05" collapses to "01-02 15:04" (drop year + seconds) for a
-// compact cell, while a non-ISO value SLURM may emit ("N/A" unschedulable,
-// "Unknown") or an empty/PBS field passes through dash().
-func startCell(s string) string {
+// timeCell formats a scheduler timestamp for a compact table time column (Submit /
+// Start / End): an ISO 8601 stamp "2006-01-02T15:04:05" collapses to "01-02 15:04"
+// (drop year + seconds — tables are length-constrained; the full date lives in the
+// minfo card), while a non-ISO value a scheduler may emit ("N/A" unschedulable,
+// "Unknown") or an empty/unavailable field passes through dash().
+func timeCell(s string) string {
 	s = strings.TrimSpace(s)
 	// ISO 8601 YYYY-MM-DDTHH:MM:SS — slice MM-DD and HH:MM by fixed offsets.
 	if len(s) >= 16 && s[4] == '-' && s[7] == '-' && s[10] == 'T' && s[13] == ':' {

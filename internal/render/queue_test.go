@@ -50,9 +50,9 @@ func TestWalltimeLevel(t *testing.T) {
 	}
 }
 
-// TestStartCell: ISO stamps collapse to "MM-DD HH:MM"; non-ISO / empty pass through
+// TestTimeCell: ISO stamps collapse to "MM-DD HH:MM"; non-ISO / empty pass through
 // dash().
-func TestStartCell(t *testing.T) {
+func TestTimeCell(t *testing.T) {
 	cases := map[string]string{
 		"2026-07-06T14:30:00": "07-06 14:30",
 		"2026-12-31T00:05:59": "12-31 00:05",
@@ -62,8 +62,8 @@ func TestStartCell(t *testing.T) {
 		"--":                  "--",
 	}
 	for in, want := range cases {
-		if got := startCell(in); got != want {
-			t.Errorf("startCell(%q) = %q, want %q", in, got, want)
+		if got := timeCell(in); got != want {
+			t.Errorf("timeCell(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

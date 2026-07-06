@@ -138,6 +138,7 @@ func frontDoors() string {
 			door{"mpeek", `mu hpc queue peek "$@"`},
 			door{"mhold", `mu hpc queue hold "$@"`},
 			door{"mrls", `mu hpc queue release "$@"`},
+			door{"mhist", `mu hpc queue hist "$@"`},
 		)
 	}
 

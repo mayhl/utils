@@ -116,7 +116,7 @@ func mstatInteractive(node string, who userSel) error {
 // cancelJobs is the shared actuator for mdel and mstat -i: preview the set, confirm
 // (unless yes), run the batched scheduler cancel, and event-log it.
 func cancelJobs(label, scheduler string, matched []queue.Job, run func(string) error, yes bool) error {
-	render.JobsTable("Cancel on "+label, config.User(), toJobRows(matched), false)
+	render.JobsTable("Cancel on "+label, config.User(), toJobRows(matched), render.JobCols{})
 	if !yes {
 		fmt.Fprintf(os.Stderr, "cancel %d job(s) on %s? [y/N] ", len(matched), label)
 		var r string

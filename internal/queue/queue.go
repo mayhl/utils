@@ -69,7 +69,9 @@ type Job struct {
 	Elapsed  string `json:"elapsed"`           // elapsed / used time
 	ReqWall  string `json:"walltime"`          // requested walltime; "" if not reported
 	Reason   string `json:"reason"`            // SLURM NODELIST(REASON) — nodelist running, reason pending
+	Submit   string `json:"submit,omitempty"`  // submit time (sacct); "" if unreported
 	Start    string `json:"start,omitempty"`   // SLURM %S: actual start (running) or backfill estimate (pending); "" if unreported (PBS)
+	End      string `json:"end,omitempty"`     // completion time (sacct history); "" for a live/unreported job
 	Cluster  string `json:"cluster,omitempty"` // set only by cross-cluster collate (--all); omitted otherwise
 }
 
@@ -288,4 +290,44 @@ func ParseSLURMDelim(out string) []Job {
 		jobs = append(jobs, j)
 	}
 	return jobs
+}
+
+// ParseSacct parses SLURM accounting history from `sacct -X -n -p -o JobIDRaw,JobName,
+// User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End`: -p is pipe-delimited
+// with a trailing pipe, -X keeps only the job allocation (drops .batch/.extern steps),
+// -n omits the header. Fields:
+// JobIDRaw | JobName | User | Partition | State | Elapsed | Timelimit | NNodes | Submit | Start | End.
+// sacct's State is a full word (COMPLETED, TIMEOUT, …) and a cancel adds a "CANCELLED by
+// <uid>" suffix, so only the first token is mapped (the raw is preserved). The trailing
+// Submit/Start/End are read only when present, so a shorter listing still parses. Feeds mhist.
+func ParseSacct(out string) []Job {
+	var jobs []Job
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		f := strings.Split(t, "|")
+		if len(f) < 8 {
+			continue
+		}
+		code := f[4]
+		if w := strings.Fields(f[4]); len(w) > 0 {
+			code = w[0]
+		}
+		jobs = append(jobs, Job{
+			ID: f[0], ShortID: shortID(f[0]), Name: f[1], User: f[2], Queue: f[3],
+			State: slurmState(code), RawState: f[4], Elapsed: f[5], ReqWall: f[6],
+			Nodes: f[7], Submit: at(f, 8), Start: at(f, 9), End: at(f, 10),
+		})
+	}
+	return jobs
+}
+
+// at returns f[i] or "" when i is out of range — for optional trailing fields.
+func at(f []string, i int) string {
+	if i < len(f) {
+		return f[i]
+	}
+	return ""
 }

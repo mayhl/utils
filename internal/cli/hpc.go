@@ -114,7 +114,7 @@ func hpcQueueCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				render.JobsTable(label, config.User(), toJobRows(jobs), start)
+				render.JobsTable(label, config.User(), toJobRows(jobs), render.JobCols{Start: start})
 			}
 			for _, d := range down { // unreachable clusters degrade to warnings, never a hang
 				render.Warn(d)
@@ -133,7 +133,7 @@ func hpcQueueCmd() *cobra.Command {
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
 	c.MarkFlagsMutuallyExclusive("all-users", "user") // both pick WHO; -u is a subset, -a is everyone
-	c.AddCommand(queueKillCmd(), queueInfoCmd(), queuePeekCmd(), queueHoldCmd(), queueReleaseCmd())
+	c.AddCommand(queueKillCmd(), queueInfoCmd(), queuePeekCmd(), queueHoldCmd(), queueReleaseCmd(), queueHistCmd())
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -449,7 +449,7 @@ func toJobRows(jobs []queue.Job) []render.JobRow {
 		rows[i] = render.JobRow{
 			ID: j.ShortID, Name: j.Name, User: j.User, Queue: j.Queue, Nodes: j.Nodes,
 			State: state, Elapsed: j.Elapsed, ReqWall: j.ReqWall, Reason: j.PendingReason(),
-			Start: j.Start, Cluster: j.Cluster,
+			Submit: j.Submit, Start: j.Start, End: j.End, Cluster: j.Cluster,
 		}
 	}
 	return rows

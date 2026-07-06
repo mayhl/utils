@@ -89,6 +89,30 @@ func TestParseSLURMDelim(t *testing.T) {
 	}
 }
 
+func TestParseSacct(t *testing.T) {
+	jobs := ParseSacct(load(t, "sacct.txt"))
+	if len(jobs) != 4 {
+		t.Fatalf("want 4 jobs, got %d: %+v", len(jobs), jobs)
+	}
+	j := jobs[0]
+	if j.ShortID != "1284570" || j.Name != "run_wave" || j.User != "alice" || j.Queue != "standard" ||
+		j.State != Complete || j.Elapsed != "06:14:52" || j.ReqWall != "24:00:00" || j.Nodes != "4" ||
+		j.Submit != "2026-07-05T17:40:00" || j.Start != "2026-07-06T00:00:00" || j.End != "2026-07-06T06:14:52" {
+		t.Errorf("job0 mismatch: %+v", j)
+	}
+	// "CANCELLED by <uid>" maps on its first token; the raw is preserved.
+	if jobs[1].State != Complete || jobs[1].RawState != "CANCELLED by 30015" {
+		t.Errorf("job1 (cancelled) mismatch: %+v", jobs[1])
+	}
+	if jobs[2].State != Complete { // TIMEOUT normalizes to Complete
+		t.Errorf("job2 want Complete (TIMEOUT), got %v", jobs[2].State)
+	}
+	// An array id (12345_N) has no host suffix, so ShortID is the whole id.
+	if jobs[3].ShortID != "1284580_3" || jobs[3].State != Complete {
+		t.Errorf("job3 (array/failed) mismatch: %+v", jobs[3])
+	}
+}
+
 // TestParseSLURMDelimNoStart: an older 9-field listing (pre-%S) still parses; the
 // absent Start is simply empty.
 func TestParseSLURMDelimNoStart(t *testing.T) {
