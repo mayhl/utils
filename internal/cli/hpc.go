@@ -41,7 +41,7 @@ func hpcCmd() *cobra.Command {
 
 func hpcQueueCmd() *cobra.Command {
 	var node, userList string
-	var allUsers, jsonOut, local, fleet, all, start bool
+	var allUsers, jsonOut, local, fleet, all, start, interactive bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
@@ -71,6 +71,13 @@ func hpcQueueCmd() *cobra.Command {
 				os.Exit(2)
 			}
 			who := userSel{all: allUsers, list: userList}
+			if interactive {
+				if fleet || all {
+					render.Err("mstat -i is single-cluster — drop -f/-e (use --node for another cluster)")
+					os.Exit(2)
+				}
+				return mstatInteractive(node, who)
+			}
 			var jobs []queue.Job
 			var down []string
 			var label string
@@ -123,9 +130,11 @@ func hpcQueueCmd() *cobra.Command {
 	c.Flags().BoolVarP(&fleet, "fleet", "f", false, "collate the `fleet` node list, else active clusters (default off HPC)")
 	c.Flags().BoolVarP(&all, "all-systems", "e", false, "collate every distinct queue: the fleet plus one node per cluster not in it, incl. inactive")
 	c.Flags().BoolVar(&start, "start", false, "add a Start column: actual start (running) or estimated start (pending); SLURM only")
+	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick jobs to cancel interactively (single cluster)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
 	c.MarkFlagsMutuallyExclusive("all-users", "user") // both pick WHO; -u is a subset, -a is everyone
+	c.AddCommand(queueKillCmd())
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
