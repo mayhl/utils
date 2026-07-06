@@ -74,6 +74,7 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 
 	// ColumnConfigs match by header name, so listing Cluster is harmless when the
 	// column is absent (single-cluster views).
+	const nameCol = 2 // index of the Name config below (System, ID, Name, …)
 	cols := []table.ColumnConfig{
 		{Name: "System", Colors: text.Colors{text.FgCyan, text.Bold}},
 		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
@@ -84,7 +85,7 @@ func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 		{Name: "Start", Colors: text.Colors{text.FgHiBlack}},
 	}
 	if nameMax > 0 {
-		cols[1].WidthMax = nameMax
+		cols[nameCol].WidthMax = nameMax // cap Name (truncRight enforces it); ColumnConfigs match by Name so slice order is otherwise cosmetic
 	}
 	t.SetColumnConfigs(cols)
 	t.Render()
@@ -130,9 +131,10 @@ func stateCell(r JobRow, showReason bool) string {
 }
 
 // planFit decides how the table fits the terminal: Name's max width (0 = uncapped)
-// and whether the pending-reason and walltime survive. It sheds width in priority
-// order — shrink Name to a floor, then drop the reason, then the walltime — so even a
-// narrow terminal renders one clean, unwrapped table. It runs for both pretty and
+// and whether the pending-reason and walltime survive. Name is first capped at a hard
+// nameCap (so one long job name can't dominate even a wide terminal), then it sheds width
+// in priority order — shrink Name to a floor, then drop the reason, then the walltime — so
+// even a narrow terminal renders one clean, unwrapped table. It runs for both pretty and
 // --plain (both are human views that fit the terminal), no-opping only when the width
 // is unknown (piped/redirected), where full values flow — use --json for complete data.
 func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int, showReason, showWall bool) {
@@ -142,6 +144,7 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 		return 0, true, true
 	}
 	const nameFloor = 6
+	const nameCap = 20 // hard ceiling on Name regardless of terminal room; longer names truncate
 	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
 	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
 	userW, clusterW, reasonW, wallW, startW := 0, 0, 0, 0, 0
@@ -190,7 +193,7 @@ func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int,
 	}
 	// Start is opt-in, so it's a fixed column (never shed) — it just consumes budget.
 	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + startW + 3*nCols + 1) // for Name + reason + wall
-	nameMax = nameW
+	nameMax = min(nameW, nameCap)
 	for {
 		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)
 		if need <= room {
