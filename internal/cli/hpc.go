@@ -2,14 +2,18 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/hpc"
+	"github.com/mayhl/mayhl_utils/internal/queue"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
@@ -23,8 +27,113 @@ func hpcCmd() *cobra.Command {
 			"workstation to reach every cluster; on a login node you'll only see what's\n" +
 			"reachable from there.",
 	}
-	c.AddCommand(hpcNodesCmd(), hpcTicketCmd())
+	c.AddCommand(hpcNodesCmd(), hpcQueueCmd(), hpcTicketCmd())
 	return c
+}
+
+func hpcQueueCmd() *cobra.Command {
+	var node string
+	var allUsers bool
+	c := &cobra.Command{
+		Use:   "queue",
+		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
+		Long: "Show a cluster's jobs as one normalized house table, regardless of\n" +
+			"scheduler. With --node, mu fetches it itself — picking qstat vs squeue from\n" +
+			"the cluster's configured scheduler, over the remote-exec path:\n" +
+			"    mu hpc queue --node hpc1        # your jobs\n" +
+			"    mu hpc queue --node hpc1 -a     # all users\n\n" +
+			"Without --node it reads a listing from stdin (scheduler auto-detected from\n" +
+			"the header) — the test seam / pipe-your-own escape hatch:\n" +
+			"    hpc1 squeue | mu hpc queue\n\n" +
+			"Cross-cluster collate (bare mstat over the active set) is the next step.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if node != "" {
+				return fetchQueue(node, allUsers)
+			}
+			if term.IsTerminal(os.Stdin.Fd()) {
+				render.Warn("pipe a listing in (`hpc1 squeue | mu hpc queue`) or use --node")
+				os.Exit(2)
+			}
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			render.JobsTable("", config.User(), toJobRows(queue.Parse(string(data))))
+			return nil
+		},
+	}
+	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
+	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
+	return c
+}
+
+// fetchQueue runs the cluster's scheduler command on node over remote-exec, parses
+// it, and renders the house table. The scheduler comes from config (not a probe);
+// an unconfigured scheduler is a clear error, not a guess.
+func fetchQueue(node string, allUsers bool) error {
+	target, err := hpc.Resolve(node)
+	if err != nil {
+		render.Err(err.Error())
+		os.Exit(2)
+	}
+	cmd, parse := fetchSpec(config.SchedulerFor(node), allUsers)
+	if cmd == "" {
+		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", node))
+		os.Exit(2)
+	}
+	hpc.EnsureTicket()
+	out, err := hpc.RemoteExec(target, cmd)
+	if err != nil {
+		render.Err(fmt.Sprintf("%s: remote fetch failed: %v", node, err))
+		os.Exit(1)
+	}
+	render.JobsTable(node, config.User(), toJobRows(parse(out)))
+	return nil
+}
+
+// fetchSpec returns the remote command + matching parser for a scheduler. SLURM uses
+// mu's controlled pipe-delimited format (adds walltime, robust parse); PBS uses the
+// wide `qstat -a` (its default already carries Req'd Time). "" cmd = unknown scheduler.
+func fetchSpec(scheduler string, allUsers bool) (string, func(string) []queue.Job) {
+	switch scheduler {
+	case "slurm":
+		sel := ""
+		if !allUsers {
+			sel = "--me "
+		}
+		return `squeue -h ` + sel + `-o "%i|%P|%j|%u|%t|%M|%l|%D|%R"`, queue.ParseSLURMDelim
+	case "pbs":
+		cmd := "qstat -a"
+		if !allUsers {
+			if u := config.HPCUser(); u != "" {
+				cmd = "qstat -a -u " + u
+			}
+		}
+		return cmd, queue.ParsePBS
+	default:
+		return "", nil
+	}
+}
+
+// toJobRows maps normalized jobs to render's plain JobRow (keeping render domain-
+// free). An unknown state shows the raw scheduler code so nothing is silently hidden.
+func toJobRows(jobs []queue.Job) []render.JobRow {
+	rows := make([]render.JobRow, len(jobs))
+	for i, j := range jobs {
+		state := j.State.String()
+		if j.State == queue.Unknown {
+			state = strings.TrimSpace(j.RawState)
+		}
+		rows[i] = render.JobRow{
+			ID: j.ShortID, Name: j.Name, Queue: j.Queue, Nodes: j.Nodes,
+			State: state, Elapsed: j.Elapsed, ReqWall: j.ReqWall, Reason: j.PendingReason(),
+		}
+	}
+	return rows
 }
 
 func hpcTicketCmd() *cobra.Command {

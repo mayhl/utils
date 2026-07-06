@@ -11,16 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Cluster is one HPC cluster: its name, FQDN suffix, and node list.
+// Cluster is one HPC cluster: its name, FQDN suffix, node list, scheduler, and whether
+// it's in the active set (collate targets active clusters by default).
 type Cluster struct {
-	Name   string
-	Domain string
-	Nodes  []string // sorted
+	Name      string
+	Domain    string
+	Nodes     []string // sorted
+	Scheduler string   // "pbs" | "slurm"; "" if unset
+	Active    bool     // in the default collate set (config `active`, default true)
 }
 
 // file is the config.toml schema. Clusters use an array-of-tables so their order
@@ -38,9 +42,11 @@ type file struct {
 		OSSH string `toml:"ossh"`
 	} `toml:"ssh"`
 	Clusters []struct {
-		Name   string   `toml:"name"`
-		Domain string   `toml:"domain"`
-		Nodes  []string `toml:"nodes"`
+		Name      string   `toml:"name"`
+		Domain    string   `toml:"domain"`
+		Nodes     []string `toml:"nodes"`
+		Scheduler string   `toml:"scheduler"`
+		Active    *bool    `toml:"active"` // nil (omitted) → active by default
 	} `toml:"cluster"`
 }
 
@@ -109,7 +115,37 @@ func ClusterDefs() []Cluster {
 		}
 		nodes := append([]string(nil), c.Nodes...)
 		sort.Strings(nodes)
-		out = append(out, Cluster{Name: c.Name, Domain: c.Domain, Nodes: nodes})
+		out = append(out, Cluster{
+			Name: c.Name, Domain: c.Domain, Nodes: nodes,
+			Scheduler: strings.ToLower(c.Scheduler),
+			Active:    c.Active == nil || *c.Active, // default true
+		})
+	}
+	return out
+}
+
+// SchedulerFor returns the configured scheduler ("pbs"|"slurm") for the cluster
+// owning node n, or "" if the node or its scheduler is unknown. Used by the live
+// fetch to pick qstat vs squeue.
+func SchedulerFor(node string) string {
+	for _, c := range ClusterDefs() {
+		for _, n := range c.Nodes {
+			if n == node {
+				return c.Scheduler
+			}
+		}
+	}
+	return ""
+}
+
+// ActiveClusters is the subset flagged active (default true) — the set bare-mstat /
+// collate targets by default, vs an explicit --all that includes inactive clusters.
+func ActiveClusters() []Cluster {
+	var out []Cluster
+	for _, c := range ClusterDefs() {
+		if c.Active {
+			out = append(out, c)
+		}
 	}
 	return out
 }

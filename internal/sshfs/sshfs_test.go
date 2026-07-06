@@ -72,17 +72,17 @@ func TestReadRegistrySkipsCommentsAndBlanks(t *testing.T) {
 
 func TestMountArgs(t *testing.T) {
 	t.Setenv("MU_SSH", "ossh")
-	got := MountArgs("me@mike.example", "/data", "/local/mnt", true, false)
+	got := MountArgs("me@hpc2.example", "/data", "/local/mnt", true, false)
 	want := []string{
 		"-o", "ssh_command=ossh -o ServerAliveInterval=15 -o ServerAliveCountMax=3",
 		"-o", "reconnect", "-o", "defer_permissions", "-o", "ro",
-		"me@mike.example:/data", "/local/mnt",
+		"me@hpc2.example:/data", "/local/mnt",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("MountArgs =\n %q\nwant %q", got, want)
 	}
 	// verbose adds ssh -v; rw omits the ro option.
-	v := MountArgs("me@mike.example", "/data", "/local/mnt", false, true)
+	v := MountArgs("me@hpc2.example", "/data", "/local/mnt", false, true)
 	if v[1] != "ssh_command=ossh -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -v" {
 		t.Errorf("verbose ssh_command = %q", v[1])
 	}

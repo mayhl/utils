@@ -1,0 +1,5 @@
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           1284570  standard run_wave    alice  R    6:14:32      4 nid00[123-126]
+           1284571  standard post_pro    alice PD       0:00      1 (Priority)
+           1284572     debug mesh_gen    alice  R      12:47      2 nid00[201-202]
+           1284573  standard nest_gri    alice CG    1:02:11      8 nid01[001-008]

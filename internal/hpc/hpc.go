@@ -15,7 +15,7 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
-// Resolve accepts a bare node name (e.g. "mike") or an explicit "user@host"
+// Resolve accepts a bare node name (e.g. "hpc2") or an explicit "user@host"
 // target. A bare name must be a configured node; otherwise an error listing the
 // known nodes is returned.
 func Resolve(nodeOrTarget string) (string, error) {

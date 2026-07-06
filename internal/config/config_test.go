@@ -29,7 +29,7 @@ root = "/mnt/hpc"
 [[cluster]]
 name   = "alpha"
 domain = "alpha.example.mil"
-nodes  = ["mike", "login-c"]
+nodes  = ["hpc2", "hpc3"]
 
 [[cluster]]
 name   = "beta"
@@ -59,8 +59,8 @@ nodes  = ["node2"]
 	if len(defs) != 2 || defs[0].Name != "alpha" || defs[1].Name != "beta" {
 		t.Fatalf("clusters (order should be preserved) = %+v", defs)
 	}
-	if tg := NodeTargets(); tg["mike"] != "alice@mike.alpha.example.mil" {
-		t.Errorf("NodeTargets[mike] = %q", tg["mike"])
+	if tg := NodeTargets(); tg["hpc2"] != "alice@hpc2.alpha.example.mil" {
+		t.Errorf("NodeTargets[hpc2] = %q", tg["hpc2"])
 	}
 }
 
@@ -86,6 +86,43 @@ func TestNoConfigUsesDefaults(t *testing.T) {
 	}
 	if SSHFSRoot() != "~/hpc_sshfs" {
 		t.Errorf("SSHFSRoot = %q", SSHFSRoot())
+	}
+}
+
+func TestClusterSchedulerActive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[[cluster]]
+name = "slurmy"
+domain = "s.example.mil"
+nodes = ["hpc1"]
+scheduler = "SLURM"
+
+[[cluster]]
+name = "pbsy"
+domain = "p.example.mil"
+nodes = ["hpc2"]
+scheduler = "pbs"
+active = false
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	reset()
+
+	if got := SchedulerFor("hpc1"); got != "slurm" { // lower-cased
+		t.Errorf("SchedulerFor(hpc1) = %q", got)
+	}
+	if got := SchedulerFor("hpc2"); got != "pbs" {
+		t.Errorf("SchedulerFor(hpc2) = %q", got)
+	}
+	if got := SchedulerFor("ghost"); got != "" {
+		t.Errorf("SchedulerFor(unknown) = %q", got)
+	}
+	if act := ActiveClusters(); len(act) != 1 || act[0].Name != "slurmy" {
+		t.Errorf("ActiveClusters (pbsy is active=false) = %+v", act)
 	}
 }
 

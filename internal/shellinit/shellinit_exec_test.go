@@ -24,13 +24,13 @@ hpc_user = "alice"
 [[cluster]]
 name = "alpha"
 domain = "alpha.example.mil"
-nodes = ["login-a"]
+nodes = ["hpc1"]
 `
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MU_CONFIG_FILE", cfg)
-	t.Setenv("MU_NODE", "none") // this shell isn't login-a → its dispatcher is emitted
+	t.Setenv("MU_NODE", "none") // this shell isn't hpc1 → its dispatcher is emitted
 	config.ResetForTest()       // config memoizes per-process; reload from this file
 
 	// Stub the framework seams, source the generated dispatchers, then run every
@@ -49,13 +49,13 @@ fakessh() {
 }
 export MU_SSH=fakessh
 ` + Generate() + `
-login-a
-login-a 3
-login-a 12
-login-a uptime
-login-a 3 uptime
-login-a push a b
-login-a -h
+hpc1
+hpc1 3
+hpc1 12
+hpc1 uptime
+hpc1 3 uptime
+hpc1 push a b
+hpc1 -h
 `
 	script := filepath.Join(dir, "driver.sh")
 	if err := os.WriteFile(script, []byte(driver), 0o644); err != nil {
@@ -63,14 +63,14 @@ login-a -h
 	}
 
 	wants := []string{
-		"CONNECT alice@login-a.alpha.example.mil",   // bare connect
-		"CONNECT alice@login-a03.alpha.example.mil", // numbered connect (N=3, zero-padded)
-		"CONNECT alice@login-a12.alpha.example.mil", // two-digit number passes through
-		"SSH alice@login-a.alpha.example.mil :: ",   // remote-exec, default login
-		"SSH alice@login-a03.alpha.example.mil :: ", // remote-exec on numbered login node
-		"MU cp push login-a a b",                    // push stays node-level
-		"connect to login node N",                   // -h prints the grammar
-		"real-error-boom",                           // a real stderr line survives the filter
+		"CONNECT alice@hpc1.alpha.example.mil",   // bare connect
+		"CONNECT alice@hpc103.alpha.example.mil", // numbered connect (N=3, zero-padded)
+		"CONNECT alice@hpc112.alpha.example.mil", // two-digit number passes through
+		"SSH alice@hpc1.alpha.example.mil :: ",   // remote-exec, default login
+		"SSH alice@hpc103.alpha.example.mil :: ", // remote-exec on numbered login node
+		"MU cp push hpc1 a b",                    // push stays node-level
+		"connect to login node N",                // -h prints the grammar
+		"real-error-boom",                        // a real stderr line survives the filter
 	}
 	// The benign dbus login-profile noise must be dropped by the stderr filter.
 	notWants := []string{"dbus-update-activation-environment"}

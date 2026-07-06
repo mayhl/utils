@@ -1,0 +1,8 @@
+hpc1:
+                                                            Req'd  Req'd   Elap
+Job ID          Username Queue    Jobname    SessID NDS TSK Memory Time  S Time
+--------------- -------- -------- ---------- ------ --- --- ------ ----- - -----
+1284570.hpc1 alice    standard run_wave    48213   4 512    --  24:00 R 06:14
+1284571.hpc1 alice    standard post_proc      --   1  32    --  02:00 Q   --
+1284572.hpc1 alice    debug    mesh_gen    49001   2 256    --  01:00 H   --
+1284573.hpc1 alice    standard nest_grid   47882   8 1024   --  48:00 R 12:47

@@ -11,7 +11,7 @@ import (
 // Summary prints a house completion line to stderr: a green ✓, a headline, then
 // dim "·"-separated detail fields — e.g.
 //
-//	✓ push → mike   3/42 files (39 unchanged) · 4.2GB · 47.3MB/s · 3.1× speedup
+//	✓ push → hpc2   3/42 files (39 unchanged) · 4.2GB · 47.3MB/s · 3.1× speedup
 func Summary(headline string, parts []string) {
 	tag := glyph("✓", "[OK]")
 	detail := strings.Join(parts, " · ")

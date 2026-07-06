@@ -23,13 +23,20 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
                                      # binary path); omit to use the system ssh on PATH
 
 # One [[cluster]] block per HPC cluster. Order is preserved (array of tables) and drives
-# both node resolution and the generated per-node shell dispatchers.
+# node resolution, the per-node shell dispatchers, and the queue plane.
+#   scheduler = "pbs" | "slurm"  — which command the live `mu hpc queue` fetch runs.
+#   active    = true | false     — in the default collate set (omit → true); set
+#                                  false for a configured-but-unused cluster so bare
+#                                  mstat skips it (--all includes it regardless).
 [[cluster]]
-name   = "dsrc1"
-domain = "dsrc1.example.hpc.mil"
-nodes  = ["node-a", "node-b", "node-c"]
+name      = "dsrc1"
+domain    = "dsrc1.example.hpc.mil"
+nodes     = ["node-a", "node-b", "node-c"]
+scheduler = "slurm"
 
 [[cluster]]
-name   = "dsrc2"
-domain = "dsrc2.example.hpc.mil"
-nodes  = ["node-d", "node-e"]
+name      = "dsrc2"
+domain    = "dsrc2.example.hpc.mil"
+nodes     = ["node-d", "node-e"]
+scheduler = "pbs"
+active    = false   # configured but not in daily use → skipped by bare mstat

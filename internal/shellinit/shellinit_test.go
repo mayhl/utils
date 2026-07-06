@@ -17,7 +17,7 @@ hpc_user = "alice"
 [[cluster]]
 name = "alpha"
 domain = "alpha.example.mil"
-nodes = ["mike", "login-c"]
+nodes = ["hpc2", "hpc1"]
 [[cluster]]
 name = "beta"
 domain = "beta.example.mil"
@@ -27,7 +27,7 @@ nodes = ["node2"]
 		t.Fatal(err)
 	}
 	t.Setenv("MU_CONFIG_FILE", path)
-	t.Setenv("MU_NODE", "login-c") // this shell is "on" login-c → its dispatcher is skipped
+	t.Setenv("MU_NODE", "hpc1") // this shell is "on" hpc1 → its dispatcher is skipped
 	config.ResetForTest()       // config memoizes per-process; reload from this file
 
 	out := Generate()
@@ -37,7 +37,7 @@ nodes = ["node2"]
 		`export MU_HPC_UNAME="alice"`,
 		`export MU_CLUSTERS="alpha beta"`,
 		`export MU_CLUSTER_ALPHA_DOMAIN="alpha.example.mil"`,
-		`export MU_CLUSTER_ALPHA_NODES="login-c mike"`, // nodes sorted
+		`export MU_CLUSTER_ALPHA_NODES="hpc1 hpc2"`, // nodes sorted
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing export %q in:\n%s", want, out)
@@ -49,13 +49,13 @@ nodes = ["node2"]
 	// The dispatcher grammar (help arm, numbered-node selector) is verified
 	// behaviorally by TestDispatchExec, which runs the generated code — a text
 	// match here would just duplicate that, more brittly.
-	if !strings.Contains(out, `mike() { _mu_node mike "alice@mike.alpha.example.mil" "$@"; }`) {
-		t.Errorf("missing/wrong mike wrapper:\n%s", out)
+	if !strings.Contains(out, `hpc2() { _mu_node hpc2 "alice@hpc2.alpha.example.mil" "$@"; }`) {
+		t.Errorf("missing/wrong hpc2 wrapper:\n%s", out)
 	}
 	if !strings.Contains(out, `node2() { _mu_node node2 "alice@node2.beta.example.mil" "$@"; }`) {
 		t.Errorf("missing node2 wrapper:\n%s", out)
 	}
-	if strings.Contains(out, "login-c()") {
-		t.Error("self node (login-c) should be skipped")
+	if strings.Contains(out, "hpc1()") {
+		t.Error("self node (hpc1) should be skipped")
 	}
 }
