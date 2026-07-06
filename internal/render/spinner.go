@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -13,11 +14,21 @@ var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 // Spinner is a minimal braille spinner on stderr, for wrapping a blocking op
 // (e.g. an sshfs mount settling) with a live "…working" line. Like the progress
 // bar it draws only to a TTY and only human-facing (stderr). A no-op off-TTY.
+// The message can be updated live (thread-safe) — e.g. a running N/M count while
+// a concurrent fan-out completes.
 type Spinner struct {
+	mu   sync.Mutex
 	msg  string
 	tty  bool
 	stop chan struct{}
 	done chan struct{}
+}
+
+// SetMessage updates the spinner's line; safe to call while it animates.
+func (s *Spinner) SetMessage(msg string) {
+	s.mu.Lock()
+	s.msg = msg
+	s.mu.Unlock()
 }
 
 // NewSpinner creates a spinner with the given message.
@@ -41,7 +52,10 @@ func (s *Spinner) Start() {
 			if !colorOff() {
 				frame = text.Colors{text.FgCyan}.Sprint(frame)
 			}
-			fmt.Fprintf(os.Stderr, "\r%s %s\033[K", frame, s.msg)
+			s.mu.Lock()
+			msg := s.msg
+			s.mu.Unlock()
+			fmt.Fprintf(os.Stderr, "\r%s %s\033[K", frame, msg)
 			select {
 			case <-s.stop:
 				fmt.Fprint(os.Stderr, "\r\033[K")

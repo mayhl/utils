@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -266,15 +265,23 @@ func collateJobs(targets []queueTarget, scope string, who userSel) (string, []qu
 	}
 	hpc.EnsureTicket()
 	results := make([]clusterResult, len(targets))
-	var wg sync.WaitGroup
+	// Fan out concurrently; a spinner tracks how many of the N cluster fetches have
+	// returned (order is nondeterministic — a down/slow one just ticks the count
+	// when its bounded remote-exec times out, then surfaces as a warning later).
+	sp := render.NewSpinner(fmt.Sprintf("Collating queues 0/%d", len(targets)))
+	sp.Start()
+	done := make(chan struct{}, len(targets))
 	for i := range targets {
-		wg.Add(1)
 		go func(i int) {
-			defer wg.Done()
 			results[i] = fetchTarget(targets[i], who)
+			done <- struct{}{}
 		}(i)
 	}
-	wg.Wait()
+	for n := 1; n <= len(targets); n++ {
+		<-done
+		sp.SetMessage(fmt.Sprintf("Collating queues %d/%d", n, len(targets)))
+	}
+	sp.Stop()
 	label := scope
 	if scope == "all" {
 		label = "all systems"
