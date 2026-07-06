@@ -69,6 +69,7 @@ type Job struct {
 	Elapsed  string `json:"elapsed"`           // elapsed / used time
 	ReqWall  string `json:"walltime"`          // requested walltime; "" if not reported
 	Reason   string `json:"reason"`            // SLURM NODELIST(REASON) — nodelist running, reason pending
+	Start    string `json:"start,omitempty"`   // SLURM %S: actual start (running) or backfill estimate (pending); "" if unreported (PBS)
 	Cluster  string `json:"cluster,omitempty"` // set only by cross-cluster collate (--all); omitted otherwise
 }
 
@@ -258,10 +259,13 @@ func ParseSLURM(out string) []Job {
 }
 
 // ParseSLURMDelim parses mu's own controlled fetch format,
-// `squeue -h -o "%i|%P|%j|%u|%t|%M|%l|%D|%R"`: a pipe delimiter (not whitespace)
-// means no truncation or space-in-field ambiguity, and %l (TIME_LIMIT) adds the
-// walltime the default squeue lacks. Fields:
-// JOBID | PARTITION | NAME | USER | STATE | TIME(elapsed) | TIME_LIMIT | NODES | NODELIST(REASON).
+// `squeue -h -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`: a pipe delimiter (not whitespace)
+// means no truncation or space-in-field ambiguity, %l (TIME_LIMIT) adds the walltime
+// the default squeue lacks, and %S (START_TIME) is the actual start (running) or
+// backfill estimate (pending). Fields:
+// JOBID | PARTITION | NAME | USER | STATE | TIME(elapsed) | TIME_LIMIT | NODES | NODELIST(REASON) | START_TIME.
+// The trailing %S is read only when present, so an older 9-field listing piped in
+// still parses.
 func ParseSLURMDelim(out string) []Job {
 	var jobs []Job
 	for _, line := range strings.Split(out, "\n") {
@@ -273,11 +277,15 @@ func ParseSLURMDelim(out string) []Job {
 		if len(f) < 9 {
 			continue
 		}
-		jobs = append(jobs, Job{
+		j := Job{
 			ID: f[0], ShortID: f[0], Queue: f[1], Name: f[2], User: f[3],
 			State: slurmState(f[4]), RawState: f[4], Elapsed: f[5], ReqWall: f[6],
 			Nodes: f[7], Reason: f[8],
-		})
+		}
+		if len(f) >= 10 {
+			j.Start = f[9]
+		}
+		jobs = append(jobs, j)
 	}
 	return jobs
 }

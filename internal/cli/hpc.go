@@ -41,7 +41,7 @@ func hpcCmd() *cobra.Command {
 
 func hpcQueueCmd() *cobra.Command {
 	var node string
-	var allUsers, jsonOut, local, fleet, all bool
+	var allUsers, jsonOut, local, fleet, all, start bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
@@ -101,7 +101,7 @@ func hpcQueueCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				render.JobsTable(label, config.User(), toJobRows(jobs))
+				render.JobsTable(label, config.User(), toJobRows(jobs), start)
 			}
 			for _, d := range down { // unreachable clusters degrade to warnings, never a hang
 				render.Warn(d)
@@ -114,6 +114,7 @@ func hpcQueueCmd() *cobra.Command {
 	c.Flags().BoolVar(&local, "local", false, "current cluster only, fetched locally (default on HPC)")
 	c.Flags().BoolVar(&fleet, "fleet", false, "collate across active clusters (default off HPC)")
 	c.Flags().BoolVar(&all, "all", false, "collate across every configured cluster, incl. inactive")
+	c.Flags().BoolVar(&start, "start", false, "add a Start column: actual start (running) or estimated start (pending); SLURM only")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
@@ -286,7 +287,7 @@ func fetchSpec(scheduler string, allUsers bool) (string, func(string) []queue.Jo
 		if !allUsers {
 			sel = "--me "
 		}
-		return `squeue -h ` + sel + `-o "%i|%P|%j|%u|%t|%M|%l|%D|%R"`, queue.ParseSLURMDelim
+		return `squeue -h ` + sel + `-o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`, queue.ParseSLURMDelim
 	case "pbs":
 		cmd := "qstat -a"
 		if !allUsers {
@@ -312,7 +313,7 @@ func toJobRows(jobs []queue.Job) []render.JobRow {
 		rows[i] = render.JobRow{
 			ID: j.ShortID, Name: j.Name, User: j.User, Queue: j.Queue, Nodes: j.Nodes,
 			State: state, Elapsed: j.Elapsed, ReqWall: j.ReqWall, Reason: j.PendingReason(),
-			Cluster: j.Cluster,
+			Start: j.Start, Cluster: j.Cluster,
 		}
 	}
 	return rows

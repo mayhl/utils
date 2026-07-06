@@ -79,11 +79,22 @@ func TestParseSLURMDelim(t *testing.T) {
 	}
 	j := jobs[0]
 	if j.ID != "1284570" || j.Queue != "standard" || j.Name != "run_wave" ||
-		j.State != Running || j.Elapsed != "6:14:32" || j.ReqWall != "1-00:00:00" || j.Nodes != "4" {
+		j.State != Running || j.Elapsed != "6:14:32" || j.ReqWall != "1-00:00:00" || j.Nodes != "4" ||
+		j.Start != "2026-07-06T00:00:00" {
 		t.Errorf("job0 mismatch: %+v", j)
 	}
-	if jobs[1].State != Queued || jobs[1].ReqWall != "2:00:00" || jobs[1].PendingReason() != "Priority" {
+	if jobs[1].State != Queued || jobs[1].ReqWall != "2:00:00" || jobs[1].PendingReason() != "Priority" ||
+		jobs[1].Start != "2026-07-07T08:00:00" { // pending job carries the backfill estimate
 		t.Errorf("job1 (pending) mismatch: %+v", jobs[1])
+	}
+}
+
+// TestParseSLURMDelimNoStart: an older 9-field listing (pre-%S) still parses; the
+// absent Start is simply empty.
+func TestParseSLURMDelimNoStart(t *testing.T) {
+	jobs := ParseSLURMDelim("1284570|standard|run_wave|alice|R|6:14:32|1-00:00:00|4|nid00[123-126]\n")
+	if len(jobs) != 1 || jobs[0].ID != "1284570" || jobs[0].Start != "" {
+		t.Errorf("9-field back-compat mismatch: %+v", jobs)
 	}
 }
 

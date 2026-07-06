@@ -16,6 +16,7 @@ import (
 // anything unrecognized; the table maps it to a glyph + color.
 type JobRow struct {
 	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
+	Start                                                         string // SLURM start (actual/estimate); shown as a Start column under --start
 	Cluster                                                       string // set only by cross-cluster collate → a leftmost Cluster column
 }
 
@@ -23,10 +24,10 @@ type JobRow struct {
 // State / Elap·Wall. The state cell is a glyph colored by state (● green running / ○
 // dim queued / ! yellow held / …); the title carries the cluster + a job-count
 // summary. Long names truncate on the right to keep the table from wrapping.
-func JobsTable(cluster, user string, rows []JobRow) {
+func JobsTable(cluster, user string, rows []JobRow, showStart bool) {
 	showUser := multipleUsers(rows)
 	showCluster := anyCluster(rows)
-	nameMax, showReason, showWall := planFit(rows, showUser, showCluster)
+	nameMax, showReason, showWall := planFit(rows, showUser, showCluster, showStart)
 	wallHdr := "Elap / Wall"
 	if !showWall {
 		wallHdr = "Elap"
@@ -46,6 +47,9 @@ func JobsTable(cluster, user string, rows []JobRow) {
 		header = append(header, "User")
 	}
 	header = append(header, "Queue", "NDS", "State", wallHdr)
+	if showStart {
+		header = append(header, "Start")
+	}
 	t.AppendHeader(header)
 
 	for _, r := range rows {
@@ -62,6 +66,9 @@ func JobsTable(cluster, user string, rows []JobRow) {
 			cell = levelColors(lvl).Sprint(cell) // Sprint no-ops under DisableColors (plain/NO_COLOR)
 		}
 		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), cell)
+		if showStart {
+			row = append(row, startCell(r.Start))
+		}
 		t.AppendRow(row)
 	}
 
@@ -74,6 +81,7 @@ func JobsTable(cluster, user string, rows []JobRow) {
 		{Name: "User", Colors: text.Colors{text.FgBlue}},
 		{Name: "Queue", Colors: text.Colors{text.FgMagenta}},
 		{Name: "State", Transformer: jobStateTransformer},
+		{Name: "Start", Colors: text.Colors{text.FgHiBlack}},
 	}
 	if nameMax > 0 {
 		cols[1].WidthMax = nameMax
@@ -127,7 +135,7 @@ func stateCell(r JobRow, showReason bool) string {
 // narrow terminal renders one clean, unwrapped table. It runs for both pretty and
 // --plain (both are human views that fit the terminal), no-opping only when the width
 // is unknown (piped/redirected), where full values flow — use --json for complete data.
-func planFit(rows []JobRow, showUser, showCluster bool) (nameMax int, showReason, showWall bool) {
+func planFit(rows []JobRow, showUser, showCluster, showStart bool) (nameMax int, showReason, showWall bool) {
 	showReason, showWall = true, true
 	tw := termWidth()
 	if tw <= 0 {
@@ -136,12 +144,15 @@ func planFit(rows []JobRow, showUser, showCluster bool) (nameMax int, showReason
 	const nameFloor = 6
 	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
 	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
-	userW, clusterW, reasonW, wallW := 0, 0, 0, 0
+	userW, clusterW, reasonW, wallW, startW := 0, 0, 0, 0, 0
 	if showUser {
 		userW = len("User")
 	}
 	if showCluster {
 		clusterW = len("Cluster")
+	}
+	if showStart {
+		startW = len("Start")
 	}
 	for _, r := range rows {
 		idW = max(idW, text.StringWidth(r.ID))
@@ -162,6 +173,9 @@ func planFit(rows []JobRow, showUser, showCluster bool) (nameMax int, showReason
 		if strings.TrimSpace(r.ReqWall) != "" {
 			wallW = max(wallW, text.StringWidth(" / "+r.ReqWall))
 		}
+		if showStart {
+			startW = max(startW, text.StringWidth(startCell(r.Start)))
+		}
 	}
 	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
 	nCols := 6
@@ -171,7 +185,11 @@ func planFit(rows []JobRow, showUser, showCluster bool) (nameMax int, showReason
 	if showCluster {
 		nCols++
 	}
-	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + 3*nCols + 1) // for Name + reason + wall
+	if showStart {
+		nCols++
+	}
+	// Start is opt-in, so it's a fixed column (never shed) — it just consumes budget.
+	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + startW + 3*nCols + 1) // for Name + reason + wall
 	nameMax = nameW
 	for {
 		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)
@@ -343,6 +361,19 @@ func durSecs(s string) (int, bool) {
 		secs = secs*60 + n
 	}
 	return days*86400 + secs, true
+}
+
+// startCell formats a SLURM start time for the Start column: an ISO 8601 stamp
+// "2006-01-02T15:04:05" collapses to "01-02 15:04" (drop year + seconds) for a
+// compact cell, while a non-ISO value SLURM may emit ("N/A" unschedulable,
+// "Unknown") or an empty/PBS field passes through dash().
+func startCell(s string) string {
+	s = strings.TrimSpace(s)
+	// ISO 8601 YYYY-MM-DDTHH:MM:SS — slice MM-DD and HH:MM by fixed offsets.
+	if len(s) >= 16 && s[4] == '-' && s[7] == '-' && s[10] == 'T' && s[13] == ':' {
+		return s[5:10] + " " + s[11:16]
+	}
+	return dash(s)
 }
 
 // dash normalizes empty / "--" fields to a single "--" placeholder.
