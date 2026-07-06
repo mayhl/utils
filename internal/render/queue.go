@@ -95,16 +95,19 @@ func JobsTable(cluster, user string, rows []JobRow, cols JobCols) {
 	// ColumnConfigs match by header name, so listing a column is harmless when it's
 	// absent (single-cluster / no-time-column views).
 	const nameCol = 2 // index of the Name config below (System, ID, Name, …)
+	// Palette hues (theme-adaptive Fg), not raw colors: ID cyan, location (System) blue,
+	// User magenta, Queue/partition bright-blue, times dim. Green/yellow/red stay reserved
+	// for the State badge + walltime burn (status/verdict only).
 	colCfg := []table.ColumnConfig{
-		{Name: "System", Colors: text.Colors{text.FgCyan, text.Bold}},
-		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
+		{Name: "System", Colors: append(tc(HueLoc), text.Bold)},
+		{Name: "ID", Colors: append(tc(HueID), text.Bold)},
 		{Name: "Name", WidthMaxEnforcer: truncRight},
-		{Name: "User", Colors: text.Colors{text.FgBlue}},
-		{Name: "Queue", Colors: text.Colors{text.FgMagenta}},
+		{Name: "User", Colors: tc(HueUser)},
+		{Name: "Queue", Colors: tc(HueGroup)},
 		{Name: "State", Transformer: jobStateTransformer},
-		{Name: "Submit", Colors: text.Colors{text.FgHiBlack}},
-		{Name: "Start", Colors: text.Colors{text.FgHiBlack}},
-		{Name: "End", Colors: text.Colors{text.FgHiBlack}},
+		{Name: "Submit", Colors: tc(HueDim)},
+		{Name: "Start", Colors: tc(HueDim)},
+		{Name: "End", Colors: tc(HueDim)},
 	}
 	if nameMax > 0 {
 		colCfg[nameCol].WidthMax = nameMax // cap Name (truncRight enforces it); ColumnConfigs match by Name so slice order is otherwise cosmetic

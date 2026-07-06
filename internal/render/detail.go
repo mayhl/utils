@@ -32,10 +32,10 @@ func JobDetailCard(d JobDetailView) {
 	t.SetTitle(detailTitle(d))
 
 	labelW := 0
-	// add appends a non-empty field, coloring the value (empty c = default). Coloring is
-	// inline Sprint (respects applyStyle's DisableColors under plain/NO_COLOR) so it stays
-	// consistent with the mstat table's palette; paths pass c=nil since they wrap and
-	// threading ANSI through a wrap boundary is fragile.
+	// add appends a non-empty field, coloring the value with a palette hue (empty c =
+	// default fg). Coloring is inline Sprint (respects applyStyle's DisableColors under
+	// plain/NO_COLOR). Field hues are theme-adaptive Fg from the palette; green/yellow/red
+	// stay reserved for the status fields below (Walltime burn, Exit verdict).
 	add := func(label, value string, c text.Colors) {
 		if strings.TrimSpace(value) == "" {
 			return
@@ -48,21 +48,21 @@ func JobDetailCard(d JobDetailView) {
 	}
 
 	add("Name", d.Name, nil)
-	add("User", d.User, text.Colors{text.FgBlue}) // mstat User
+	add("User", d.User, tc(HueUser)) // magenta
 	add("Account", d.Account, nil)
-	add("Queue", d.Queue, text.Colors{text.FgMagenta}) // mstat Queue
+	add("Queue", d.Queue, tc(HueGroup)) // bright-blue
 	add("Nodes", nodesTasks(d.Nodes, d.Tasks), nil)
-	add("Walltime", walltimeLine(d.State, d.Elapsed, d.ReqWall), nil) // pre-tinted by burn
+	add("Walltime", walltimeLine(d.State, d.Elapsed, d.ReqWall), nil) // status: pre-tinted by burn
 	add("Submitted", longTime(d.Submit), nil)
 	add("Started", longTime(d.Start), nil)
 	add("Ended", longTime(d.End), nil)
-	add("WorkDir", d.WorkDir, nil)
-	add("StdOut", d.StdOut, nil)
-	add("StdErr", d.StdErr, nil)
-	add("Exit", d.ExitStatus, exitColors(d.ExitStatus))
-	add("Reason", d.Reason, text.Colors{text.FgYellow})
+	add("WorkDir", d.WorkDir, tc(HueLoc)) // blue (location)
+	add("StdOut", d.StdOut, tc(HueLoc))
+	add("StdErr", d.StdErr, tc(HueLoc))
+	add("Exit", d.ExitStatus, exitColors(d.ExitStatus)) // status: green ok / red fail
+	add("Reason", d.Reason, tc(HueWarn))                // pending-reason caution
 
-	cols := []table.ColumnConfig{{Number: 1, Colors: text.Colors{text.FgHiBlack}}} // labels dim
+	cols := []table.ColumnConfig{{Number: 1, Colors: tc(HueDim)}} // labels dim
 	// Wrap the value column to the terminal so a long path (StdOut/StdErr/WorkDir)
 	// continues on the next line, full value preserved, rather than overflowing the
 	// card width. No cap when the width is unknown (piped) — full values flow, like the
@@ -84,7 +84,7 @@ func detailTitle(d JobDetailView) string {
 			id = id[:i]
 		}
 	}
-	parts := []string{"Job " + text.Colors{text.FgGreen, text.Bold}.Sprint(id)} // mstat ID hue
+	parts := []string{"Job " + append(tc(HueID), text.Bold).Sprint(id)} // cyan (id)
 	state := d.State
 	if state == "unknown" || state == "" {
 		state = strings.TrimSpace(d.RawState)
@@ -93,7 +93,7 @@ func detailTitle(d JobDetailView) string {
 		parts = append(parts, jobStateTransformer(jobStateBadge(d.State)))
 	}
 	if strings.TrimSpace(d.Cluster) != "" {
-		parts = append(parts, text.Colors{text.FgCyan, text.Bold}.Sprint(d.Cluster)) // mstat System hue
+		parts = append(parts, append(tc(HueLoc), text.Bold).Sprint(d.Cluster)) // blue (location)
 	}
 	return strings.Join(parts, "   ·   ")
 }
