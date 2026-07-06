@@ -2,11 +2,13 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -20,11 +22,16 @@ import (
 
 const probeTimeout = 2 * time.Second
 
+// collateTimeout bounds each cluster's fetch during --all fan-out — long enough for
+// ssh + Kerberos + login-profile + squeue, short enough that a wedged cluster
+// doesn't stall the whole collate.
+const collateTimeout = 20 * time.Second
+
 func hpcCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "hpc",
 		Short: "Cross-cluster HPC info (nodes, reachability, ticket).",
-		Long: "Aggregate info across the configured HPC clusters. Local-primary — run it from your\n" +
+		Long: "Aggregate info across the configured clusters. Local-primary — run it from your\n" +
 			"workstation to reach every cluster; on a login node you'll only see what's\n" +
 			"reachable from there.",
 	}
@@ -34,7 +41,7 @@ func hpcCmd() *cobra.Command {
 
 func hpcQueueCmd() *cobra.Command {
 	var node string
-	var allUsers, jsonOut bool
+	var allUsers, jsonOut, allClusters bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
@@ -47,12 +54,20 @@ func hpcQueueCmd() *cobra.Command {
 			"scheduler locally — this is the `mstat` front-door. Otherwise it reads a\n" +
 			"listing from stdin (scheduler auto-detected) — the test/pipe-your-own seam:\n" +
 			"    hpc1 squeue | mu hpc queue\n\n" +
-			"Cross-cluster collate (bare mstat over the active set) is the next step.",
+			"--all collates every active cluster into one table (a Cluster column), fanning\n" +
+			"out concurrently with a per-cluster timeout; an unreachable cluster becomes a\n" +
+			"warning, not a hang:\n" +
+			"    mu hpc queue --all             # your jobs, every cluster\n" +
+			"    mu hpc queue --all -a          # all users, every cluster",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var jobs []queue.Job
+			var down []string
 			label := node
 			switch {
+			case allClusters:
+				jobs, down = collateJobs(allUsers)
+				label = "all clusters"
 			case node != "":
 				jobs = fetchJobs(node, allUsers)
 			case !term.IsTerminal(os.Stdin.Fd()):
@@ -69,14 +84,21 @@ func hpcQueueCmd() *cobra.Command {
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(jobs)
+				if err := enc.Encode(jobs); err != nil {
+					return err
+				}
+			} else {
+				render.JobsTable(label, config.User(), toJobRows(jobs))
 			}
-			render.JobsTable(label, config.User(), toJobRows(jobs))
+			for _, d := range down { // unreachable clusters degrade to warnings, never a hang
+				render.Warn(d)
+			}
 			return nil
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
+	c.Flags().BoolVarP(&allClusters, "all", "A", false, "collate across all active clusters (distinct from -a all-users)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
@@ -107,6 +129,78 @@ func fetchJobs(node string, allUsers bool) []queue.Job {
 	return parse(out)
 }
 
+// clusterResult is one cluster's collate outcome: its jobs, or the error that
+// dropped it (unreachable, timed out, misconfigured).
+type clusterResult struct {
+	cluster string
+	jobs    []queue.Job
+	err     error
+}
+
+// collateJobs fans out over the active clusters concurrently, each fetched with a
+// bounded timeout, and returns the merged jobs (tagged by cluster) plus "cluster:
+// reason" notes for any that failed — so a down cluster degrades to a warning, never a
+// hang or a total failure. The Kerberos ticket is ensured once up front.
+func collateJobs(allUsers bool) ([]queue.Job, []string) {
+	clusters := config.ActiveClusters()
+	if len(clusters) == 0 {
+		render.Warn("no active clusters configured — add clusters to config.toml")
+		os.Exit(2)
+	}
+	hpc.EnsureTicket()
+	results := make([]clusterResult, len(clusters))
+	var wg sync.WaitGroup
+	for i := range clusters {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = fetchCluster(clusters[i], allUsers)
+		}(i)
+	}
+	wg.Wait()
+	return mergeResults(results)
+}
+
+// fetchCluster fetches one cluster's queue from its representative node (Nodes[0])
+// over the bounded remote-exec, tagging each job with the cluster name.
+func fetchCluster(c config.Cluster, allUsers bool) clusterResult {
+	if len(c.Nodes) == 0 {
+		return clusterResult{c.Name, nil, errors.New("no nodes configured")}
+	}
+	cmd, parse := fetchSpec(c.Scheduler, allUsers)
+	if cmd == "" {
+		return clusterResult{c.Name, nil, errors.New("no scheduler configured")}
+	}
+	target, err := hpc.Resolve(c.Nodes[0])
+	if err != nil {
+		return clusterResult{c.Name, nil, err}
+	}
+	out, err := hpc.RemoteExecTimeout(target, cmd, collateTimeout)
+	if err != nil {
+		return clusterResult{c.Name, nil, err}
+	}
+	jobs := parse(out)
+	for i := range jobs {
+		jobs[i].Cluster = c.Name
+	}
+	return clusterResult{c.Name, jobs, nil}
+}
+
+// mergeResults flattens per-cluster results into one job list (in cluster order) plus
+// "cluster: reason" notes for the failures. Pure — the fan-out's testable core.
+func mergeResults(results []clusterResult) ([]queue.Job, []string) {
+	var jobs []queue.Job
+	var down []string
+	for _, r := range results {
+		if r.err != nil {
+			down = append(down, fmt.Sprintf("%s: %v", r.cluster, r.err))
+			continue
+		}
+		jobs = append(jobs, r.jobs...)
+	}
+	return jobs, down
+}
+
 // fetchJobsLocal runs the current cluster's scheduler command locally (no ssh) for
 // the on-cluster `mstat` path — you're already on the login node, so mu just runs
 // squeue/qstat here. Returns the resolved cluster label + jobs; off-HPC (no current
@@ -134,8 +228,8 @@ func fetchJobsLocal(allUsers bool) (string, []queue.Job) {
 
 // currentCluster resolves the cluster this shell runs on to its (name, scheduler)
 // from config, or ("", "") off-HPC. $MU_NODE overrides $BC_HOST; when $BC_HOST
-// carries a login-node number (login-a01) absent from config, it retries the
-// digit-stripped base (login-a). A non-empty name with an empty scheduler means
+// carries a login-node number (e.g. login01) absent from config, it retries the
+// digit-stripped base (login). A non-empty name with an empty scheduler means
 // on-HPC-but-unconfigured — the caller reports that.
 func currentCluster() (string, string) {
 	self := os.Getenv("MU_NODE")
@@ -192,6 +286,7 @@ func toJobRows(jobs []queue.Job) []render.JobRow {
 		rows[i] = render.JobRow{
 			ID: j.ShortID, Name: j.Name, User: j.User, Queue: j.Queue, Nodes: j.Nodes,
 			State: state, Elapsed: j.Elapsed, ReqWall: j.ReqWall, Reason: j.PendingReason(),
+			Cluster: j.Cluster,
 		}
 	}
 	return rows

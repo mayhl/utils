@@ -15,6 +15,7 @@ import (
 // anything unrecognized; the table maps it to a glyph + color.
 type JobRow struct {
 	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
+	Cluster                                                       string // set only by cross-cluster collate → a leftmost Cluster column
 }
 
 // JobsTable renders a scheduler queue as the house table: ID / Name / Queue / NDS /
@@ -23,7 +24,8 @@ type JobRow struct {
 // summary. Long names truncate on the right to keep the table from wrapping.
 func JobsTable(cluster, user string, rows []JobRow) {
 	showUser := multipleUsers(rows)
-	nameMax, showReason, showWall := planFit(rows, showUser)
+	showCluster := anyCluster(rows)
+	nameMax, showReason, showWall := planFit(rows, showUser, showCluster)
 	wallHdr := "Elap / Wall"
 	if !showWall {
 		wallHdr = "Elap"
@@ -34,7 +36,11 @@ func JobsTable(cluster, user string, rows []JobRow) {
 	applyStyle(t)
 	t.SetTitle(jobsTitle(cluster, user, rows))
 
-	header := table.Row{"ID", "Name"}
+	header := table.Row{}
+	if showCluster {
+		header = append(header, "Cluster")
+	}
+	header = append(header, "ID", "Name")
 	if showUser {
 		header = append(header, "User")
 	}
@@ -42,7 +48,11 @@ func JobsTable(cluster, user string, rows []JobRow) {
 	t.AppendHeader(header)
 
 	for _, r := range rows {
-		row := table.Row{r.ID, r.Name}
+		row := table.Row{}
+		if showCluster {
+			row = append(row, r.Cluster)
+		}
+		row = append(row, r.ID, r.Name)
 		if showUser {
 			row = append(row, r.User)
 		}
@@ -50,7 +60,10 @@ func JobsTable(cluster, user string, rows []JobRow) {
 		t.AppendRow(row)
 	}
 
+	// ColumnConfigs match by header name, so listing Cluster is harmless when the
+	// column is absent (single-cluster views).
 	cols := []table.ColumnConfig{
+		{Name: "Cluster", Colors: text.Colors{text.FgCyan, text.Bold}},
 		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
 		{Name: "Name", WidthMaxEnforcer: truncRight},
 		{Name: "User", Colors: text.Colors{text.FgBlue}},
@@ -82,6 +95,17 @@ func multipleUsers(rows []JobRow) bool {
 	return false
 }
 
+// anyCluster reports whether any row carries a cluster tag — the cue to add the
+// leftmost Cluster column (a cross-cluster collate) vs omit it (single-cluster view).
+func anyCluster(rows []JobRow) bool {
+	for _, r := range rows {
+		if strings.TrimSpace(r.Cluster) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // stateCell is the State column value: the state badge, plus a pending job's reason
 // (SLURM — why it waits) when showReason survives the terminal fit.
 func stateCell(r JobRow, showReason bool) string {
@@ -98,7 +122,7 @@ func stateCell(r JobRow, showReason bool) string {
 // narrow terminal renders one clean, unwrapped table. It runs for both pretty and
 // --plain (both are human views that fit the terminal), no-opping only when the width
 // is unknown (piped/redirected), where full values flow — use --json for complete data.
-func planFit(rows []JobRow, showUser bool) (nameMax int, showReason, showWall bool) {
+func planFit(rows []JobRow, showUser, showCluster bool) (nameMax int, showReason, showWall bool) {
 	showReason, showWall = true, true
 	tw := termWidth()
 	if tw <= 0 {
@@ -107,9 +131,12 @@ func planFit(rows []JobRow, showUser bool) (nameMax int, showReason, showWall bo
 	const nameFloor = 6
 	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
 	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
-	userW, reasonW, wallW := 0, 0, 0
+	userW, clusterW, reasonW, wallW := 0, 0, 0, 0
 	if showUser {
 		userW = len("User")
+	}
+	if showCluster {
+		clusterW = len("Cluster")
 	}
 	for _, r := range rows {
 		idW = max(idW, text.StringWidth(r.ID))
@@ -121,6 +148,9 @@ func planFit(rows []JobRow, showUser bool) (nameMax int, showReason, showWall bo
 		if showUser {
 			userW = max(userW, text.StringWidth(r.User))
 		}
+		if showCluster {
+			clusterW = max(clusterW, text.StringWidth(r.Cluster))
+		}
 		if r.Reason != "" {
 			reasonW = max(reasonW, text.StringWidth(" · "+r.Reason))
 		}
@@ -131,9 +161,12 @@ func planFit(rows []JobRow, showUser bool) (nameMax int, showReason, showWall bo
 	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
 	nCols := 6
 	if showUser {
-		nCols = 7
+		nCols++
 	}
-	room := tw - (idW + userW + queueW + ndsW + badgeW + elapW + 3*nCols + 1) // for Name + reason + wall
+	if showCluster {
+		nCols++
+	}
+	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + 3*nCols + 1) // for Name + reason + wall
 	nameMax = nameW
 	for {
 		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)

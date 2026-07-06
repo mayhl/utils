@@ -4,7 +4,7 @@
 // from fetching — the caller pipes in the listing — so it's unit-testable against
 // fixtures without a live cluster, and the same normalized model feeds cross-cluster
 // collate, `minfo`, and short-id remap later. Parse() sniffs the scheduler from the
-// header, so a mixed site (ERDC: PBS on some clusters, SLURM on others) is one model.
+// header, so a mixed site (PBS on some clusters, SLURM on others) is one model.
 package queue
 
 import (
@@ -62,13 +62,14 @@ type Job struct {
 	ShortID  string `json:"short_id"` // leading segment, e.g. "1284570"
 	Name     string `json:"name"`
 	User     string `json:"user"`
-	Queue    string `json:"queue"`     // PBS queue / SLURM partition
-	Nodes    string `json:"nodes"`     // node/chunk count (NDS); "" if not reported
-	State    State  `json:"state"`     // normalized; marshals to its label string
-	RawState string `json:"raw_state"` // the scheduler's raw code, preserved for unknowns
-	Elapsed  string `json:"elapsed"`   // elapsed / used time
-	ReqWall  string `json:"walltime"`  // requested walltime; "" if not reported
-	Reason   string `json:"reason"`    // SLURM NODELIST(REASON) — nodelist running, reason pending
+	Queue    string `json:"queue"`             // PBS queue / SLURM partition
+	Nodes    string `json:"nodes"`             // node/chunk count (NDS); "" if not reported
+	State    State  `json:"state"`             // normalized; marshals to its label string
+	RawState string `json:"raw_state"`         // the scheduler's raw code, preserved for unknowns
+	Elapsed  string `json:"elapsed"`           // elapsed / used time
+	ReqWall  string `json:"walltime"`          // requested walltime; "" if not reported
+	Reason   string `json:"reason"`            // SLURM NODELIST(REASON) — nodelist running, reason pending
+	Cluster  string `json:"cluster,omitempty"` // set only by cross-cluster collate (--all); omitted otherwise
 }
 
 // PendingReason is the human reason a job is waiting: SLURM wraps a pending reason
