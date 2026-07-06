@@ -40,6 +40,7 @@ const helper = `_mu_node_help() {
     "  $n N <cmd>        run <cmd> on login node N" \
     "  $n push SRC DST   upload   (mu cp push)" \
     "  $n pull SRC DST   download (mu cp pull)" \
+    "  $n mstat [-a]     show $n's queue (mu hpc queue --node $n)" \
     "  $n -h | --help    show this help"
 }
 _mu_node() {
@@ -48,6 +49,7 @@ _mu_node() {
     -h|--help) _mu_node_help "$node" ;;
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
+    mstat) shift; mu hpc queue --node "$node" "$@" ;;
     "")   mu_auth && mu_ssh_login "$target" ;;
     *)
       case $1 in
@@ -95,6 +97,14 @@ func Generate() string {
 			fmt.Fprintf(&b, "%s() { _mu_node %s \"%s\" \"$@\"; }\n", n, n, targets[n])
 		}
 		b.WriteString("'\n")
+	}
+	// mstat — the queue front-door: bare runs the CURRENT cluster's scheduler locally
+	// (mu hpc queue with no --node), while `<node> mstat` routes through the per-node
+	// dispatcher above. Emitted whenever any cluster is configured (the nodes list can
+	// be empty when this shell is on the sole cluster, but mstat is still wanted).
+	if len(config.NodeNames()) > 0 {
+		b.WriteString("unalias mstat 2>/dev/null || :\n")
+		b.WriteString("eval '\nmstat() { mu hpc queue \"$@\"; }\n'\n")
 	}
 	return b.String()
 }
