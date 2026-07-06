@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
@@ -56,7 +57,11 @@ func JobsTable(cluster, user string, rows []JobRow) {
 		if showUser {
 			row = append(row, r.User)
 		}
-		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), elapWall(r.Elapsed, r.ReqWall, showWall))
+		cell := elapWall(r.Elapsed, r.ReqWall, showWall)
+		if lvl := walltimeLevel(r.State, r.Elapsed, r.ReqWall); lvl != "" {
+			cell = levelColors(lvl).Sprint(cell) // Sprint no-ops under DisableColors (plain/NO_COLOR)
+		}
+		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), cell)
 		t.AppendRow(row)
 	}
 
@@ -285,6 +290,59 @@ func elapWall(elapsed, reqWall string, showWall bool) string {
 		return e
 	}
 	return e + " / " + dash(reqWall)
+}
+
+// walltimeLevel grades a running job by how much of its requested walltime it has
+// burned: "error" at/over 90% (imminent walltime kill — checkpoint now), "warn" at
+// ≥75%, else "" (no color). Only running jobs are graded: a queued job hasn't
+// started, and a finished one is moot. Feeds levelColors so the Elap/Wall cell
+// reuses the house warn-yellow / error-red.
+func walltimeLevel(state, elapsed, reqWall string) string {
+	if state != "running" {
+		return ""
+	}
+	e, ok1 := durSecs(elapsed)
+	w, ok2 := durSecs(reqWall)
+	if !ok1 || !ok2 || w <= 0 {
+		return ""
+	}
+	switch r := float64(e) / float64(w); {
+	case r >= 0.90:
+		return "error"
+	case r >= 0.75:
+		return "warn"
+	default:
+		return ""
+	}
+}
+
+// durSecs parses a scheduler duration into seconds, anchored on the right (rightmost
+// field = seconds): SLURM "[D-]HH:MM:SS" / "MM:SS" parse exactly, and PBS "HH:MM"
+// comes out 60× low — but walltimeLevel only uses the elapsed/limit ratio, which is
+// scale-invariant when both share a format (they do within one job), so the ratio is
+// always right. Returns ok=false for non-numeric limits ("UNLIMITED", "--", "").
+func durSecs(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "--" {
+		return 0, false
+	}
+	days := 0
+	if i := strings.IndexByte(s, '-'); i > 0 { // SLURM day form "D-HH:MM:SS"
+		d, err := strconv.Atoi(s[:i])
+		if err != nil {
+			return 0, false
+		}
+		days, s = d, s[i+1:]
+	}
+	secs := 0
+	for _, f := range strings.Split(s, ":") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return 0, false
+		}
+		secs = secs*60 + n
+	}
+	return days*86400 + secs, true
 }
 
 // dash normalizes empty / "--" fields to a single "--" placeholder.
