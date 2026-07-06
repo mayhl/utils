@@ -29,11 +29,13 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
                                      # binary path); omit to use the system ssh on PATH
 
 [shell]
-# queue_aliases — which word the queue front-doors use (pure ergonomics; the engine
-# auto-detects each cluster's real scheduler regardless). mps/mkill are always defined.
+# queue_aliases — which word the queue view/cancel front-doors use (pure ergonomics;
+# the engine auto-detects each cluster's real scheduler regardless):
 #   "pbs"   (default) → mstat / mdel      (qstat/qdel idiom)
 #   "slurm"           → mqueue / mcancel  (squeue/scancel idiom; REPLACES mstat/mdel)
 #   "both"            → all four
+# The process front-doors (mps/mkill) and the scheduler-neutral queue verbs
+# (minfo/mpeek/mhold/mrls/mhist) are always defined, whatever this is set to.
 # queue_aliases = "pbs"
 
 # One [[cluster]] block per HPC cluster. Order is preserved (array of tables) and drives
