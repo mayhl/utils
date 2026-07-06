@@ -7,7 +7,10 @@
 // header, so a mixed site (ERDC: PBS on some clusters, SLURM on others) is one model.
 package queue
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // State is the normalized job state, unifying scheduler-specific codes/words so the
 // render + summary layers stay scheduler-agnostic.
@@ -23,6 +26,12 @@ const (
 	Waiting
 	Suspended
 )
+
+// MarshalJSON emits the normalized label ("running", …) rather than the enum int, so
+// `--json` is a stable, scheduler-agnostic contract.
+func (s State) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
 
 // String is the normalized state label (also the token the render layer keys on).
 func (s State) String() string {
@@ -49,17 +58,17 @@ func (s State) String() string {
 // Job is one scheduler job, normalized across schedulers. Fields a given
 // scheduler/format doesn't report are left empty ("" / zero State).
 type Job struct {
-	ID       string // full native id, e.g. "1284570.hpc1" (PBS) or "1284570" (SLURM)
-	ShortID  string // leading segment, e.g. "1284570"
-	Name     string
-	User     string
-	Queue    string // PBS queue / SLURM partition
-	Nodes    string // node/chunk count (NDS); "" if not reported
-	State    State
-	RawState string // the scheduler's raw code, preserved for unknowns
-	Elapsed  string // elapsed / used time
-	ReqWall  string // requested walltime; "" if not reported (narrow qstat / squeue)
-	Reason   string // SLURM NODELIST(REASON) — nodelist when running, reason when pending
+	ID       string `json:"id"`       // full native id, e.g. "1284570.hpc1" (PBS) or "1284570" (SLURM)
+	ShortID  string `json:"short_id"` // leading segment, e.g. "1284570"
+	Name     string `json:"name"`
+	User     string `json:"user"`
+	Queue    string `json:"queue"`     // PBS queue / SLURM partition
+	Nodes    string `json:"nodes"`     // node/chunk count (NDS); "" if not reported
+	State    State  `json:"state"`     // normalized; marshals to its label string
+	RawState string `json:"raw_state"` // the scheduler's raw code, preserved for unknowns
+	Elapsed  string `json:"elapsed"`   // elapsed / used time
+	ReqWall  string `json:"walltime"`  // requested walltime; "" if not reported
+	Reason   string `json:"reason"`    // SLURM NODELIST(REASON) — nodelist running, reason pending
 }
 
 // PendingReason is the human reason a job is waiting: SLURM wraps a pending reason

@@ -14,7 +14,7 @@ import (
 // "held", "exiting", "complete", "waiting", "suspended") or a raw scheduler code for
 // anything unrecognized; the table maps it to a glyph + color.
 type JobRow struct {
-	ID, Name, Queue, Nodes, State, Elapsed, ReqWall, Reason string
+	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
 }
 
 // JobsTable renders a scheduler queue as the house table: ID / Name / Queue / NDS /
@@ -22,30 +22,147 @@ type JobRow struct {
 // dim queued / ! yellow held / …); the title carries the cluster + a job-count
 // summary. Long names truncate on the right to keep the table from wrapping.
 func JobsTable(cluster, user string, rows []JobRow) {
+	showUser := multipleUsers(rows)
+	nameMax, showReason, showWall := planFit(rows, showUser)
+	wallHdr := "Elap / Wall"
+	if !showWall {
+		wallHdr = "Elap"
+	}
+
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	applyStyle(t)
 	t.SetTitle(jobsTitle(cluster, user, rows))
-	t.AppendHeader(table.Row{"ID", "Name", "Queue", "NDS", "State", "Elap / Wall"})
-	for _, r := range rows {
-		// A pending reason (SLURM: why the job waits) rides in the state cell; a
-		// running job carries none, so nothing is appended.
-		state := jobStateBadge(r.State)
-		if r.Reason != "" {
-			state += " · " + r.Reason
-		}
-		t.AppendRow(table.Row{
-			r.ID, r.Name, r.Queue, dash(r.Nodes),
-			state, elapWall(r.Elapsed, r.ReqWall),
-		})
+
+	header := table.Row{"ID", "Name"}
+	if showUser {
+		header = append(header, "User")
 	}
-	t.SetColumnConfigs([]table.ColumnConfig{
+	header = append(header, "Queue", "NDS", "State", wallHdr)
+	t.AppendHeader(header)
+
+	for _, r := range rows {
+		row := table.Row{r.ID, r.Name}
+		if showUser {
+			row = append(row, r.User)
+		}
+		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), elapWall(r.Elapsed, r.ReqWall, showWall))
+		t.AppendRow(row)
+	}
+
+	cols := []table.ColumnConfig{
 		{Name: "ID", Colors: text.Colors{text.FgGreen, text.Bold}},
-		{Name: "Name", WidthMax: 28, WidthMaxEnforcer: truncRight},
+		{Name: "Name", WidthMaxEnforcer: truncRight},
+		{Name: "User", Colors: text.Colors{text.FgBlue}},
 		{Name: "Queue", Colors: text.Colors{text.FgMagenta}},
 		{Name: "State", Transformer: jobStateTransformer},
-	})
+	}
+	if nameMax > 0 {
+		cols[1].WidthMax = nameMax
+	}
+	t.SetColumnConfigs(cols)
 	t.Render()
+}
+
+// multipleUsers reports whether the rows span more than one owner — the cue to add a
+// User column (an all-users view) vs omit it (your own jobs are all you).
+func multipleUsers(rows []JobRow) bool {
+	seen := ""
+	for _, r := range rows {
+		u := strings.TrimSpace(r.User)
+		if u == "" {
+			continue
+		}
+		if seen == "" {
+			seen = u
+		} else if u != seen {
+			return true
+		}
+	}
+	return false
+}
+
+// stateCell is the State column value: the state badge, plus a pending job's reason
+// (SLURM — why it waits) when showReason survives the terminal fit.
+func stateCell(r JobRow, showReason bool) string {
+	s := jobStateBadge(r.State)
+	if showReason && r.Reason != "" {
+		s += " · " + r.Reason
+	}
+	return s
+}
+
+// planFit decides how the table fits the terminal: Name's max width (0 = uncapped)
+// and whether the pending-reason and walltime survive. It sheds width in priority
+// order — shrink Name to a floor, then drop the reason, then the walltime — so even a
+// narrow terminal renders one clean, unwrapped table. It runs for both pretty and
+// --plain (both are human views that fit the terminal), no-opping only when the width
+// is unknown (piped/redirected), where full values flow — use --json for complete data.
+func planFit(rows []JobRow, showUser bool) (nameMax int, showReason, showWall bool) {
+	showReason, showWall = true, true
+	tw := termWidth()
+	if tw <= 0 {
+		return 0, true, true
+	}
+	const nameFloor = 6
+	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
+	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
+	userW, reasonW, wallW := 0, 0, 0
+	if showUser {
+		userW = len("User")
+	}
+	for _, r := range rows {
+		idW = max(idW, text.StringWidth(r.ID))
+		queueW = max(queueW, text.StringWidth(r.Queue))
+		ndsW = max(ndsW, text.StringWidth(dash(r.Nodes)))
+		badgeW = max(badgeW, text.StringWidth(jobStateBadge(r.State)))
+		elapW = max(elapW, text.StringWidth(dash(r.Elapsed)))
+		nameW = max(nameW, text.StringWidth(r.Name))
+		if showUser {
+			userW = max(userW, text.StringWidth(r.User))
+		}
+		if r.Reason != "" {
+			reasonW = max(reasonW, text.StringWidth(" · "+r.Reason))
+		}
+		if strings.TrimSpace(r.ReqWall) != "" {
+			wallW = max(wallW, text.StringWidth(" / "+r.ReqWall))
+		}
+	}
+	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
+	nCols := 6
+	if showUser {
+		nCols = 7
+	}
+	room := tw - (idW + userW + queueW + ndsW + badgeW + elapW + 3*nCols + 1) // for Name + reason + wall
+	nameMax = nameW
+	for {
+		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)
+		if need <= room {
+			break
+		}
+		switch {
+		case nameMax > nameFloor:
+			nameMax = max(nameFloor, room-boolW(showReason, reasonW)-boolW(showWall, wallW))
+		case showReason:
+			showReason = false
+		case showWall:
+			showWall = false
+		default:
+			return nameFloor, false, false // can't shrink more — accept a slight overflow
+		}
+	}
+	if nameMax >= nameW {
+		nameMax = 0 // no cap needed
+	}
+	return nameMax, showReason, showWall
+}
+
+// boolW returns w when on, else 0 — for conditional width sums.
+func boolW(on bool, w int) int {
+	if on {
+		return w
+	}
+	return 0
 }
 
 // jobsTitle is the two-line table title: the cluster (or "Queue") over a job-count
@@ -122,16 +239,16 @@ func jobStateTransformer(v interface{}) string {
 		return text.Colors{text.FgYellow}.Sprint(s)
 	case strings.Contains(s, "exiting"), strings.Contains(s, "complete"):
 		return text.Colors{text.FgCyan}.Sprint(s)
-	default: // queued, waiting, unknown → quiet
-		return text.Colors{text.FgHiBlack}.Sprint(s)
+	default: // queued, waiting, unknown → terminal default fg (always legible, unlike a dim gray)
+		return s
 	}
 }
 
 // elapWall renders the elapsed/walltime cell: "elap / wall", or just elapsed when
 // the format carries no requested walltime (narrow qstat).
-func elapWall(elapsed, reqWall string) string {
+func elapWall(elapsed, reqWall string, showWall bool) string {
 	e := dash(elapsed)
-	if strings.TrimSpace(reqWall) == "" {
+	if !showWall || strings.TrimSpace(reqWall) == "" {
 		return e
 	}
 	return e + " / " + dash(reqWall)

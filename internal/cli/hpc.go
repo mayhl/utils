@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -33,7 +34,7 @@ func hpcCmd() *cobra.Command {
 
 func hpcQueueCmd() *cobra.Command {
 	var node string
-	var allUsers bool
+	var allUsers, jsonOut bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
@@ -48,33 +49,42 @@ func hpcQueueCmd() *cobra.Command {
 			"Cross-cluster collate (bare mstat over the active set) is the next step.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			var jobs []queue.Job
 			if node != "" {
-				return fetchQueue(node, allUsers)
+				jobs = fetchJobs(node, allUsers)
+			} else {
+				if term.IsTerminal(os.Stdin.Fd()) {
+					render.Warn("pipe a listing in (`hpc1 squeue | mu hpc queue`) or use --node")
+					os.Exit(2)
+				}
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return err
+				}
+				jobs = queue.Parse(string(data))
 			}
-			if term.IsTerminal(os.Stdin.Fd()) {
-				render.Warn("pipe a listing in (`hpc1 squeue | mu hpc queue`) or use --node")
-				os.Exit(2)
+			if jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(jobs)
 			}
-			data, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				return err
-			}
-			render.JobsTable("", config.User(), toJobRows(queue.Parse(string(data))))
+			render.JobsTable(node, config.User(), toJobRows(jobs))
 			return nil
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
 }
 
-// fetchQueue runs the cluster's scheduler command on node over remote-exec, parses
-// it, and renders the house table. The scheduler comes from config (not a probe);
-// an unconfigured scheduler is a clear error, not a guess.
-func fetchQueue(node string, allUsers bool) error {
+// fetchJobs runs the cluster's scheduler command on node over remote-exec and parses
+// it into normalized jobs. The scheduler comes from config (not a probe); an
+// unconfigured scheduler or a remote failure exits with one house error line.
+func fetchJobs(node string, allUsers bool) []queue.Job {
 	target, err := hpc.Resolve(node)
 	if err != nil {
 		render.Err(err.Error())
@@ -91,8 +101,7 @@ func fetchQueue(node string, allUsers bool) error {
 		render.Err(fmt.Sprintf("%s: remote fetch failed: %v", node, err))
 		os.Exit(1)
 	}
-	render.JobsTable(node, config.User(), toJobRows(parse(out)))
-	return nil
+	return parse(out)
 }
 
 // fetchSpec returns the remote command + matching parser for a scheduler. SLURM uses
@@ -129,7 +138,7 @@ func toJobRows(jobs []queue.Job) []render.JobRow {
 			state = strings.TrimSpace(j.RawState)
 		}
 		rows[i] = render.JobRow{
-			ID: j.ShortID, Name: j.Name, Queue: j.Queue, Nodes: j.Nodes,
+			ID: j.ShortID, Name: j.Name, User: j.User, Queue: j.Queue, Nodes: j.Nodes,
 			State: state, Elapsed: j.Elapsed, ReqWall: j.ReqWall, Reason: j.PendingReason(),
 		}
 	}
