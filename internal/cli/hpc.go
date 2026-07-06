@@ -39,36 +39,39 @@ func hpcQueueCmd() *cobra.Command {
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
 		Long: "Show a cluster's jobs as one normalized house table, regardless of\n" +
-			"scheduler. With --node, mu fetches it itself — picking qstat vs squeue from\n" +
-			"the cluster's configured scheduler, over the remote-exec path:\n" +
+			"scheduler. With --node, mu fetches it over remote-exec — picking qstat vs\n" +
+			"squeue from the cluster's configured scheduler:\n" +
 			"    mu hpc queue --node hpc1        # your jobs\n" +
 			"    mu hpc queue --node hpc1 -a     # all users\n\n" +
-			"Without --node it reads a listing from stdin (scheduler auto-detected from\n" +
-			"the header) — the test seam / pipe-your-own escape hatch:\n" +
+			"On a login node with no --node and no pipe, mu runs the current cluster's\n" +
+			"scheduler locally — this is the `mstat` front-door. Otherwise it reads a\n" +
+			"listing from stdin (scheduler auto-detected) — the test/pipe-your-own seam:\n" +
 			"    hpc1 squeue | mu hpc queue\n\n" +
 			"Cross-cluster collate (bare mstat over the active set) is the next step.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var jobs []queue.Job
-			if node != "" {
+			label := node
+			switch {
+			case node != "":
 				jobs = fetchJobs(node, allUsers)
-			} else {
-				if term.IsTerminal(os.Stdin.Fd()) {
-					render.Warn("pipe a listing in (`hpc1 squeue | mu hpc queue`) or use --node")
-					os.Exit(2)
-				}
+			case !term.IsTerminal(os.Stdin.Fd()):
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
 					return err
 				}
 				jobs = queue.Parse(string(data))
+			default:
+				// No --node and no pipe → fetch the current cluster's queue locally
+				// (the on-cluster `mstat` path). Off-HPC this warns and exits.
+				label, jobs = fetchJobsLocal(allUsers)
 			}
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				return enc.Encode(jobs)
 			}
-			render.JobsTable(node, config.User(), toJobRows(jobs))
+			render.JobsTable(label, config.User(), toJobRows(jobs))
 			return nil
 		},
 	}
@@ -102,6 +105,55 @@ func fetchJobs(node string, allUsers bool) []queue.Job {
 		os.Exit(1)
 	}
 	return parse(out)
+}
+
+// fetchJobsLocal runs the current cluster's scheduler command locally (no ssh) for
+// the on-cluster `mstat` path — you're already on the login node, so mu just runs
+// squeue/qstat here. Returns the resolved cluster label + jobs; off-HPC (no current
+// cluster) it warns and exits, steering to `<node> mstat` / --node.
+func fetchJobsLocal(allUsers bool) (string, []queue.Job) {
+	self, scheduler := currentCluster()
+	if self == "" {
+		render.Warn("not on an HPC cluster — use `<node> mstat` or `mu hpc queue --node <n>`")
+		os.Exit(2)
+	}
+	cmd, parse := fetchSpec(scheduler, allUsers)
+	if cmd == "" {
+		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", self))
+		os.Exit(2)
+	}
+	// Same command as the remote fetch, run in a local shell (bash for the quoted
+	// -o format arg); the login shell already has the scheduler on PATH.
+	out, err := exec.Command("bash", "-c", cmd).Output()
+	if err != nil {
+		render.Err(fmt.Sprintf("%s: local queue fetch failed: %v", self, err))
+		os.Exit(1)
+	}
+	return self, parse(string(out))
+}
+
+// currentCluster resolves the cluster this shell runs on to its (name, scheduler)
+// from config, or ("", "") off-HPC. $MU_NODE overrides $BC_HOST; when $BC_HOST
+// carries a login-node number (login-a01) absent from config, it retries the
+// digit-stripped base (login-a). A non-empty name with an empty scheduler means
+// on-HPC-but-unconfigured — the caller reports that.
+func currentCluster() (string, string) {
+	self := os.Getenv("MU_NODE")
+	if self == "" {
+		self = os.Getenv("BC_HOST")
+	}
+	if self == "" {
+		return "", ""
+	}
+	if s := config.SchedulerFor(self); s != "" {
+		return self, s
+	}
+	if base := strings.TrimRight(self, "0123456789"); base != self {
+		if s := config.SchedulerFor(base); s != "" {
+			return base, s
+		}
+	}
+	return self, ""
 }
 
 // fetchSpec returns the remote command + matching parser for a scheduler. SLURM uses
