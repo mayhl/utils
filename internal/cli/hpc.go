@@ -40,14 +40,14 @@ func hpcCmd() *cobra.Command {
 }
 
 func hpcQueueCmd() *cobra.Command {
-	var node string
+	var node, userList string
 	var allUsers, jsonOut, local, fleet, all, start bool
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "Render a scheduler queue (PBS qstat / SLURM squeue) as a house table.",
 		Long: "Show cluster jobs as one normalized house table, regardless of scheduler\n" +
 			"(PBS qstat / SLURM squeue). Three WHERE scopes select how wide to look\n" +
-			"(orthogonal to WHO: -a/--all-users adds everyone's jobs):\n\n" +
+			"(orthogonal to WHO: default you, -u alice,bob specific users, -a everyone):\n\n" +
 			"    -l --local         current cluster only, run locally — no ssh (default on HPC)\n" +
 			"    -f --fleet         the `fleet` node list, else active clusters (default off HPC)\n" +
 			"    -e --all-systems   every distinct queue: the fleet plus one node per cluster\n" +
@@ -66,21 +66,26 @@ func hpcQueueCmd() *cobra.Command {
 			"    hpc1 squeue | mu hpc queue",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if userList != "" && !validUserList(userList) {
+				render.Err("--user takes a comma-separated user list (letters/digits/._-), e.g. -u alice,bob")
+				os.Exit(2)
+			}
+			who := userSel{all: allUsers, list: userList}
 			var jobs []queue.Job
 			var down []string
 			var label string
 			switch {
 			case node != "":
 				label = node
-				jobs = fetchJobs(node, allUsers)
+				jobs = fetchJobs(node, who)
 			case all:
-				label, jobs, down = collateJobs(allSystemsScope(), "all", allUsers)
+				label, jobs, down = collateJobs(allSystemsScope(), "all", who)
 			case fleet:
-				label, jobs, down = collateJobs(fleetScope(), "fleet", allUsers)
+				label, jobs, down = collateJobs(fleetScope(), "fleet", who)
 			case local:
 				// Explicit --local: current cluster, run locally. Off-HPC this warns
 				// and exits (no scheduler here) rather than silently widening.
-				label, jobs = fetchJobsLocal(allUsers)
+				label, jobs = fetchJobsLocal(who)
 			case !term.IsTerminal(os.Stdin.Fd()):
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -91,9 +96,9 @@ func hpcQueueCmd() *cobra.Command {
 				// Bare mstat, no pipe → resolve by location: on a login node run the
 				// current cluster locally; off HPC (no local scheduler) fall to fleet.
 				if self, _ := currentCluster(); self != "" {
-					label, jobs = fetchJobsLocal(allUsers)
+					label, jobs = fetchJobsLocal(who)
 				} else {
-					label, jobs, down = collateJobs(fleetScope(), "fleet", allUsers)
+					label, jobs, down = collateJobs(fleetScope(), "fleet", who)
 				}
 			}
 			if jsonOut {
@@ -113,12 +118,14 @@ func hpcQueueCmd() *cobra.Command {
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch the queue from this node (else read stdin)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "all users' jobs (default: yours)")
+	c.Flags().StringVarP(&userList, "user", "u", "", "show these users' jobs (comma-separated), e.g. -u alice,bob")
 	c.Flags().BoolVarP(&local, "local", "l", false, "current cluster only, fetched locally (default on HPC)")
 	c.Flags().BoolVarP(&fleet, "fleet", "f", false, "collate the `fleet` node list, else active clusters (default off HPC)")
 	c.Flags().BoolVarP(&all, "all-systems", "e", false, "collate every distinct queue: the fleet plus one node per cluster not in it, incl. inactive")
 	c.Flags().BoolVar(&start, "start", false, "add a Start column: actual start (running) or estimated start (pending); SLURM only")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit jobs as JSON (complete, untruncated) instead of a table")
 	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
+	c.MarkFlagsMutuallyExclusive("all-users", "user") // both pick WHO; -u is a subset, -a is everyone
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -128,13 +135,13 @@ func hpcQueueCmd() *cobra.Command {
 // fetchJobs runs the cluster's scheduler command on node over remote-exec and parses
 // it into normalized jobs. The scheduler comes from config (not a probe); an
 // unconfigured scheduler or a remote failure exits with one house error line.
-func fetchJobs(node string, allUsers bool) []queue.Job {
+func fetchJobs(node string, who userSel) []queue.Job {
 	target, err := hpc.Resolve(node)
 	if err != nil {
 		render.Err(err.Error())
 		os.Exit(2)
 	}
-	cmd, parse := fetchSpec(config.SchedulerFor(node), allUsers)
+	cmd, parse := fetchSpec(config.SchedulerFor(node), who)
 	if cmd == "" {
 		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", node))
 		os.Exit(2)
@@ -239,7 +246,7 @@ func allSystemsScope() []queueTarget {
 // "label: reason" notes for any that failed — so a down target degrades to a warning,
 // never a hang or a total failure. The Kerberos ticket is ensured once up front. scope is
 // "fleet" or "all", driving both the label and the empty-set message.
-func collateJobs(targets []queueTarget, scope string, allUsers bool) (string, []queue.Job, []string) {
+func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, []string) {
 	if len(targets) == 0 {
 		if scope == "fleet" {
 			render.Warn("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
@@ -255,7 +262,7 @@ func collateJobs(targets []queueTarget, scope string, allUsers bool) (string, []
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i] = fetchTarget(targets[i], allUsers)
+			results[i] = fetchTarget(targets[i], who)
 		}(i)
 	}
 	wg.Wait()
@@ -269,11 +276,11 @@ func collateJobs(targets []queueTarget, scope string, allUsers bool) (string, []
 
 // fetchTarget runs one target's scheduler over the bounded remote-exec, tagging each job
 // with the target's label.
-func fetchTarget(t queueTarget, allUsers bool) clusterResult {
+func fetchTarget(t queueTarget, who userSel) clusterResult {
 	if t.node == "" {
 		return clusterResult{t.label, nil, errors.New("no nodes configured")}
 	}
-	cmd, parse := fetchSpec(t.scheduler, allUsers)
+	cmd, parse := fetchSpec(t.scheduler, who)
 	if cmd == "" {
 		return clusterResult{t.label, nil, errors.New("no scheduler configured")}
 	}
@@ -311,13 +318,13 @@ func mergeResults(results []clusterResult) ([]queue.Job, []string) {
 // the on-cluster `mstat` path — you're already on the login node, so mu just runs
 // squeue/qstat here. Returns the resolved cluster label + jobs; off-HPC (no current
 // cluster) it warns and exits, steering to `<node> mstat` / --node.
-func fetchJobsLocal(allUsers bool) (string, []queue.Job) {
+func fetchJobsLocal(who userSel) (string, []queue.Job) {
 	self, scheduler := currentCluster()
 	if self == "" {
 		render.Warn("not on an HPC cluster — use `<node> mstat` or `mu hpc queue --node <n>`")
 		os.Exit(2)
 	}
-	cmd, parse := fetchSpec(scheduler, allUsers)
+	cmd, parse := fetchSpec(scheduler, who)
 	if cmd == "" {
 		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", self))
 		os.Exit(2)
@@ -356,25 +363,59 @@ func currentCluster() (string, string) {
 	return self, ""
 }
 
+// userSel is the WHO axis of a fetch: whose jobs to show. Exactly one applies, in
+// precedence order — an explicit list (-u), then all users (-a), else just you.
+type userSel struct {
+	all  bool   // -a / --all-users: no user filter
+	list string // -u / --user: comma-separated user list; "" = unset
+}
+
+// validUserList guards the -u value: it is interpolated into the remote/local shell
+// command, so restrict it to the characters a username list can contain (comma is the
+// separator) — no spaces or shell metacharacters.
+func validUserList(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == ',' || r == '_' || r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // fetchSpec returns the remote command + matching parser for a scheduler. SLURM uses
 // mu's controlled pipe-delimited format (adds walltime, robust parse); PBS uses the
-// wide `qstat -a` (its default already carries Req'd Time). "" cmd = unknown scheduler.
-func fetchSpec(scheduler string, allUsers bool) (string, func(string) []queue.Job) {
+// wide `qstat -a` (its default already carries Req'd Time). The WHO axis picks the user
+// filter: a -u list, all users (-a), or just you. "" cmd = unknown scheduler.
+func fetchSpec(scheduler string, who userSel) (string, func(string) []queue.Job) {
 	switch scheduler {
 	case "slurm":
-		sel := ""
-		if !allUsers {
-			sel = "--me "
+		sel := "--me " // default: your jobs
+		switch {
+		case who.list != "":
+			sel = "-u " + who.list + " "
+		case who.all:
+			sel = ""
 		}
 		return `squeue -h ` + sel + `-o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`, queue.ParseSLURMDelim
 	case "pbs":
-		cmd := "qstat -a"
-		if !allUsers {
+		sel := ""
+		switch {
+		case who.list != "":
+			sel = " -u " + who.list
+		case who.all:
+			sel = ""
+		default:
 			if u := config.HPCUser(); u != "" {
-				cmd = "qstat -a -u " + u
+				sel = " -u " + u
 			}
 		}
-		return cmd, queue.ParsePBS
+		return "qstat -a" + sel, queue.ParsePBS
 	default:
 		return "", nil
 	}

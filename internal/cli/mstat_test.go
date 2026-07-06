@@ -8,6 +8,52 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/config"
 )
 
+// TestValidUserList: -u accepts a comma-separated username list; rejects empty and
+// anything with shell-unsafe characters (it's interpolated into the fetch command).
+func TestValidUserList(t *testing.T) {
+	for _, s := range []string{"alice", "alice,bob", "a.b_c-d", "user01,user02"} {
+		if !validUserList(s) {
+			t.Errorf("validUserList(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "alice bob", "alice;rm", "a|b", "$(x)", "a,b c"} {
+		if validUserList(s) {
+			t.Errorf("validUserList(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestFetchSpecWho: the WHO axis picks the right user filter per scheduler — a -u list,
+// all users (-a), or just you (PBS names you explicitly from config; SLURM uses --me).
+func TestFetchSpecWho(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfg, []byte("hpc_user = \"me\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", cfg)
+	config.ResetForTest()
+	t.Cleanup(config.ResetForTest)
+
+	cases := []struct {
+		sched string
+		who   userSel
+		want  string
+	}{
+		{"slurm", userSel{}, `squeue -h --me -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`},
+		{"slurm", userSel{all: true}, `squeue -h -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`},
+		{"slurm", userSel{list: "alice,bob"}, `squeue -h -u alice,bob -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`},
+		{"pbs", userSel{}, "qstat -a -u me"},
+		{"pbs", userSel{all: true}, "qstat -a"},
+		{"pbs", userSel{list: "alice,bob"}, "qstat -a -u alice,bob"},
+	}
+	for _, c := range cases {
+		if cmd, _ := fetchSpec(c.sched, c.who); cmd != c.want {
+			t.Errorf("fetchSpec(%q, %+v) = %q, want %q", c.sched, c.who, cmd, c.want)
+		}
+	}
+}
+
 // TestCurrentCluster covers the on-cluster mstat resolution: $MU_NODE over $BC_HOST,
 // the login-node digit-strip fallback (login-a01 → login-a), and the off-HPC and
 // unconfigured-scheduler cases.
