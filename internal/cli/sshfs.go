@@ -28,7 +28,7 @@ Shortcuts (shell functions — not 1:1 with the subcommands below):
   hls          list mounts with live status   (mu sshfs list)
   hadd         register a new mount           (mu sshfs add)
   hset         change/repoint a mount         (mu sshfs set)
-  hum          unmount                        (mu sshfs umount)`,
+  hum          unmount (hum --all = all live)  (mu sshfs umount)`,
 	}
 	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsSetCmd(), sshfsRmCmd())
 	return c
@@ -264,27 +264,75 @@ func runMount(name string, verbose bool) int {
 }
 
 func sshfsUmountCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:               "umount <name>",
-		Short:             "Unmount a mount.",
-		Args:              cobra.ExactArgs(1),
+	var all bool
+	c := &cobra.Command{
+		Use:   "umount <name>",
+		Short: "Unmount a mount, or every live mount with --all.",
+		Args: func(_ *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return errors.New("cannot name a mount together with --all")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(nil, args)
+		},
 		ValidArgsFunction: mountCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			name := args[0]
-			mdir := sshfs.MountDir(name)
-			if !sshfs.IsMounted(mdir) {
-				render.Info(name + ": not mounted")
-				return nil
+			if all {
+				return umountAll()
 			}
-			if sshfs.Umount(mdir) {
-				render.OK("unmounted " + name)
-				return nil
+			if !umountOne(args[0]) {
+				os.Exit(1)
 			}
-			render.Err(fmt.Sprintf("%s: couldn't unmount (hung?); try `diskutil unmount force %s` or a restart", name, mdir))
-			os.Exit(1)
 			return nil
 		},
 	}
+	c.Flags().BoolVarP(&all, "all", "a", false, "unmount every live mount")
+	return c
+}
+
+// umountOne unmounts a single mount by name, reporting the outcome. Returns
+// false only when a live mount fails to unmount (hung).
+func umountOne(name string) bool {
+	mdir := sshfs.MountDir(name)
+	if !sshfs.IsMounted(mdir) {
+		render.Info(name + ": not mounted")
+		return true
+	}
+	if sshfs.Umount(mdir) {
+		render.OK("unmounted " + name)
+		return true
+	}
+	render.Err(fmt.Sprintf("%s: couldn't unmount (hung?); try `diskutil unmount force %s` or a restart", name, mdir))
+	return false
+}
+
+// umountAll unmounts every currently-live registered mount, continuing past a
+// hung one and exiting non-zero at the end if any failed.
+func umountAll() error {
+	reg := sshfs.ReadRegistry()
+	names := make([]string, 0, len(reg))
+	for n := range reg {
+		if sshfs.IsMounted(sshfs.MountDir(n)) {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		render.Info("no live mounts")
+		return nil
+	}
+	sort.Strings(names)
+	failed := 0
+	for _, n := range names {
+		if !umountOne(n) {
+			failed++
+		}
+	}
+	if failed > 0 {
+		os.Exit(1)
+	}
+	return nil
 }
 
 func sshfsPathCmd() *cobra.Command {
