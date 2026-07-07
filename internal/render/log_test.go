@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain keeps any emitter call in this package from touching the real
@@ -63,6 +64,31 @@ func TestStep(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestLogBlockGroupsByDay checks the reader's block view: one day header per date,
+// time-only rows, and a raw-stamp fallback for an unparseable timestamp.
+func TestLogBlockGroupsByDay(t *testing.T) {
+	t.Setenv("MU_RENDER", "plain") // deterministic: no ANSI to assert around
+	d1 := time.Date(2026, 7, 5, 14, 3, 22, 0, time.Local)
+	rows := []LogRow{
+		{Time: d1, Level: "OK", Scope: "cp", Msg: "copied"},
+		{Time: time.Date(2026, 7, 6, 9, 12, 0, 0, time.Local), Level: "ERROR", Scope: "job", Msg: "cancelled"},
+		{Time: time.Date(2026, 7, 6, 9, 15, 0, 0, time.Local), Level: "WARN", Scope: "sshfs", Msg: "slow"},
+		{RawTS: "bogus-ts", Level: "INFO", Scope: "x", Msg: "unparsed"}, // zero Time
+	}
+	out := LogBlock("Event log", rows)
+
+	for _, day := range []string{"5 Jul 2026", "6 Jul 2026"} {
+		if n := strings.Count(out, day); n != 1 {
+			t.Errorf("%q header count = %d, want 1:\n%s", day, n, out)
+		}
+	}
+	for _, want := range []string{"14:03:22", "copied", "cancelled", "slow", "bogus-ts"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
 }

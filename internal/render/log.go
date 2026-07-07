@@ -177,30 +177,88 @@ func EventOK(scope, msg string)   { event(LevelOK, scope, msg) }
 func EventWarn(scope, msg string) { event(slog.LevelWarn, scope, msg) }
 func EventErr(scope, msg string)  { event(slog.LevelError, scope, msg) }
 
-// FormatEntry returns a colored one-line rendering of a log entry for readers like
-// `mu log`: "<ts> <glyph> [scope] msg", styled by level (reuses the house palette).
-func FormatEntry(levelName, scope, ts, msg string) string {
-	var col text.Colors
-	var g string
-	switch strings.ToUpper(levelName) {
+// LogRow is one event-log entry for LogBlock — a domain-free mirror of the reader's
+// parsed line. Time is the parsed timestamp (zero → RawTS shown, and the row is
+// grouped under no date header).
+type LogRow struct {
+	Time  time.Time
+	RawTS string
+	Level string
+	Scope string
+	Msg   string
+}
+
+// levelGlyphColor maps a level name to its single-column house glyph (ASCII-safe)
+// and tier color — the glyph carries the level, per the color policy.
+func levelGlyphColor(level string) (string, text.Colors) {
+	switch strings.ToUpper(level) {
 	case "OK":
-		col, g = text.Colors{text.FgGreen, text.Bold}, glyph("✓", "[OK]")
+		return glyph("✓", "+"), text.Colors{text.FgGreen, text.Bold}
 	case "WARN", "WARNING":
-		col, g = text.Colors{text.FgYellow, text.Bold}, glyph("!", "[WARN]")
+		return glyph("!", "!"), text.Colors{text.FgYellow, text.Bold}
 	case "ERROR", "ERR":
-		col, g = text.Colors{text.FgRed, text.Bold}, glyph("✗", "[ERROR]")
+		return glyph("✗", "x"), text.Colors{text.FgRed, text.Bold}
 	default:
-		col, g = text.Colors{text.FgCyan}, glyph("→", "[INFO]")
+		return glyph("→", ">"), text.Colors{text.FgCyan}
 	}
-	tag, tsOut, scopeOut := g, ts, "["+scope+"]"
-	if !colorOff() {
-		dim := text.Colors{text.FgHiBlack}
-		tag, tsOut, scopeOut = col.Sprint(g), dim.Sprint(ts), dim.Sprint("["+scope+"]")
+}
+
+// LogBlock renders event-log rows as an aligned, date-grouped block for `mu log`: a
+// bold-cyan title, a dim day line whenever the date changes, then one line per event —
+// "<time> <glyph> <scope> <msg>" with the time blue, scope magenta, and the tier glyph
+// carrying the level. Time is time-only; the day header holds the date.
+func LogBlock(title string, rows []LogRow) string {
+	scopeW := 5
+	for _, r := range rows {
+		if n := len(r.Scope); n > scopeW {
+			scopeW = n
+		}
 	}
-	if scope != "" {
-		return fmt.Sprintf("%s %s %s %s", tsOut, tag, scopeOut, msg)
+	if scopeW > 10 {
+		scopeW = 10
 	}
-	return fmt.Sprintf("%s %s %s", tsOut, tag, msg)
+	dim := text.Colors{text.FgHiBlack}
+	off := plainMode() || colorOff() // stdout view: plain when piped/--plain, or NO_COLOR
+
+	var b strings.Builder
+	if title != "" {
+		if off {
+			b.WriteString(title + "\n")
+		} else {
+			b.WriteString(append(tc(HueID), text.Bold).Sprint(title) + "\n") // bold cyan, like table titles
+		}
+	}
+	curDay := ""
+	for _, r := range rows {
+		day, tm := logTimeParts(r)
+		if day != "" && day != curDay {
+			curDay = day
+			if off {
+				b.WriteString(" " + day + "\n")
+			} else {
+				b.WriteString(" " + dim.Sprint(day) + "\n") // dim — section header is chrome
+			}
+		}
+		g, col := levelGlyphColor(r.Level)
+		tmCell := fmt.Sprintf("%-8s", tm)
+		scopeCell := fmt.Sprintf("%-*s", scopeW, trunc(r.Scope, scopeW))
+		if !off {
+			tmCell = tc(HueLoc).Sprint(tmCell)        // blue — time column
+			g = col.Sprint(g)                         // tier color on the glyph
+			scopeCell = tc(HueUser).Sprint(scopeCell) // magenta — scope/tag column
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s  %s  %s\n", tmCell, g, scopeCell, r.Msg))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// logTimeParts splits a row into its date-header string and time-of-day cell. A row
+// whose timestamp didn't parse has no day (ungrouped) and shows its raw stamp.
+func logTimeParts(r LogRow) (day, tm string) {
+	if r.Time.IsZero() {
+		return "", r.RawTS
+	}
+	return r.Time.Format("2 Jan 2006"), r.Time.Format("15:04:05")
 }
 
 // WriteEvent renders + logs an event chosen by a level string (for `mu log write`).

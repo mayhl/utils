@@ -16,19 +16,24 @@ import (
 
 func logCmd() *cobra.Command {
 	var tier, scope, since string
+	var lines int
+	var all bool
 	c := &cobra.Command{
 		Use:   "log",
 		Short: "View the event log (transfers, jobs, big ops).",
-		Long:  "Show mu's event log. Subcommands: `write` (append, for scripts), `clear`.",
-		Args:  cobra.NoArgs,
+		Long: "Show mu's event log, newest last, grouped by day. Defaults to the last 50\n" +
+			"events (-n to change, --all for the whole log). Subcommands: `write`, `clear`.",
+		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return viewLog(tier, scope, since)
+			return viewLog(tier, scope, since, lines, all)
 		},
 	}
 	f := c.Flags()
 	f.StringVarP(&tier, "tier", "t", "", "only this tier (info|ok|warn|error)")
 	f.StringVarP(&scope, "scope", "s", "", "only this scope (cp|hpc|job|…)")
 	f.StringVar(&since, "since", "", "only newer than a duration (2h, 3d) or date (2026-07-01)")
+	f.IntVarP(&lines, "lines", "n", 50, "show only the last N events (0 = all)")
+	f.BoolVar(&all, "all", false, "show the entire log (overrides -n)")
 	c.AddCommand(logWriteCmd(), logClearCmd())
 	return c
 }
@@ -122,7 +127,7 @@ func parseLogLine(line string) (logEntry, bool) {
 	return e, true
 }
 
-func viewLog(tier, scope, since string) error {
+func viewLog(tier, scope, since string, limit int, all bool) error {
 	path := render.EventLogPath()
 	f, err := os.Open(path)
 	if err != nil {
@@ -144,7 +149,7 @@ func viewLog(tier, scope, since string) error {
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	shown := 0
+	var rows []render.LogRow
 	for sc.Scan() {
 		e, ok := parseLogLine(sc.Text())
 		if !ok {
@@ -159,13 +164,31 @@ func viewLog(tier, scope, since string) error {
 		if !cutoff.IsZero() && !e.t.IsZero() && e.t.Before(cutoff) {
 			continue
 		}
-		fmt.Println(render.FormatEntry(e.level, e.scope, e.rawTS, e.msg))
-		shown++
+		rows = append(rows, render.LogRow{Time: e.t, RawTS: e.rawTS, Level: e.level, Scope: e.scope, Msg: e.msg})
 	}
-	if shown == 0 {
+	if err := sc.Err(); err != nil {
+		return err
+	}
+
+	total := len(rows)
+	if total == 0 {
 		render.Info("no matching events")
+		return nil
 	}
-	return sc.Err()
+	title := fmt.Sprintf("Event log · %d event%s", total, plural(total))
+	if !all && limit > 0 && total > limit {
+		rows = rows[total-limit:]
+		title = fmt.Sprintf("Event log · last %d of %d", limit, total)
+	}
+	fmt.Println(render.LogBlock(title, rows))
+	return nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // tierMatch compares tiers, accepting warn/warning and err/error.
