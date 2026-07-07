@@ -39,6 +39,12 @@ type SelectSpec struct {
 	// Called off the UI loop (it may ssh), so a slow fetch doesn't freeze the picker.
 	// nil → no `i` key (e.g. the process picker has no card).
 	Detail func(id string) string
+	// ReadOnly turns the widget into a VIEWER: no selection marks or select keys, and
+	// the footer/title drop the "select"/verb language. Scroll, filter, live refresh,
+	// and `i` inspect still work. Used by `mu log -i`. Title labels the header (a plain
+	// title instead of "Select to <verb>").
+	ReadOnly bool
+	Title    string
 }
 
 // Select runs the interactive picker and returns the IDs the user marked (nil if
@@ -66,6 +72,15 @@ func Select(spec SelectSpec) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// Viewer runs the widget as a read-only, scrollable, live-filterable viewer (no
+// selection or action) — e.g. `mu log -i`. It reuses the Select model in ReadOnly
+// mode and discards the (empty) selection.
+func Viewer(spec SelectSpec) error {
+	spec.ReadOnly = true
+	_, err := Select(spec)
+	return err
 }
 
 // selectModel is the picker's private bubbletea model. cursor/top index into the
@@ -178,11 +193,17 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.clampScroll()
 		case " ", "space":
+			if m.spec.ReadOnly {
+				break // viewer: nothing to select
+			}
 			if len(m.visible) > 0 {
 				id := m.rows[m.visible[m.cursor]].ID
 				m.selected[id] = !m.selected[id]
 			}
 		case "a": // toggle every currently-visible row
+			if m.spec.ReadOnly {
+				break
+			}
 			all := true
 			for _, idx := range m.visible {
 				if !m.selected[m.rows[idx].ID] {
@@ -321,6 +342,9 @@ func (m selectModel) View() tea.View {
 		if m.selected[r.ID] {
 			markGlyph = aglyph("◉", "*")
 		}
+		if m.spec.ReadOnly {
+			markGlyph = " " // viewer: keep the column width, show no mark
+		}
 		cur := cursorGlyph(i == m.cursor)
 		if i == m.cursor {
 			// Reverse-video the whole plain line — clearest highlight, so skip
@@ -337,7 +361,15 @@ func (m selectModel) View() tea.View {
 	}
 
 	dot := aglyph(" · ", " - ")
-	title := "Select to " + m.spec.Verb + dot + fmt.Sprintf("%d selected", m.countSelected())
+	var title string
+	if m.spec.ReadOnly {
+		title = m.spec.Title
+		if title == "" {
+			title = "View"
+		}
+	} else {
+		title = "Select to " + m.spec.Verb + dot + fmt.Sprintf("%d selected", m.countSelected())
+	}
 	if len(m.visible) > page {
 		title += dot + fmt.Sprintf("%d%s%d of %d", m.top+1, aglyph("–", "-"), end, len(m.visible))
 	}
@@ -349,11 +381,20 @@ func (m selectModel) View() tea.View {
 	if m.filtering {
 		out += "\n" + selFilter.Render("/"+m.filter+aglyph("▏", "|"))
 	}
-	foot := aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" + dot + "/ filter"
-	if m.spec.Detail != nil {
-		foot += dot + "i info"
+	var foot string
+	if m.spec.ReadOnly {
+		foot = aglyph("↑↓", "u/d") + " move" + dot + "/ filter"
+		if m.spec.Detail != nil {
+			foot += dot + "i info"
+		}
+		foot += dot + "q quit"
+	} else {
+		foot = aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" + dot + "/ filter"
+		if m.spec.Detail != nil {
+			foot += dot + "i info"
+		}
+		foot += dot + "enter " + m.spec.Verb + dot + "q cancel"
 	}
-	foot += dot + "enter " + m.spec.Verb + dot + "q cancel"
 	out += "\n" + selFoot.Render(foot)
 	return tea.NewView(out)
 }

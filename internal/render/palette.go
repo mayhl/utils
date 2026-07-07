@@ -20,6 +20,7 @@ const (
 	HueName  = "7"  // white      — name / free text
 	HueOK    = "2"  // green      — selected / ok      (status-reserved warm)
 	HueWarn  = "3"  // yellow     — filter / warn      (status-reserved warm)
+	HueErr   = "1"  // red        — error / fail       (status-reserved warm)
 	HueDim   = "8"  // hi-black   — frames, help, chrome
 )
 
@@ -32,6 +33,7 @@ var ansiFg = map[string]text.Color{
 	HueName:  text.FgWhite,
 	HueOK:    text.FgGreen,
 	HueWarn:  text.FgYellow,
+	HueErr:   text.FgRed,
 	HueDim:   text.FgHiBlack,
 }
 

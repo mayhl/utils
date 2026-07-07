@@ -1,0 +1,44 @@
+package cli
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mayhl/mayhl_utils/internal/render"
+)
+
+// TestLogSelectRows checks the viewer row adaptation: cell layout, tier glyph+hue,
+// the blue-time / magenta-scope hues, the raw-stamp fallback, and a stable row ID.
+func TestLogSelectRows(t *testing.T) {
+	rows := []render.LogRow{
+		{Time: time.Date(2026, 7, 6, 9, 12, 0, 0, time.Local), Level: "ERROR", Scope: "job", Msg: "cancelled"},
+		{RawTS: "bogus", Level: "OK", Scope: "cp", Msg: "done"}, // zero Time → RawTS shown
+	}
+	got := logSelectRows(rows)
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+
+	r0 := got[0]
+	if r0.Cells[1] != "✗" || r0.Hues[1] != render.HueErr {
+		t.Errorf("ERROR glyph/hue = %q/%q, want ✗/%s", r0.Cells[1], r0.Hues[1], render.HueErr)
+	}
+	if !strings.HasPrefix(r0.Cells[0], "07-06 09:12:00") {
+		t.Errorf("time cell = %q, want 07-06 09:12:00…", r0.Cells[0])
+	}
+	if r0.Cells[2] != "job" || r0.Cells[3] != "cancelled" {
+		t.Errorf("scope/msg = %q/%q", r0.Cells[2], r0.Cells[3])
+	}
+	if r0.Hues[0] != render.HueLoc || r0.Hues[2] != render.HueUser {
+		t.Errorf("time/scope hue = %q/%q, want %s/%s", r0.Hues[0], r0.Hues[2], render.HueLoc, render.HueUser)
+	}
+	if !strings.Contains(r0.ID, "cancelled") {
+		t.Errorf("row ID should include the message: %q", r0.ID)
+	}
+
+	r1 := got[1] // zero-time OK row → RawTS + green ✓
+	if r1.Cells[0] != "bogus" || r1.Cells[1] != "✓" || r1.Hues[1] != render.HueOK {
+		t.Errorf("zero-time OK row = cells %v hues %v", r1.Cells, r1.Hues)
+	}
+}

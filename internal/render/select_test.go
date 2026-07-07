@@ -58,6 +58,21 @@ func TestRefreshHonorsFilter(t *testing.T) {
 	}
 }
 
+// A read-only (viewer) model must render without panicking through the read-only
+// branches (blank marks, viewer title/footer) and carry no selection.
+func TestSelectReadOnlyViewRenders(t *testing.T) {
+	spec := SelectSpec{
+		ReadOnly: true, Title: "Event log",
+		Columns: []string{"TIME", "MSG"},
+		Fetch:   func() []SelectRow { return nil },
+	}
+	m := newSelectModel(spec, []SelectRow{row("1", "09:12", "hi"), row("2", "09:13", "bye")})
+	_ = m.View() // must not panic on the read-only rendering branches
+	if len(m.selected) != 0 {
+		t.Errorf("read-only model should carry no selection, got %v", m.selected)
+	}
+}
+
 // A detailMsg opens the inspect overlay; a blank fetch result falls back to a notice
 // so the overlay is never empty.
 func TestDetailMsgOpensOverlay(t *testing.T) {
