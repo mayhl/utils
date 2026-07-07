@@ -14,7 +14,7 @@ func shellInitCmd() *cobra.Command {
 		Short: "Emit shell integration to eval at startup.",
 		Long: "Print the shell integration generated from config.toml — a per-node\n" +
 			"dispatcher for every configured node. Add to your shell rc:\n\n" +
-			"    eval \"$(mu shell-init)\"\n\n" +
+			"    eval \"$(mu setup shell-init)\"\n\n" +
 			"Then, per node (e.g. hpc2):\n" +
 			"    hpc2              connect (ssh login)\n" +
 			"    hpc2 push <l> <r> copy local → hpc2\n" +

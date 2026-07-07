@@ -33,6 +33,19 @@ func Root() *cobra.Command {
 	}
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
-	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), shellInitCmd(), logCmd(), doctorCmd(), psCmd())
+	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd())
+	// shell-init and completion moved under `setup`; keep them reachable at the root
+	// as HIDDEN aliases so existing rc lines (`eval "$(mu shell-init)"`, `mu completion
+	// zsh`) don't break. Cobra's default completion command stays functional, just
+	// hidden from the root menu.
+	root.AddCommand(hidden(shellInitCmd()))
+	root.CompletionOptions.HiddenDefaultCmd = true
 	return root
+}
+
+// hidden marks a command hidden (kept functional, dropped from help) — for the
+// root-level aliases of commands whose home is now a submodule.
+func hidden(c *cobra.Command) *cobra.Command {
+	c.Hidden = true
+	return c
 }

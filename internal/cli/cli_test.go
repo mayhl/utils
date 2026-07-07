@@ -96,9 +96,26 @@ func TestRootHelpRuns(t *testing.T) {
 		t.Fatalf("mu --help: %v", err)
 	}
 	out := buf.String()
-	for _, name := range []string{"cp", "sshfs", "tar", "hpc", "shell-init"} {
+	for _, name := range []string{"cp", "sshfs", "tar", "hpc", "setup"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("--help output missing %q:\n%s", name, out)
 		}
+	}
+}
+
+// TestSetupRelocation checks completion/shell-init moved under `setup` while the
+// root-level aliases stay reachable (hidden) so existing rc lines don't break.
+func TestSetupRelocation(t *testing.T) {
+	root := Root()
+	for _, sub := range []string{"completion", "shell-init"} {
+		c, _, err := root.Find([]string{"setup", sub})
+		if err != nil || c.Name() != sub {
+			t.Errorf("mu setup %s missing: %v", sub, err)
+		}
+	}
+	// The root shell-init alias still resolves but is hidden from help.
+	c, _, err := root.Find([]string{"shell-init"})
+	if err != nil || !c.Hidden {
+		t.Errorf("hidden root shell-init alias missing or not hidden: %v (hidden=%v)", err, c != nil && c.Hidden)
 	}
 }
