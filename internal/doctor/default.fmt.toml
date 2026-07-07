@@ -1,0 +1,17 @@
+# mu doctor fmt — built-in default of the declared mise "fmt" tier (the formatter /
+# linter set mu's toolchain ships, behind the git hook and `mu fmt`). Embedded in the
+# binary so `mu doctor fmt` is self-contained. To customize WITHOUT recompiling, dump
+# this and edit the copy — when that file exists it fully REPLACES this default:
+#   mu doctor fmt --dump-config > ~/.config/mu/config.fmt.toml
+
+[tools]
+# formatters / linters — prebuilt binaries (no runtime backend)
+gofumpt = "0.10.0"
+golangci-lint = "2.12.2"
+shfmt = "3.13.1"
+shellcheck = "0.11.0"
+stylua = "2.5.2"
+ruff = "0.15.20"
+# formatters via the python backend (pipx, uv-backed)
+"pipx:fprettify" = "0.3.7"
+"pipx:cmakelang" = "0.6.13" # provides cmake-format

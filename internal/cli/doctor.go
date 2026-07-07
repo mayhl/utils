@@ -90,15 +90,23 @@ func doctorCmd() *cobra.Command {
 // doctorFmtCmd is the `mu doctor fmt` module: the formatter/linter/debug/LSP
 // matrix, each cell tagged by source and judged tier-aware (see doctor.FmtMatrix).
 func doctorFmtCmd() *cobra.Command {
-	return &cobra.Command{
+	var dumpConfig bool
+	c := &cobra.Command{
 		Use:   "fmt",
 		Short: "Formatter/linter/debug/LSP matrix (mise enforced vs Mason editor).",
 		Long: "Show the formatter/linter/debug/LSP stack as a language × role matrix, each\n" +
 			"cell tagged by source: mise (the enforced fmt tier behind the git hook and\n" +
 			"`mu fmt`) vs Mason (nvim's editor copy). Verdicts are tier-aware — the mise fmt\n" +
-			"tier is opt-in, so a dormant mise isn't an error and Mason is the backup.",
+			"tier is opt-in, so a dormant mise isn't an error and Mason is the backup.\n\n" +
+			"The declared-tool set is a built-in default embedded in mu; --dump-config prints\n" +
+			"it. To customize without rebuilding, redirect that into ~/.config/mu/config.fmt.toml\n" +
+			"and edit — when present it fully replaces the default.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if dumpConfig {
+				_, err := os.Stdout.Write(doctor.EffectiveFmtConfig())
+				return err
+			}
 			rep := doctor.FmtMatrix()
 
 			cols := []string{"Language"}
@@ -134,7 +142,7 @@ func doctorFmtCmd() *cobra.Command {
 				}
 			}
 			if len(rep.Unknown) > 0 {
-				fmt.Printf("  unclassified in config.fmt.toml: %s\n", strings.Join(rep.Unknown, ", "))
+				fmt.Printf("  unclassified in the fmt config: %s\n", strings.Join(rep.Unknown, ", "))
 			}
 
 			ok, warn, fail := tallyMatrix(rep)
@@ -153,6 +161,8 @@ func doctorFmtCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&dumpConfig, "dump-config", false, "print the effective declared-tool TOML (embedded default, or the ~/.config/mu/config.fmt.toml override)")
+	return c
 }
 
 // fmtBanner is the matrix title: name plus the current fmt-tier mode.

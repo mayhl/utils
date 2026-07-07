@@ -2,18 +2,20 @@ package doctor
 
 // mu doctor fmt — a language × role matrix of the formatter/linter/debug/LSP
 // stack, each cell judged by which source provides the tool. Two stacks are in
-// play: the mise `fmt` tier (config.fmt.toml — the ENFORCEMENT copy behind the git
-// hook and `mu fmt`) and Mason (nvim's EDITOR copy). The fmt tier is opt-in, so a
-// dormant mise is never itself an error: verdicts are tier-aware and Mason is the
+// play: the mise `fmt` tier (an EMBEDDED default declared-tool set, overridable at
+// ~/.config/mu/config.fmt.toml — the ENFORCEMENT copy behind the git hook and
+// `mu fmt`) and Mason (nvim's EDITOR copy). The fmt tier is opt-in, so a dormant
+// mise is never itself an error: verdicts are tier-aware and Mason is the
 // sanctioned backup (see cellStatus).
 //
-// Format/Lint cells are DERIVED from config.fmt.toml (a tool declared there lights
-// its mise badge); the classifier only labels each known tool with its language,
-// role, and Mason package. Debug/LSP (and a couple of linters) have no mise
-// counterpart at all — mise manages no debugger/LSP — so they come from a small
+// Format/Lint cells are DERIVED from the declared-tool config (a tool declared
+// there lights its mise badge); the classifier only labels each known tool with its
+// language, role, and Mason package. Debug/LSP (and a couple of linters) have no
+// mise counterpart at all — mise manages no debugger/LSP — so they come from a small
 // static supplement, Mason-only by nature.
 
 import (
+	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -21,6 +23,12 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 )
+
+// defaultFmtConfig is the built-in declared-tool set, embedded so `mu doctor fmt`
+// works with no external file. A user override (see fmtConfigPath) fully replaces it.
+//
+//go:embed default.fmt.toml
+var defaultFmtConfig []byte
 
 // Role is a tooling column in the fmt matrix.
 type Role int
@@ -132,8 +140,8 @@ type FmtReport struct {
 // (enforced) side, probe Mason for the editor side, and judge each cell tier-aware.
 func FmtMatrix() FmtReport {
 	tierOn := tierActive()
-	path := fmtConfigPath()
-	declared, ok := parseFmtConfig(path)
+	data, path := effectiveFmtConfig()
+	declared, ok := parseFmtConfigBytes(data)
 
 	// Track which classifier tools the config lit up, to flag unknown extras.
 	known := map[string]bool{}
@@ -275,7 +283,9 @@ func tierActive() bool {
 	return false
 }
 
-// fmtConfigPath resolves config.fmt.toml (XDG), overridable for tests.
+// fmtConfigPath resolves the user OVERRIDE path — ~/.config/mu/config.fmt.toml (XDG),
+// or MU_MISE_FMT_CONFIG when set (explicit path, also the test hook). The file need
+// not exist; when it doesn't, the embedded default is used instead.
 func fmtConfigPath() string {
 	if p := os.Getenv("MU_MISE_FMT_CONFIG"); p != "" {
 		return p
@@ -285,17 +295,31 @@ func fmtConfigPath() string {
 		home, _ := os.UserHomeDir()
 		cfg = filepath.Join(home, ".config")
 	}
-	return filepath.Join(cfg, "mise", "config.fmt.toml")
+	return filepath.Join(cfg, "mu", "config.fmt.toml")
 }
 
-// parseFmtConfig reads the [tools] table, returning bare tool name → declared
-// version. Backend prefixes (`pipx:`) and any `@version` request suffix are
-// stripped from the key; the value's version string is kept for drift checks.
-func parseFmtConfig(path string) (map[string]string, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
+// effectiveFmtConfig returns the declared-tool TOML actually in force and a label for
+// its source: the user override when it exists (fully replacing the default), else the
+// embedded built-in. Self-contained — never depends on an external file existing.
+func effectiveFmtConfig() (data []byte, path string) {
+	p := fmtConfigPath()
+	if b, err := os.ReadFile(p); err == nil {
+		return b, p
 	}
+	return defaultFmtConfig, "(built-in default)"
+}
+
+// EffectiveFmtConfig returns the raw TOML of the declared-tool set in force (user
+// override if present, else the embedded default) — for `mu doctor fmt --dump-config`.
+func EffectiveFmtConfig() []byte {
+	data, _ := effectiveFmtConfig()
+	return data
+}
+
+// parseFmtConfigBytes reads the [tools] table from TOML bytes, returning bare tool
+// name → declared version. Backend prefixes (`pipx:`) and any `@version` request
+// suffix are stripped from the key; the value's version string is kept for drift.
+func parseFmtConfigBytes(data []byte) (map[string]string, bool) {
 	var doc struct {
 		Tools map[string]any `toml:"tools"`
 	}
