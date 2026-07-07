@@ -318,7 +318,9 @@ func levelGlyphColor(level string) (string, text.Colors) {
 // LogBlock renders event-log rows as an aligned, date-grouped block for `mu log`: a
 // bold-cyan title, a dim day line whenever the date changes, then one line per event —
 // "<time> <glyph> <scope> <msg>" with the time blue, scope magenta, and the tier glyph
-// carrying the level. Time is time-only; the day header holds the date.
+// carrying the level. Time is time-only; the day header holds the date. An event with a
+// structured payload gets a dim ⊕ marker in the pretty view; in plain mode the raw JSON
+// is appended tab-delimited so it passes through pipes intact.
 func LogBlock(title string, rows []LogRow) string {
 	scopeW := 5
 	for _, r := range rows {
@@ -354,12 +356,20 @@ func LogBlock(title string, rows []LogRow) string {
 		g, col := levelGlyphColor(r.Level)
 		tmCell := fmt.Sprintf("%-8s", tm)
 		scopeCell := fmt.Sprintf("%-*s", scopeW, trunc(r.Scope, scopeW))
+		msg := r.Msg
+		switch {
+		case r.Payload == "":
+		case off:
+			msg += "\t" + r.Payload // plain: pass the raw payload through, tab-delimited and pipe-friendly
+		default:
+			msg += "  " + dim.Sprint(glyph("⊕", "+")) // pretty: a dim marker; the payload shows in -i / --json
+		}
 		if !off {
 			tmCell = tc(HueLoc).Sprint(tmCell)        // blue — time column
 			g = col.Sprint(g)                         // tier color on the glyph
 			scopeCell = tc(HueUser).Sprint(scopeCell) // magenta — scope/tag column
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s  %s  %s\n", tmCell, g, scopeCell, r.Msg))
+		b.WriteString(fmt.Sprintf("  %s  %s  %s  %s\n", tmCell, g, scopeCell, msg))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

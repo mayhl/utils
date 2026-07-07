@@ -18,19 +18,19 @@ import (
 func logCmd() *cobra.Command {
 	var tier, scope, since string
 	var lines int
-	var all, interactive bool
+	var all, interactive, jsonOut bool
 	c := &cobra.Command{
 		Use:   "log",
 		Short: "View the event log (transfers, jobs, big ops).",
 		Long: "Show mu's event log, newest last, grouped by day. Defaults to the last 50\n" +
 			"events (-n to change, --all for the whole log). -i opens a live, scrollable,\n" +
-			"filterable viewer. Subcommands: `write`, `clear`.",
+			"filterable viewer; --json emits the events as NDJSON. Subcommands: `write`, `clear`.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if interactive {
 				return interactiveLog(tier, scope, since)
 			}
-			return viewLog(tier, scope, since, lines, all)
+			return viewLog(tier, scope, since, lines, all, jsonOut)
 		},
 	}
 	f := c.Flags()
@@ -40,6 +40,7 @@ func logCmd() *cobra.Command {
 	f.IntVarP(&lines, "lines", "n", 50, "show only the last N events (0 = all)")
 	f.BoolVar(&all, "all", false, "show the entire log (overrides -n)")
 	f.BoolVarP(&interactive, "interactive", "i", false, "browse in a live, scrollable, filterable viewer")
+	f.BoolVar(&jsonOut, "json", false, "emit events as NDJSON (one record per line, payloads inline)")
 	c.AddCommand(logWriteCmd(), logClearCmd())
 	return c
 }
@@ -151,7 +152,7 @@ func parseLogLine(line string) (logEntry, bool) {
 	return e, true
 }
 
-func viewLog(tier, scope, since string, limit int, all bool) error {
+func viewLog(tier, scope, since string, limit int, all, jsonOut bool) error {
 	tierU := strings.ToUpper(strings.TrimSpace(tier))
 	cutoff, err := sinceCutoff(since)
 	if err != nil {
@@ -160,6 +161,9 @@ func viewLog(tier, scope, since string, limit int, all bool) error {
 	rows, err := readLog(tierU, scope, cutoff)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if jsonOut { // machine-readable: no log yet ⇒ empty output, not a notice
+				return nil
+			}
 			render.Info("no events yet (" + render.EventLogPath() + ")")
 			return nil
 		}
@@ -168,7 +172,9 @@ func viewLog(tier, scope, since string, limit int, all bool) error {
 
 	total := len(rows)
 	if total == 0 {
-		render.Info("no matching events")
+		if !jsonOut {
+			render.Info("no matching events")
+		}
 		return nil
 	}
 	title := fmt.Sprintf("Event log · %d event%s", total, plural(total))
@@ -176,7 +182,39 @@ func viewLog(tier, scope, since string, limit int, all bool) error {
 		rows = rows[total-limit:]
 		title = fmt.Sprintf("Event log · last %d of %d", limit, total)
 	}
+	if jsonOut {
+		return emitLogJSON(rows)
+	}
 	fmt.Println(render.LogBlock(title, rows))
+	return nil
+}
+
+// logJSONRecord is one `mu log --json` NDJSON record — a machine-readable mirror of a
+// LogRow. Payload embeds the stored JSON object verbatim (omitted when absent or, as a
+// guard, unparseable); the event id lives inside it under "id".
+type logJSONRecord struct {
+	TS      string          `json:"ts"`
+	Level   string          `json:"level"`
+	Scope   string          `json:"scope,omitempty"`
+	Msg     string          `json:"msg"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// emitLogJSON writes rows as NDJSON (one object per line) to stdout — the append-only
+// log's natural machine form, jq/stream-friendly. Encoder.Encode adds each line's newline.
+func emitLogJSON(rows []render.LogRow) error {
+	w := bufio.NewWriter(os.Stdout)
+	defer func() { _ = w.Flush() }()
+	enc := json.NewEncoder(w)
+	for _, r := range rows {
+		rec := logJSONRecord{TS: r.RawTS, Level: r.Level, Scope: r.Scope, Msg: r.Msg}
+		if r.Payload != "" && json.Valid([]byte(r.Payload)) {
+			rec.Payload = json.RawMessage(r.Payload)
+		}
+		if err := enc.Encode(rec); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
