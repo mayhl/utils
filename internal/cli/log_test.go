@@ -42,3 +42,23 @@ func TestLogSelectRows(t *testing.T) {
 		t.Errorf("zero-time OK row = cells %v hues %v", r1.Cells, r1.Hues)
 	}
 }
+
+// TestParseLogLinePayload checks the reader splits the optional tab-delimited payload
+// off the message, and leaves a plain line's message intact.
+func TestParseLogLinePayload(t *testing.T) {
+	e, ok := parseLogLine("[2026-07-07T00:00:00] [OK   ] [cp] done\t{\"id\":\"abc\",\"n\":3}")
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	if e.msg != "done" {
+		t.Errorf("msg = %q, want %q (payload stripped)", e.msg, "done")
+	}
+	if !strings.Contains(e.payload, `"id":"abc"`) {
+		t.Errorf("payload = %q, want the JSON suffix", e.payload)
+	}
+
+	e2, _ := parseLogLine("[2026-07-07T00:00:00] [INFO ] [cp] just a message")
+	if e2.payload != "" || e2.msg != "just a message" {
+		t.Errorf("no-payload parse = msg %q payload %q", e2.msg, e2.payload)
+	}
+}

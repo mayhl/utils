@@ -2,6 +2,9 @@ package render
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,14 +20,56 @@ import (
 const LevelOK = slog.Level(2)
 
 // eventLogPath is the curated event log (`mu`'s Step/Event/`mu log write`), read by
-// `mu log`. Distinct from the shell framework's framework.log (debug chatter).
-// MU_LOG_FILE overrides (config.toml [log].file wires it; tests set it directly).
+// `mu log`. It lives under XDG_STATE_HOME (logs/history that persist), not ~/.cache
+// (disposable). MU_LOG_FILE overrides (config.toml [log].file wires it; tests set it).
 func eventLogPath() string {
 	if p := os.Getenv("MU_LOG_FILE"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		home, _ := os.UserHomeDir()
+		state = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(state, "mayhl_utils", "events.log")
+}
+
+// legacyEventLogPath is the pre-2026-07 location under ~/.cache, migrated once so old
+// history follows the move. "" when MU_LOG_FILE is set (explicit path → no migration)
+// or HOME is unknown.
+func legacyEventLogPath() string {
+	if os.Getenv("MU_LOG_FILE") != "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
 	return filepath.Join(home, ".cache", "mayhl_utils", "events.log")
+}
+
+var migrateOnce sync.Once
+
+// EnsureEventLog migrates a pre-2026-07 ~/.cache event log into the state dir once, so
+// existing history follows the location move. Best-effort and idempotent; a no-op when
+// MU_LOG_FILE is set or the new file already exists. Logging must never break the tool.
+func EnsureEventLog() {
+	migrateOnce.Do(func() {
+		newPath := eventLogPath()
+		if _, err := os.Stat(newPath); err == nil {
+			return // new log already present
+		}
+		old := legacyEventLogPath()
+		if old == "" {
+			return
+		}
+		if _, err := os.Stat(old); err != nil {
+			return // nothing to migrate
+		}
+		if os.MkdirAll(filepath.Dir(newPath), 0o755) == nil {
+			_ = os.Rename(old, newPath)
+		}
+	})
 }
 
 // houseHandler is the single log sink: renders house-style tiers to stderr and
@@ -39,6 +84,7 @@ type houseHandler struct {
 
 func newHouseHandler(scope string) *houseHandler {
 	h := &houseHandler{scope: scope, mu: &sync.Mutex{}}
+	EnsureEventLog() // migrate a legacy ~/.cache log into place before we open
 	path := eventLogPath()
 	if os.MkdirAll(filepath.Dir(path), 0o755) == nil {
 		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
@@ -53,19 +99,22 @@ func (h *houseHandler) Enabled(context.Context, slog.Level) bool { return true }
 func (h *houseHandler) Handle(_ context.Context, r slog.Record) error {
 	scope := h.scope
 	quiet := false // log-only: skip the terminal render (command owns its own UX)
+	payload := ""
 	r.Attrs(func(a slog.Attr) bool {
 		switch a.Key {
 		case "scope":
 			scope = a.Value.String()
 		case "quiet":
 			quiet = a.Value.Bool()
+		case "payload":
+			payload = a.Value.String()
 		}
 		return true
 	})
 	if !quiet {
 		renderTier(r.Level, r.Message)
 	}
-	h.append(r.Time, r.Level, scope, r.Message)
+	h.append(r.Time, r.Level, scope, r.Message, payload)
 	return nil
 }
 
@@ -83,14 +132,22 @@ func (h *houseHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *houseHandler) WithGroup(string) slog.Handler { return h }
 
-func (h *houseHandler) append(t time.Time, level slog.Level, scope, msg string) {
+// append writes one event line: `[ts] [level] [scope] msg`, plus an optional
+// tab-delimited JSON payload suffix (`…msg\t{json}`) when present. Old readers see
+// the human message; structured readers split on the tab. Messages are single-line
+// and tab-free, so the first tab cleanly delimits the payload.
+func (h *houseHandler) append(t time.Time, level slog.Level, scope, msg, payload string) {
 	if h.file == nil {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, _ = fmt.Fprintf(h.file, "[%s] [%-5s] [%s] %s\n",
+	line := fmt.Sprintf("[%s] [%-5s] [%s] %s",
 		t.Format("2006-01-02T15:04:05"), levelName(level), scope, msg)
+	if payload != "" {
+		line += "\t" + payload
+	}
+	_, _ = fmt.Fprintln(h.file, line)
 }
 
 func levelName(l slog.Level) string {
@@ -164,11 +221,65 @@ func (x *Logger) Err(msg string)  { x.l.Log(context.Background(), slog.LevelErro
 // EventLogPath is the curated event-log file that `mu log` reads.
 func EventLogPath() string { return eventLogPath() }
 
+// emit is the shared structured-event core: it logs the record (and renders unless
+// quiet) with an optional payload, returning the event id ("" when no payload). The id
+// is written into the payload under "id" unless the caller already set one (letting a
+// caller pass a shared correlation id).
+func emit(level slog.Level, scope, msg string, quiet bool, payload map[string]any) string {
+	attrs := []slog.Attr{slog.String("scope", scope), slog.Bool("quiet", quiet)}
+	id := ""
+	if len(payload) > 0 {
+		if s, ok := payload["id"].(string); ok && s != "" {
+			id = s // caller-supplied correlation id
+		} else {
+			id = newEventID()
+		}
+		rec := make(map[string]any, len(payload)+1)
+		for k, v := range payload {
+			rec[k] = v
+		}
+		rec["id"] = id
+		if b, err := json.Marshal(rec); err == nil {
+			attrs = append(attrs, slog.String("payload", string(b)))
+		}
+	}
+	base().LogAttrs(context.Background(), level, msg, attrs...)
+	return id
+}
+
 // event appends a log-only record (quiet — no terminal render) for commands that
 // print their own richer UX (progress bars, summaries) but still want a durable entry.
-func event(level slog.Level, scope, msg string) {
-	base().LogAttrs(context.Background(), level, msg,
-		slog.String("scope", scope), slog.Bool("quiet", true))
+func event(level slog.Level, scope, msg string) { emit(level, scope, msg, true, nil) }
+
+// Emit appends a log-only STRUCTURED event: a message plus an optional JSON payload
+// (nil = none), returning the event id ("" when no payload). The id lands in the
+// payload under "id" (a caller-set "id" is kept as a correlation key). level is a
+// name: info | ok | warn | error.
+func Emit(scope, level, msg string, payload map[string]any) string {
+	return emit(levelFromString(level), scope, msg, true, payload)
+}
+
+// levelFromString maps a level name to its slog level (default Info).
+func levelFromString(s string) slog.Level {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "OK":
+		return LevelOK
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERR", "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// newEventID returns a short random hex id for a structured event (its correlation key).
+func newEventID() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // EventInfo/OK/Warn/Err append a log-only event under the given scope.
@@ -181,11 +292,12 @@ func EventErr(scope, msg string)  { event(slog.LevelError, scope, msg) }
 // parsed line. Time is the parsed timestamp (zero → RawTS shown, and the row is
 // grouped under no date header).
 type LogRow struct {
-	Time  time.Time
-	RawTS string
-	Level string
-	Scope string
-	Msg   string
+	Time    time.Time
+	RawTS   string
+	Level   string
+	Scope   string
+	Msg     string
+	Payload string // raw JSON payload suffix; "" when the event carries none
 }
 
 // levelGlyphColor maps a level name to its single-column house glyph (ASCII-safe)
@@ -261,17 +373,8 @@ func logTimeParts(r LogRow) (day, tm string) {
 	return r.Time.Format("2 Jan 2006"), r.Time.Format("15:04:05")
 }
 
-// WriteEvent renders + logs an event chosen by a level string (for `mu log write`).
-func WriteEvent(scope, levelStr, msg string) {
-	l := Scoped(scope)
-	switch strings.ToUpper(strings.TrimSpace(levelStr)) {
-	case "OK":
-		l.OK(msg)
-	case "WARN", "WARNING":
-		l.Warn(msg)
-	case "ERR", "ERROR":
-		l.Err(msg)
-	default:
-		l.Info(msg)
-	}
+// WriteEvent renders + logs an event chosen by a level string (for `mu log write`),
+// with an optional payload; returns the event id ("" when no payload).
+func WriteEvent(scope, level, msg string, payload map[string]any) string {
+	return emit(levelFromString(level), scope, msg, false, payload)
 }

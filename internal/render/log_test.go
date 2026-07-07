@@ -93,6 +93,35 @@ func TestLogBlockGroupsByDay(t *testing.T) {
 	}
 }
 
+// TestEmitPayload checks the structured-event write path: a payload is stored as the
+// inline tab-suffix with the id injected, and a payload-less emit adds no suffix.
+func TestEmitPayload(t *testing.T) {
+	logf := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv("MU_LOG_FILE", logf)
+	ResetLoggerForTest()
+
+	id := Emit("cp", "ok", "copied", map[string]any{"n": 3})
+	if id == "" {
+		t.Fatal("Emit with payload returned an empty id")
+	}
+	if got := Emit("cp", "info", "plain", nil); got != "" {
+		t.Errorf("Emit without payload returned id %q, want empty", got)
+	}
+
+	got := readFile(t, logf)
+	if !strings.Contains(got, "copied\t{") {
+		t.Errorf("structured line missing tab-delimited payload:\n%s", got)
+	}
+	if !strings.Contains(got, `"id":"`+id+`"`) || !strings.Contains(got, `"n":3`) {
+		t.Errorf("payload JSON missing id/fields:\n%s", got)
+	}
+	for _, ln := range strings.Split(strings.TrimSpace(got), "\n") {
+		if strings.Contains(ln, "plain") && strings.Contains(ln, "\t") {
+			t.Errorf("no-payload line should carry no tab suffix: %q", ln)
+		}
+	}
+}
+
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)

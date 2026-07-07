@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -44,17 +45,29 @@ func logCmd() *cobra.Command {
 }
 
 func logWriteCmd() *cobra.Command {
-	var scope string
+	var scope, payloadJSON string
 	c := &cobra.Command{
 		Use:   "write <level> <msg>",
 		Short: "Append an event to the log (for external scripts).",
-		Args:  cobra.MinimumNArgs(2),
+		Long: "Append an event. --payload attaches a JSON object as a structured payload\n" +
+			"(stored inline on the line); the assigned event id is printed to stdout.",
+		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			render.WriteEvent(scope, args[0], strings.Join(args[1:], " "))
+			var payload map[string]any
+			if strings.TrimSpace(payloadJSON) != "" {
+				if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+					return fmt.Errorf("--payload must be a JSON object: %w", err)
+				}
+			}
+			id := render.WriteEvent(scope, args[0], strings.Join(args[1:], " "), payload)
+			if id != "" {
+				fmt.Println(id)
+			}
 			return nil
 		},
 	}
 	c.Flags().StringVarP(&scope, "scope", "s", "ext", "event scope tag")
+	c.Flags().StringVar(&payloadJSON, "payload", "", "attach a JSON object as a structured payload")
 	return c
 }
 
@@ -93,6 +106,7 @@ type logEntry struct {
 	rawTS      string
 	level      string
 	scope, msg string
+	payload    string // raw JSON suffix, "" when none
 }
 
 var (
@@ -125,6 +139,11 @@ func parseLogLine(line string) (logEntry, bool) {
 		e.msg = "[" + fields[2] + "] " + rest // third bracket was part of the message
 	default:
 		e.msg = rest
+	}
+	// Optional structured payload: a trailing tab-delimited JSON suffix (…msg\t{json}).
+	if i := strings.IndexByte(e.msg, '\t'); i >= 0 {
+		e.payload = strings.TrimSpace(e.msg[i+1:])
+		e.msg = e.msg[:i]
 	}
 	if ts, err := time.ParseInLocation("2006-01-02T15:04:05", e.rawTS, time.Local); err == nil {
 		e.t = ts
@@ -165,6 +184,7 @@ func viewLog(tier, scope, since string, limit int, all bool) error {
 // already upper-cased; cutoff zero means no since-bound. A missing log surfaces
 // os.ErrNotExist so callers can distinguish "no log yet" from "no matches".
 func readLog(tierU, scope string, cutoff time.Time) ([]render.LogRow, error) {
+	render.EnsureEventLog() // follow a legacy ~/.cache log to the state dir
 	f, err := os.Open(render.EventLogPath())
 	if err != nil {
 		return nil, err
@@ -188,7 +208,7 @@ func readLog(tierU, scope string, cutoff time.Time) ([]render.LogRow, error) {
 		if !cutoff.IsZero() && !e.t.IsZero() && e.t.Before(cutoff) {
 			continue
 		}
-		rows = append(rows, render.LogRow{Time: e.t, RawTS: e.rawTS, Level: e.level, Scope: e.scope, Msg: e.msg})
+		rows = append(rows, render.LogRow{Time: e.t, RawTS: e.rawTS, Level: e.level, Scope: e.scope, Msg: e.msg, Payload: e.payload})
 	}
 	return rows, sc.Err()
 }
