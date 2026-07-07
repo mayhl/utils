@@ -170,7 +170,7 @@ func fmtBanner(tierOn bool) string {
 	if tierOn {
 		return "Formatter / Linter Matrix\nfmt tier: ON — mise enforced (git hook + mu fmt)"
 	}
-	return "Formatter / Linter Matrix\nfmt tier: OFF — Mason active · MU_MISE_FMT=1 to enforce via mise"
+	return "Formatter / Linter Matrix\nfmt tier: OFF — Mason active · MU_MODULES=fmt to enforce via mise"
 }
 
 // tallyMatrix counts defined cells by verdict for the event summary.

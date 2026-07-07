@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	"github.com/mayhl/mayhl_utils/internal/modules"
 )
 
 // defaultFmtConfig is the built-in declared-tool set, embedded so `mu doctor fmt`
@@ -269,10 +271,11 @@ func cellStatus(c *FmtCell, tierOn bool) Status {
 	}
 }
 
-// tierActive reports whether the mise fmt tier is on (MU_MISE_FMT set, or MISE_ENV
-// naming the fmt env) — the same opt-in the shell exports.
+// tierActive reports whether the mise fmt tier is on (fmt listed in MU_MODULES, or
+// MISE_ENV naming the fmt env) — the same opt-in the shell exports. MU_MODULES=fmt
+// replaces the former standalone MU_MISE_FMT toggle.
 func tierActive() bool {
-	if os.Getenv("MU_MISE_FMT") != "" {
+	if modules.Enabled("fmt") {
 		return true
 	}
 	for _, e := range strings.Split(os.Getenv("MISE_ENV"), ",") {

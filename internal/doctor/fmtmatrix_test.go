@@ -130,7 +130,7 @@ sometool = "1.0.0"
 
 	t.Setenv("MU_MISE_FMT_CONFIG", cfg)
 	t.Setenv("MU_MASON_DIR", mason)
-	t.Setenv("MU_MISE_FMT", "") // tier off
+	t.Setenv("MU_MODULES", "") // fmt tier off
 	t.Setenv("MISE_ENV", "")
 
 	rep := FmtMatrix()
