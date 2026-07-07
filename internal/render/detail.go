@@ -88,6 +88,43 @@ func newDetailTable(d JobDetailView) table.Writer {
 	return t
 }
 
+// KVField is one label/value line for the generic KVCard. Hue is a palette hue key
+// (HueUser, HueLoc, …); "" leaves the value at the default fg. An empty Value drops the row.
+type KVField struct {
+	Label, Value, Hue string
+}
+
+// KVCard renders a generic label/value detail card in the house rounded box — the
+// domain-free sibling of JobDetailCard, used by `mu log -i`'s inspect overlay. Empty
+// values are dropped, labels are dim, and the value column wraps to the terminal so a
+// long payload or path flows onto continuation lines instead of overflowing the card.
+// title may carry its own ANSI (the caller styles it); an empty title omits the header.
+func KVCard(title string, fields []KVField) string {
+	t := table.NewWriter()
+	applyStyle(t)
+	if strings.TrimSpace(title) != "" {
+		t.SetTitle(title)
+	}
+	labelW := 0
+	for _, f := range fields {
+		if strings.TrimSpace(f.Value) == "" {
+			continue
+		}
+		labelW = max(labelW, len(f.Label))
+		v := f.Value
+		if f.Hue != "" {
+			v = tc(f.Hue).Sprint(v)
+		}
+		t.AppendRow(table.Row{f.Label, v})
+	}
+	cols := []table.ColumnConfig{{Number: 1, Colors: tc(HueDim)}} // labels dim
+	if tw := termWidth(); tw > 0 {
+		cols = append(cols, table.ColumnConfig{Number: 2, WidthMax: max(20, tw-labelW-7), WidthMaxEnforcer: text.WrapText})
+	}
+	t.SetColumnConfigs(cols)
+	return t.Render()
+}
+
 // detailTitle is the card's header: "Job <short> · <state badge> · <cluster>".
 func detailTitle(d JobDetailView) string {
 	id := d.ID

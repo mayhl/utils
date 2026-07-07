@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -279,21 +280,156 @@ func interactiveLog(tier, scope, since string) error {
 		render.Info("no matching events")
 		return nil
 	}
+	// rowByID lets the `i` inspect overlay recover a row's full detail (untruncated
+	// message + payload) from the SelectRow id. Fetch (refresh tick) and Detail (inspect)
+	// run on separate bubbletea command goroutines, so the map is swapped whole under mu.
+	var mu sync.Mutex
+	rowByID := map[string]render.LogRow{}
 	return render.Viewer(render.SelectSpec{
 		Title:    "Event log",
 		Columns:  []string{"TIME", "LVL", "SCOPE", "MESSAGE"},
 		Interval: 2 * time.Second,
 		Fetch: func() []render.SelectRow {
 			rows, _ := readLog(tierU, scope, cutoff) // tolerate a blip; keep the last frame
-			return logSelectRows(rows)
+			sel := logSelectRows(rows)
+			next := make(map[string]render.LogRow, len(rows))
+			for i, r := range rows {
+				next[sel[i].ID] = r
+			}
+			mu.Lock()
+			rowByID = next
+			mu.Unlock()
+			return sel
+		},
+		Detail: func(id string) string {
+			mu.Lock()
+			r, ok := rowByID[id]
+			mu.Unlock()
+			if !ok {
+				return ""
+			}
+			return logDetailCard(r)
 		},
 	})
+}
+
+// logDetailCard renders one event as the house KV card for the `i` inspect overlay: the
+// row's own fields untruncated, plus the pretty-printed JSON payload when the event
+// carries one. Level shows its tier glyph + name in the tier hue; the payload is dropped
+// when empty (an over-long message alone still justifies the card).
+func logDetailCard(r render.LogRow) string {
+	ts := r.RawTS
+	if !r.Time.IsZero() {
+		ts = r.Time.Format("2006-01-02 15:04:05")
+	}
+	g, hue := logLevelGlyphHue(r.Level)
+	lvl := r.Level
+	if lvl == "" {
+		lvl = "INFO"
+	}
+	fields := []render.KVField{
+		{Label: "Time", Value: ts, Hue: render.HueLoc},
+		{Label: "Level", Value: g + " " + lvl, Hue: hue},
+		{Label: "Scope", Value: r.Scope, Hue: render.HueUser},
+		{Label: "Message", Value: r.Msg},
+	}
+	if r.Payload != "" {
+		if pf := payloadFields(r.Payload); len(pf) > 0 {
+			fields = append(fields, pf...) // unwrap {k:v} into first-class rows
+		} else {
+			fields = append(fields, render.KVField{Label: "Payload", Value: prettyJSON(r.Payload)}) // non-object: raw
+		}
+	}
+	return render.KVCard("Event", fields)
+}
+
+// payloadFields unwraps a JSON-object payload into one card row per key (id hoisted to
+// the top as the correlation key), preserving the stored key order. Values keep their
+// exact form (json.Number → no float noise; nested object/array → compact JSON). Returns
+// nil when the payload isn't a JSON object, so the caller shows the raw blob instead.
+func payloadFields(raw string) []render.KVField {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	if tok, err := dec.Token(); err != nil {
+		return nil
+	} else if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil
+	}
+	var idField *render.KVField
+	var rest []render.KVField
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil
+		}
+		key, _ := keyTok.(string)
+		var val any
+		if err := dec.Decode(&val); err != nil {
+			return nil
+		}
+		f := render.KVField{Label: payloadLabel(key), Value: formatPayloadValue(val)}
+		if key == "id" {
+			idField = &f
+			continue
+		}
+		rest = append(rest, f)
+	}
+	if idField != nil {
+		return append([]render.KVField{*idField}, rest...)
+	}
+	return rest
+}
+
+// payloadLabel titles a payload key for its card row — the well-known "id" acronym is
+// upper-cased (matching the other cards); any other key shows verbatim.
+func payloadLabel(key string) string {
+	if key == "id" {
+		return "ID"
+	}
+	return key
+}
+
+// formatPayloadValue renders a decoded payload value as a card cell: strings/numbers/
+// bools verbatim (json.Number keeps ints exact — no 1.04e+07), a nested object/array as
+// compact JSON.
+func formatPayloadValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		if b, err := json.Marshal(t); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+// prettyJSON indents a raw JSON payload for the inspect card's fallback row (used when
+// the payload isn't a JSON object); a malformed value passes through verbatim.
+func prettyJSON(raw string) string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return raw
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return string(b)
 }
 
 // logSelectRows adapts log rows into viewer rows: TIME (date+time — the flat view
 // has no day headers) · LVL glyph · SCOPE · MESSAGE. The row ID is the stamp+message
 // so the cursor holds its place across a live refresh. Hues: time blue, glyph
-// tier-colored, scope magenta, message default (matches the static view).
+// tier-colored, scope magenta, message default (matches the static view). A payloaded
+// event leads its message with a ⊕ marker (a fixed 2-col slot so the column stays
+// aligned) — it flags which rows reward `i`, and leading survives the right-side crop.
 func logSelectRows(rows []render.LogRow) []render.SelectRow {
 	out := make([]render.SelectRow, len(rows))
 	for i, r := range rows {
@@ -302,9 +438,13 @@ func logSelectRows(rows []render.LogRow) []render.SelectRow {
 			tm = r.Time.Format("01-02 15:04:05")
 		}
 		g, hue := logLevelGlyphHue(r.Level)
+		mark := "  "
+		if r.Payload != "" {
+			mark = "⊕ "
+		}
 		out[i] = render.SelectRow{
 			ID:    tm + " " + r.Msg,
-			Cells: []string{tm, g, r.Scope, r.Msg},
+			Cells: []string{tm, g, r.Scope, mark + r.Msg},
 			Hues:  []string{render.HueLoc, hue, render.HueUser, ""},
 		}
 	}

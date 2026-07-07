@@ -9,15 +9,17 @@ import (
 )
 
 // TestLogSelectRows checks the viewer row adaptation: cell layout, tier glyph+hue,
-// the blue-time / magenta-scope hues, the raw-stamp fallback, and a stable row ID.
+// the blue-time / magenta-scope hues, the raw-stamp fallback, a stable row ID, and the
+// leading ⊕ payload marker (2-col slot, so a payload-less row keeps the alignment).
 func TestLogSelectRows(t *testing.T) {
 	rows := []render.LogRow{
 		{Time: time.Date(2026, 7, 6, 9, 12, 0, 0, time.Local), Level: "ERROR", Scope: "job", Msg: "cancelled"},
 		{RawTS: "bogus", Level: "OK", Scope: "cp", Msg: "done"}, // zero Time → RawTS shown
+		{Time: time.Date(2026, 7, 6, 9, 13, 0, 0, time.Local), Level: "OK", Scope: "sshfs", Msg: "mounted", Payload: `{"id":"abc"}`},
 	}
 	got := logSelectRows(rows)
-	if len(got) != 2 {
-		t.Fatalf("got %d rows, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("got %d rows, want 3", len(got))
 	}
 
 	r0 := got[0]
@@ -27,7 +29,7 @@ func TestLogSelectRows(t *testing.T) {
 	if !strings.HasPrefix(r0.Cells[0], "07-06 09:12:00") {
 		t.Errorf("time cell = %q, want 07-06 09:12:00…", r0.Cells[0])
 	}
-	if r0.Cells[2] != "job" || r0.Cells[3] != "cancelled" {
+	if r0.Cells[2] != "job" || r0.Cells[3] != "  cancelled" { // no payload → 2-space slot
 		t.Errorf("scope/msg = %q/%q", r0.Cells[2], r0.Cells[3])
 	}
 	if r0.Hues[0] != render.HueLoc || r0.Hues[2] != render.HueUser {
@@ -40,6 +42,14 @@ func TestLogSelectRows(t *testing.T) {
 	r1 := got[1] // zero-time OK row → RawTS + green ✓
 	if r1.Cells[0] != "bogus" || r1.Cells[1] != "✓" || r1.Hues[1] != render.HueOK {
 		t.Errorf("zero-time OK row = cells %v hues %v", r1.Cells, r1.Hues)
+	}
+
+	r2 := got[2] // payloaded row → leading ⊕ marker, raw ID unmarked
+	if r2.Cells[3] != "⊕ mounted" {
+		t.Errorf("payload marker cell = %q, want %q", r2.Cells[3], "⊕ mounted")
+	}
+	if strings.Contains(r2.ID, "⊕") {
+		t.Errorf("row ID should stay unmarked: %q", r2.ID)
 	}
 }
 
