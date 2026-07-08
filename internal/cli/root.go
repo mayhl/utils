@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 
+	"github.com/mayhl/mayhl_utils/internal/modules"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
@@ -34,6 +35,11 @@ func Root() *cobra.Command {
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
 	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd())
+	// Opt-in modules (MU_MODULES): core stays always-on; new modules register only
+	// when listed, so nothing existing changes for a user who hasn't opted in.
+	if modules.Enabled("git") {
+		root.AddCommand(gitCmd())
+	}
 	// shell-init and completion moved under `setup`; keep them reachable at the root
 	// as HIDDEN aliases so existing rc lines (`eval "$(mu shell-init)"`, `mu completion
 	// zsh`) don't break. Cobra's default completion command stays functional, just
