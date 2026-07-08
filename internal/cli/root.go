@@ -4,6 +4,7 @@ package cli
 
 import (
 	"io"
+	"os"
 
 	"charm.land/lipgloss/v2"
 
@@ -13,6 +14,12 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/modules"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
+
+// onHPC reports whether mu is running on an HPC login/compute node ($BC_HOST set, or the
+// MU_SYSTEM override), matching the shell platform seam in init.sh.
+func onHPC() bool {
+	return os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc"
+}
 
 // HelpColorScheme themes fang's help/usage in the house language: ANSI colors
 // (theme-aware, matching render's tables) instead of fang's truecolor default, with
@@ -47,7 +54,13 @@ func Root() *cobra.Command {
 	setHelpTitle(root, "mayhl_utils — HPC toolkit") // for the intercepted house root help
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
-	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd())
+	root.AddCommand(cpCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd())
+	// sshfs mounts a remote dir onto the LOCAL workstation via fuse — inapplicable on an
+	// HPC login node (already on the box, no fuse-t), so register it local-only. Mirrors
+	// the shell seam, where the hcd/hmt front-doors live in platform/local.sh.
+	if !onHPC() {
+		root.AddCommand(sshfsCmd())
+	}
 	// Opt-in modules (MU_MODULES): core stays always-on; new modules register only
 	// when listed, so nothing existing changes for a user who hasn't opted in.
 	if modules.Enabled("git") {
