@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -73,21 +72,8 @@ func actOnJobs(label, title, past, cmd string, matched []queue.Job, run func(str
 // one batched qhold/qrls (PBS) or scontrol hold/release (SLURM). Ids are single-quoted
 // so PBS array brackets don't glob. "" for an unknown scheduler.
 func holdCmd(scheduler string, release bool, ids []string) string {
-	q := quoteIDs(ids)
-	switch scheduler {
-	case "pbs":
-		bin := "qhold"
-		if release {
-			bin = "qrls"
-		}
-		return bin + " " + strings.Join(q, " ")
-	case "slurm":
-		verb := "hold"
-		if release {
-			verb = "release"
-		}
-		return "scontrol " + verb + " " + strings.Join(q, ",")
-	default:
-		return ""
+	if a := queue.For(scheduler); a != nil {
+		return a.HoldCmd(ids, release)
 	}
+	return ""
 }

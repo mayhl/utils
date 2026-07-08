@@ -184,25 +184,10 @@ func resolveJobs(label string, snapshot func() ([]queue.Job, error), args []stri
 // Ids are single-quoted so PBS array brackets ("1284[7].hpc1") don't glob-expand. ""
 // for an unknown scheduler.
 func detailCmd(scheduler string, ids []string) string {
-	q := quoteIDs(ids)
-	switch scheduler {
-	case "pbs":
-		return "qstat -f " + strings.Join(q, " ")
-	case "slurm":
-		return "scontrol show job " + strings.Join(q, ",")
-	default:
-		return ""
+	if a := queue.For(scheduler); a != nil {
+		return a.DetailCmd(ids)
 	}
-}
-
-// quoteIDs single-quotes each full job id so scheduler-specific metacharacters (PBS
-// array brackets) survive the remote/local shell intact.
-func quoteIDs(ids []string) []string {
-	q := make([]string, len(ids))
-	for i, id := range ids {
-		q[i] = shellQuote(id)
-	}
-	return q
+	return ""
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded single quote.

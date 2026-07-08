@@ -275,20 +275,10 @@ func elapWall(elapsed, wall string) string {
 // — one qdel/scancel with every id, not one call per job (cheap over Kerberos'd ssh).
 // Ids are single-quoted so PBS array brackets ("1284[7].hpc1") don't glob-expand.
 func cancelCmd(scheduler string, ids []string) string {
-	var bin string
-	switch scheduler {
-	case "pbs":
-		bin = "qdel"
-	case "slurm":
-		bin = "scancel"
-	default:
-		return ""
+	if a := queue.For(scheduler); a != nil {
+		return a.KillCmd(ids)
 	}
-	q := make([]string, len(ids))
-	for i, id := range ids {
-		q[i] = "'" + strings.ReplaceAll(id, "'", `'\''`) + "'"
-	}
-	return bin + " " + strings.Join(q, " ")
+	return ""
 }
 
 func jobIDs(jobs []queue.Job) []string {
