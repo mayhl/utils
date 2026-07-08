@@ -12,12 +12,26 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
-// muVersion is the build version for the root help title: the short VCS revision `go
-// build` stamps in a git checkout (with -dirty if the tree had uncommitted changes),
-// preferred over Go's ugly in-repo pseudo-version; a real module tag only when there's no
-// VCS stamp; else "" (nothing shown). Best-effort chrome — `mu --version` (fang) stays
-// the authoritative report.
+// version is stamped at build time via
+//
+//	-ldflags "-X github.com/mayhl/mayhl_utils/internal/cli.version=$(git describe --tags --always --dirty)"
+//
+// (see the Makefile / onboard cross-build). Empty under a plain `go build` → muVersion
+// falls back to the VCS revision below. This is the seam a signed-tag release scheme fills.
+var version string
+
+// Version is the exported build version for main() to hand fang (fang uses its own
+// option, not cobra's root.Version). Same value muVersion shows in help and doctor.
+func Version() string { return muVersion() }
+
+// muVersion is the build version reported by `mu --version` and shown in the root help
+// title: the ldflags-stamped `git describe` when present, else the short VCS revision `go
+// build` records in a git checkout (with -dirty if the tree had uncommitted changes),
+// else a real module tag when there's no VCS stamp, else "" (nothing shown).
 func muVersion() string {
+	if version != "" {
+		return version
+	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""

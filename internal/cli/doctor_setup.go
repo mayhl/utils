@@ -126,19 +126,20 @@ func checkBuildCurrent() render.StatusRow {
 	if root == "" {
 		return render.StatusRow{Level: "ok", Name: "build", Detail: ver + " (MU_ROOT unset — not compared to source)"}
 	}
-	head := gitField(root, "rev-parse", "--short", "HEAD")
-	if head == "" {
+	// Compare like-for-like: the running binary's stamp is `git describe`, so the source
+	// reference is the repo's describe now — not a raw HEAD SHA (which never matches a tag).
+	src := gitField(root, "describe", "--tags", "--always", "--dirty")
+	if src == "" {
 		return render.StatusRow{Level: "ok", Name: "build", Detail: ver + " (MU_ROOT not a git repo)"}
 	}
-	running := strings.TrimSuffix(ver, "-dirty")
-	if strings.HasPrefix(head, running) || strings.HasPrefix(running, head) {
+	if ver == src {
 		detail := "current: " + ver
 		if strings.HasSuffix(ver, "-dirty") {
 			detail += " (source tree dirty)"
 		}
 		return render.StatusRow{Level: "ok", Name: "build", Detail: detail}
 	}
-	return render.StatusRow{Level: "warn", Name: "build", Detail: fmt.Sprintf("installed %s ≠ source %s — run mu rebuild", ver, head)}
+	return render.StatusRow{Level: "warn", Name: "build", Detail: fmt.Sprintf("installed %s ≠ source %s — run mu rebuild", ver, src)}
 }
 
 // checkRepoDrift reports a tracked repo as clean, dirty (uncommitted), and/or ahead of

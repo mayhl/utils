@@ -118,7 +118,13 @@ func (o *onboard) run(nodeOrTarget string) error {
 	defer func() { _ = os.RemoveAll(tmp) }()
 	localMu := filepath.Join(tmp, "mu")
 	render.Info(fmt.Sprintf("Cross-building mu (linux/%s) from %s…", o.goarch, o.repo))
-	build := exec.Command("go", "build", "-o", localMu, "./cmd/mu")
+	// Stamp the pushed binary with `git describe` so the box's `mu --version` and
+	// `mu doctor setup` report what's deployed (matches the Makefile's version seam).
+	args := []string{"build", "-o", localMu}
+	if v := gitField(o.repo, "describe", "--tags", "--always", "--dirty"); v != "" {
+		args = append(args, "-ldflags", "-s -w -X github.com/mayhl/mayhl_utils/internal/cli.version="+v)
+	}
+	build := exec.Command("go", append(args, "./cmd/mu")...)
 	build.Dir = o.repo
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+o.goarch)
 	if out, err := build.CombinedOutput(); err != nil {

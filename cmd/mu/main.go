@@ -24,6 +24,7 @@ func main() {
 		return
 	}
 	if err := fang.Execute(context.Background(), root,
+		fang.WithVersion(cli.Version()),
 		fang.WithColorSchemeFunc(cli.HelpColorScheme),
 		fang.WithErrorHandler(cli.HouseError)); err != nil {
 		os.Exit(1)

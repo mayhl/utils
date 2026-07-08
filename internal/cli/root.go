@@ -57,6 +57,7 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.Version = muVersion()                      // `mu --version` (fang) reports the build-stamped version
 	setHelpTitle(root, "mayhl_utils — HPC toolkit") // for the intercepted house root help
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
