@@ -41,11 +41,17 @@ func HouseError(_ io.Writer, _ fang.Styles, err error) {
 
 // Root builds the top-level `mu` command with all subcommand trees attached.
 func Root() *cobra.Command {
+	// sshfs is local-only, so name it in the blurb only off an HPC node (see below).
+	blurb := "HPC toolkit: SSH/rsync helpers, queue and process views, and the git signwip\n" +
+		"workflow. Run a command below, or `mu <command> --help`."
+	if !onHPC() {
+		blurb = "HPC toolkit: SSH/rsync helpers, sshfs mounts, queue and process views, and\n" +
+			"the git signwip workflow. Run a command below, or `mu <command> --help`."
+	}
 	root := &cobra.Command{
 		Use:   "mu",
 		Short: "mayhl_utils — HPC toolkit",
-		Long: "HPC toolkit: SSH/rsync helpers, sshfs mounts, queue and process views,\n" +
-			"and the git signwip workflow. Run a command below, or `mu <command> --help`.",
+		Long:  blurb,
 		// fang/main own error + usage printing; RunE returns bare errors for
 		// exit codes without Cobra also dumping usage on a runtime failure.
 		SilenceUsage:  true,
