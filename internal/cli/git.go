@@ -27,7 +27,8 @@ func gitCmd() *cobra.Command {
 	// give the module its heading, MU_MODULES-gated badge, and shell-front-door panel.
 	setHelpTitle(c, "Git Workflow Previews")
 	setHelpLabel(c, "opt-in", render.HueGroup)
-	setHelpShortcuts(c,
+	setHelpShortcuts(
+		c,
 		[2]string{"gsw", "git signwip — sign the reviewed WIP (previews via mu git)"},
 		[2]string{"gps", "git pushsigned — push the signed prefix (previews via mu git)"},
 	)
@@ -37,7 +38,7 @@ func gitCmd() *cobra.Command {
 func gitSignwipCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "signwip",
-		Short: "Preview which unsigned WIP would sign vs skip ([unreviewed]).",
+		Short: "Which unsigned WIP would sign vs skip ([unreviewed]).",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			s, err := git.SignwipPreview()
@@ -57,7 +58,7 @@ func gitSignwipCmd() *cobra.Command {
 func gitPushsignedCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "pushsigned",
-		Short: "Preview the contiguous signed prefix that would push vs held WIP.",
+		Short: "The contiguous signed prefix that would push vs held WIP.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			p, err := git.PushsignedPreview()
@@ -77,7 +78,7 @@ func gitPushsignedCmd() *cobra.Command {
 func gitDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Check git is installed and the .config git workflow files exist.",
+		Short: "git on PATH and the .config git workflow files present.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			d := git.DoctorReport()
