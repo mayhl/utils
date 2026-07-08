@@ -44,11 +44,14 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #   active    = true | false     — in the --fleet set (omit → true); set false for a
 #                                  configured-but-unused cluster so --fleet (and bare
 #                                  mstat off HPC) skip it. --all includes it regardless.
+#   account   = "ALLOC-ID"       — optional default allocation `mu job sub` charges
+#                                  (-A overrides); omit to use the script's own directive.
 [[cluster]]
 name      = "dsrc1"
 domain    = "dsrc1.example.hpc.mil"
 nodes     = ["node-a", "node-b", "node-c"]
 scheduler = "slurm"
+account   = "ALLOC-1234"
 
 [[cluster]]
 name      = "dsrc2"

@@ -3,10 +3,14 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/job"
+	"github.com/mayhl/mayhl_utils/internal/queue"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
@@ -19,7 +23,78 @@ func jobCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(jobEnvCmd())
+	c.AddCommand(jobEnvCmd(), jobSubCmd())
+	return c
+}
+
+// jobSubCmd is `mu job sub <script>`: submit a batch script to one cluster (qsub/sbatch)
+// with a scheduler-neutral account/queue, after a preview + confirm. Thin by design — the
+// script path is resolved ON the target; -N picks the cluster off an HPC login node, else
+// the current cluster. -A overrides the cluster's config default; empty opts fall through
+// to the script's own #PBS/#SBATCH directives.
+func jobSubCmd() *cobra.Command {
+	var node, account, queue_ string
+	var yes, dryRun bool
+	c := &cobra.Command{
+		Use:   "sub <script>",
+		Short: "Submit a batch script to one cluster (qsub/sbatch) — preview + confirm.",
+		Long: "Submit a job script to one cluster, mapping -A/-q to the scheduler's flags\n" +
+			"(PBS qsub / SLURM sbatch). Target: -N <cluster> off an HPC login node, else the\n" +
+			"current cluster. The script path is resolved ON the target. -A overrides the\n" +
+			"cluster's config default; empty falls through to the script's own directives.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			script := args[0]
+			label, scheduler, _, run, _ := queueTargetCtx(node, userSel{})
+			adapter := queue.For(scheduler)
+			if adapter == nil {
+				render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
+				os.Exit(2)
+			}
+			if account == "" {
+				account = config.AccountFor(label)
+			}
+			opts := queue.SubmitOpts{Account: account, Queue: queue_}
+			cmd := adapter.SubmitCmd(script, opts)
+
+			render.Info(fmt.Sprintf("Submit to %s (%s)", label, scheduler))
+			render.Detail("script:  " + script)
+			if d := adapter.Directives(opts); len(d) > 0 {
+				render.Detail("applies: " + strings.Join(d, "  "))
+			} else {
+				render.Detail("applies: (scheduler defaults / script directives)")
+			}
+			render.Detail("command: " + cmd)
+			if dryRun {
+				render.Info("dry run — not submitted")
+				return nil
+			}
+			if !yes {
+				fmt.Fprintf(os.Stderr, "submit to %s? [y/N] ", label)
+				var r string
+				_, _ = fmt.Scanln(&r)
+				if strings.ToLower(strings.TrimSpace(r)) != "y" {
+					render.Info("aborted")
+					return nil
+				}
+			}
+			if err := run(cmd); err != nil {
+				return err
+			}
+			msg := "submitted " + script + " → " + label
+			render.OK(msg)
+			render.EventOK("job", msg)
+			return nil
+		},
+	}
+	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
+	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
+	c.Flags().StringVarP(&queue_, "queue", "q", "", "queue / partition to submit to")
+	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "print the submit command without submitting")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
 	return c
 }
 

@@ -1,6 +1,9 @@
 package queue
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAdapterFor(t *testing.T) {
 	if For("pbs").Name() != "pbs" || For("slurm").Name() != "slurm" {
@@ -30,6 +33,20 @@ func TestAdapterCmds(t *testing.T) {
 	for _, c := range cases {
 		if c.got != c.want {
 			t.Errorf("%s:\n got  %s\n want %s", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestAdapterDirectives(t *testing.T) {
+	cases := []struct{ name, got, want string }{
+		{"pbs both", strings.Join(For("pbs").Directives(SubmitOpts{Account: "PROJ1", Queue: "standard"}), "\n"), "#PBS -A PROJ1\n#PBS -q standard"},
+		{"slurm both", strings.Join(For("slurm").Directives(SubmitOpts{Account: "PROJ1", Queue: "debug"}), "\n"), "#SBATCH -A PROJ1\n#SBATCH -p debug"},
+		{"pbs bare", strings.Join(For("pbs").Directives(SubmitOpts{}), "\n"), ""},
+		{"slurm account only", strings.Join(For("slurm").Directives(SubmitOpts{Account: "PROJ1"}), "\n"), "#SBATCH -A PROJ1"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s:\n got  %q\n want %q", c.name, c.got, c.want)
 		}
 	}
 }

@@ -25,6 +25,7 @@ type Cluster struct {
 	Nodes     []string // sorted
 	Scheduler string   // "pbs" | "slurm"; "" if unset
 	Active    bool     // in the default collate set (config `active`, default true)
+	Account   string   // default allocation to charge on submit; "" if unset (mu job sub -A overrides)
 }
 
 // file is the config.toml schema. Clusters use an array-of-tables so their order
@@ -50,7 +51,8 @@ type file struct {
 		Domain    string   `toml:"domain"`
 		Nodes     []string `toml:"nodes"`
 		Scheduler string   `toml:"scheduler"`
-		Active    *bool    `toml:"active"` // nil (omitted) → active by default
+		Active    *bool    `toml:"active"`  // nil (omitted) → active by default
+		Account   string   `toml:"account"` // default submit allocation; optional
 	} `toml:"cluster"`
 }
 
@@ -128,6 +130,7 @@ func ClusterDefs() []Cluster {
 			Name: c.Name, Domain: c.Domain, Nodes: nodes,
 			Scheduler: strings.ToLower(c.Scheduler),
 			Active:    c.Active == nil || *c.Active, // default true
+			Account:   c.Account,
 		})
 	}
 	return out
@@ -141,6 +144,23 @@ func SchedulerFor(node string) string {
 		for _, n := range c.Nodes {
 			if n == node {
 				return c.Scheduler
+			}
+		}
+	}
+	return ""
+}
+
+// AccountFor returns the configured default submit allocation for the cluster owning
+// node n, or "" if unset. `mu job sub -A` overrides it; empty falls through to the
+// scheduler / script default.
+func AccountFor(node string) string {
+	for _, c := range ClusterDefs() {
+		if c.Name == node {
+			return c.Account
+		}
+		for _, n := range c.Nodes {
+			if n == node {
+				return c.Account
 			}
 		}
 	}

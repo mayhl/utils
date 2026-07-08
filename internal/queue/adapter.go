@@ -13,6 +13,7 @@ type Adapter interface {
 	HoldCmd(ids []string, release bool) string // hold / release (qhold·qrls / scontrol)
 	DetailCmd(ids []string) string             // full detail   (qstat -f / scontrol show job)
 	SubmitCmd(script string, o SubmitOpts) string
+	Directives(o SubmitOpts) []string // header lines (#PBS / #SBATCH) for preview + templates
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
@@ -76,6 +77,19 @@ func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	return cmd + " " + quote(script)
 }
 
+// Directives renders the #PBS header lines for preview/templates (display, not exec —
+// unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
+func (pbsAdapter) Directives(o SubmitOpts) []string {
+	var d []string
+	if o.Account != "" {
+		d = append(d, "#PBS -A "+o.Account)
+	}
+	if o.Queue != "" {
+		d = append(d, "#PBS -q "+o.Queue)
+	}
+	return d
+}
+
 // ---- SLURM (sbatch/squeue/scancel/scontrol) -------------------------------------------
 
 type slurmAdapter struct{}
@@ -102,4 +116,17 @@ func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 		cmd += " -p " + quote(o.Queue)
 	}
 	return cmd + " " + quote(script)
+}
+
+// Directives renders the #SBATCH header lines for preview/templates (display, not exec —
+// unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
+func (slurmAdapter) Directives(o SubmitOpts) []string {
+	var d []string
+	if o.Account != "" {
+		d = append(d, "#SBATCH -A "+o.Account)
+	}
+	if o.Queue != "" {
+		d = append(d, "#SBATCH -p "+o.Queue)
+	}
+	return d
 }
