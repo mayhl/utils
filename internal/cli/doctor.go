@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/doctor"
+	"github.com/mayhl/mayhl_utils/internal/modules"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
@@ -84,6 +85,11 @@ func doctorCmd() *cobra.Command {
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
 	c.AddCommand(doctorFmtCmd(), doctorSetupCmd())
+	// `mu doctor git` mirrors git's own `mu git doctor` — same leaf, re-verbed. Gated on the
+	// git module like the rest of git (root only wires `mu git` when MU_MODULES lists it).
+	if modules.Enabled("git") {
+		c.AddCommand(withUse(gitDoctorCmd(), "git"))
+	}
 	return c
 }
 

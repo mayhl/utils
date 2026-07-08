@@ -44,7 +44,9 @@ func setupCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&evalShell, "eval", "", "print shell-init + completion to `eval` at rc time (bash|zsh|fish)")
-	c.AddCommand(shellInitCmd(), setupCompletionCmd(), onboardCmd(), toolchainCmd(), syncCmd())
+	// `mu setup doctor` mirrors `mu doctor setup` — same leaf, re-verbed so both directions work.
+	c.AddCommand(shellInitCmd(), setupCompletionCmd(), onboardCmd(), toolchainCmd(), syncCmd(),
+		withUse(doctorSetupCmd(), "doctor"))
 	return c
 }
 

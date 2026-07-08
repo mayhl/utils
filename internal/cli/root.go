@@ -107,6 +107,14 @@ func Root() *cobra.Command {
 	return root
 }
 
+// withUse re-verbs a command for mounting under a second parent — the same leaf builder
+// is called again (Cobra needs a distinct instance) and its Use word is overridden. Used
+// for the doctor reverse aliases (`mu setup doctor` ⇔ `mu doctor setup`).
+func withUse(c *cobra.Command, use string) *cobra.Command {
+	c.Use = use
+	return c
+}
+
 // hidden marks a command hidden (kept functional, dropped from help) — for the
 // root-level aliases of commands whose home is now a submodule.
 func hidden(c *cobra.Command) *cobra.Command {
