@@ -1,163 +1,178 @@
 # mayhl_utils
 
-A portable shell + Go toolkit to improve workflow on HPC clusters. The same checkout works from an HPC login node or a local macOS/Linux workstation.
+A portable shell + Go toolkit for HPC cluster workflows — from a local macOS/Linux workstation or an HPC login node.
 
-> **NOTE:** Works with both bash and zsh. The `mu` engine is a single Go binary (built on first use) — there is no Python or virtualenv.
+> **NOTE:** `mu` is a single Go binary — no Python, no virtualenv; works under bash and zsh. The binary **emits its own shell layer** (`mu shell-init`), so a machine needs only the `mu` binary plus a one-line rc hook — **no source checkout required**. That's how it deploys to an HPC login node.
 
 ## Table of Contents
-* [Installation](#install)
+* [Install](#install)
 * [Configuration](#config)
-* [Per-node commands](#node)
 * [The mu CLI](#mu)
-* [SSHFS mounts](#sshfs)
-* [Quick Tar](#qtar)
-* [HPC info & status](#hpc)
-* [Command Summary](#summary)
+* [Shell front-doors](#doors)
+* [Setup & lifecycle](#setup)
+* [Modules](#modules)
 * [Development](#dev)
 
-## Installation <a name='install'></a>
-Clone this repository to a directory of your choice; that path becomes *MU_ROOT*.
+## Install <a name='install'></a>
 
-    user@host: git clone git@github.com:mayhl/utils.git
+Two ways in.
 
-Add two lines to your `.zshrc`/`.bashrc` (or an environment file it sources):
+**A fresh box — from a machine that already has `mu`:**
 
-    export MU_ROOT=/path/to/utils
-    source $MU_ROOT/init.sh
+    you@laptop: mu setup onboard <node>
 
-That is the whole hook — no other repository or framework is required. *MU_SYSTEM* (local vs hpc) is **auto-detected** from `$BC_HOST`; set it explicitly only to override.
+This cross-builds a Linux `mu`, pushes it plus your tracked `.config`, seeds a `config.toml`, and prints the rc hook to add. Only the binary + `.config` land on the target — no repository, no build there.
 
-The `mu` engine is a Go binary at `$MU_ROOT/mu`. It **builds itself on first use** (needs `go` on `PATH`), so a fresh shell just works; on an HPC, drop a cross-compiled `mu` there (`make build-linux`) and no build happens.
+**Manual — wire `mu` into your shell:** add one line to your `.zshrc` / `.bashrc` (or a file it sources):
 
-Finally, copy the example config and fill it in:
+    eval "$(mu setup --eval zsh)"      # zsh | bash | fish
 
-    user@host: cp $MU_ROOT/config.toml.example $MU_ROOT/config.toml
-    user@host: $EDITOR $MU_ROOT/config.toml
+That emits the full shell layer (per-node dispatchers, front-doors, tab-completion) at startup. `mu setup --eval` prints it; `mu shell-init` is the same without completion.
 
-Open a new shell and run `mu hpc nodes` to confirm everything loaded.
+Then seed the config and fill it in:
+
+    you@host: cp config.toml.example "$MU_ROOT/config.toml"
+    you@host: $EDITOR "$MU_ROOT/config.toml"
+
+`MU_ROOT` points at wherever `config.toml` + the `mu` binary live — a source checkout on a dev box, `~/.config/mu` on a deployed box. `MU_SYSTEM` (local vs hpc) is **auto-detected** from `$BC_HOST`; set it explicitly only to override. Open a new shell and run `mu hpc nodes` to confirm.
+
+> **NOTE (developers):** on a source checkout, `lib/launcher.sh` gives you `mu rebuild` + build-on-first-use; `make build` / `make build-linux` build the binary directly. See [Development](#dev).
 
 ## Configuration <a name='config'></a>
-Configuration lives in **`config.toml`** (gitignored — your machine's identity; copy from the tracked `config.toml.example`). The Go engine reads it directly, and `mu shell-init` exports the values the shell layer needs, so it is the single source of truth.
+
+Everything lives in **`config.toml`** (gitignored — your machine's identity; copy from the tracked `config.toml.example`). The Go engine reads it directly and `mu shell-init` exports what the shell layer needs, so it is the single source of truth.
 
     hpc_user = "your_username"
+    fleet    = ["alpha", "beta"]          # optional: the "active" cluster set (mstat --fleet)
 
     [ssh]
-    ossh = "/path/to/ossh/bin/ssh"     # a Kerberos ssh build if it's a shell alias (give the path); omit for system ssh
+    ossh = "/path/to/ossh/bin/ssh"        # a Kerberos ssh build (if `ssh` is a shell alias); omit for plain ssh
 
     [sshfs]
-    root = "~/hpc_sshfs"               # local parent dir for sshfs mounts
+    root = "~/hpc_sshfs"                   # local parent dir for sshfs mounts
 
     [[cluster]]
-    name   = "alpha"
-    domain = "alpha.example.mil"
-    nodes  = ["node1", "node2"]
+    name      = "alpha"
+    domain    = "alpha.example.mil"
+    nodes     = ["node1", "node2"]
+    scheduler = "pbs"                      # pbs | slurm — picks the queue idiom
 
     [[cluster]]
-    name   = "beta"
-    domain = "beta.example.mil"
-    nodes  = ["node3"]
+    name      = "beta"
+    domain    = "beta.example.mil"
+    nodes     = ["node3"]
+    scheduler = "slurm"
+    active    = false                     # optional: excluded from the fleet, still reachable via --all
 
-Transfer knobs (`[transfer] rsync_opts`, `ssh_transfer_opts`) have sensible defaults and rarely need changing. Which ssh binary to use is a platform seam handled by the platform module (`MU_SYSTEM` picks `local`/`hpc`); on a workstation a Kerberos ticket is obtained automatically via `pkinit` when needed.
-
-## Per-node commands <a name='node'></a>
-`mu shell-init` (run automatically from `init.sh`) generates one dispatcher function per configured node. For a node named `node1`:
-
-| Form | Does |
-|------|------|
-| `node1` | ssh login (Kerberos handled automatically) |
-| `node1 push <local> <remote>` | copy local → node1 |
-| `node1 pull <remote> <local>` | copy node1 → local |
-| `node1 <cmd> …` | run `<cmd>` on node1 over ssh (a login shell, so modules/`PATH` load) |
-
-For example:
-
-    user@laptop: node1                                   # interactive login
-    user@laptop: node1 push ./run42 /p/work/me/run42     # copy up
-    user@laptop: node1 pull /p/work/me/run42/out ./out   # copy down
-    user@laptop: node1 qstat                             # run a scheduler command remotely
-
-> **NOTE:** Nested tunnels do not work; connect to one HPC at a time.
+The `[ssh]`/`[sshfs]` tables are per-machine seams (kept in place across `mu setup sync`); everything else is shared inventory. Transfer knobs (`[transfer] rsync_opts`, `ssh_transfer_opts`) have sensible defaults. On a workstation a Kerberos ticket is obtained automatically via `pkinit` when a node command needs it.
 
 ## The mu CLI <a name='mu'></a>
-`mu` is the Go engine. The `push`/`pull` shorthands above are just `mu cp`, which you can also call directly for flags plus a live progress bar and a completion summary:
 
-    user@laptop: mu cp push node1 ./run42 /p/work/me/run42 -n --exclude '*.o'
-    user@laptop: mu cp pull node1 /p/work/me/run42/out ./out
+`mu` is the engine. Add `-h` to any command for help.
 
-Useful options: `--dry-run`/`-n` (preview), `--exclude PATTERN`, `--exclude-hidden` (skip dotfiles/dot-dirs), `--delete`, `--bwlimit RATE`, `-v` (per-file output); add `-h` to any command for help. Top-level commands: `mu cp`, `mu sshfs`, `mu tar`, `mu hpc`, `mu shell-init`.
+| Command | Does |
+|---------|------|
+| `mu cp` | copy to/from nodes over rsync, with a live progress bar + summary |
+| `mu tar` | create or extract an archive with a progress bar |
+| `mu sshfs` | mount HPC dirs locally over sshfs (local only) |
+| `mu ps` | list your local processes (`-i` = interactive picker) |
+| `mu log` | view the event log (transfers, jobs, big ops) |
+| `mu hpc` | cross-cluster info: `nodes`, `queue`, `ticket` |
+| `mu setup` | shell wiring + machine lifecycle (onboard / toolchain / sync) |
+| `mu doctor` | environment health checks (`setup` / `fmt` / `git`) |
+| `mu git` | read-only signwip/pushsigned previews (opt-in — see [Modules](#modules)) |
 
-## SSHFS mounts <a name='sshfs'></a>
-Mount an HPC directory locally over sshfs. Register a mount once, then use the `h*` shortcuts:
+Example — `mu cp` directly (the `push`/`pull` front-doors are just this):
 
-    user@laptop: mu sshfs add data node1 /p/work/me/data   # register (name → node:path)
-    user@laptop: hcd data                                  # mount (if needed) + cd into it
-    user@laptop: hls                                       # list mounts with live status
-    user@laptop: hset data --ro                            # change node/path or swap ro↔rw (remounts if live)
-    user@laptop: hum data                                  # unmount
+    you@laptop: mu cp push node1 ./run42 /p/work/me/run42 -n --exclude '*.o'
+    you@laptop: mu cp pull node1 /p/work/me/run42/out ./out
 
-`hcd`/`hadd`/`hls`/`hset`/`hum` are thin shortcuts over `mu sshfs mount`+`cd` / `add` / `list` / `set` / `umount`. `mu sshfs set` repoints a mount's node/path or swaps read-only ↔ read-write, remounting in place if it is already live. Every filesystem-touching operation is timeout-bounded, and a mount **aborts as soon as sshfs reports a fatal error** (e.g. a missing remote path) instead of hanging — so a bad mount tells you why, fast, rather than freezing the terminal.
+Useful `cp` options: `--dry-run`/`-n`, `--exclude PATTERN`, `--exclude-hidden`, `--delete`, `--bwlimit RATE`, `-v`.
 
-## Quick Tar <a name='qtar'></a>
-`qtar` (no compression) and `gtar` (gzip) create a tarball from a folder or extract one — the mode is inferred from a `.tar`/`.tar.gz` extension — with a live progress bar:
+## Shell front-doors <a name='doors'></a>
 
-    user@host: qtar FOLDER              # → FOLDER.tar
-    user@host: gtar ARCHIVE.tar.gz      # extract
+The shell layer emits short front-doors — the everyday drivers. Each maps to a `mu` subcommand you can also call directly for full flags + completion. The **Where** column notes local / hpc / both.
 
-> **NOTE:** In extraction mode `qtar` and `gtar` are equivalent (compression is auto-detected).
+**Per-node** — one dispatcher per configured node (generated by `mu shell-init`). For `node1`:
 
-`bqtar` / `bgtar` run their respective commands in the **background at low priority** (`nice`), logging to a `.log` file. All four are thin shims over `mu tar`, which wraps the system `tar` and meters it with the house progress bar.
+| Form | Where | Does |
+|------|-------|------|
+| `node1` | both | ssh login (Kerberos handled automatically) |
+| `node1 3` | both | login node **03** (zero-padded) |
+| `node1 push <src> <dst>` / `node1 pull <src> <dst>` | both | copy up / down (`mu cp`) |
+| `node1 <cmd>` | both | run `<cmd>` on node1 over ssh (login shell → modules/`PATH` load) |
+| `node1 mstat` | both | node1's queue (`mu hpc queue --node node1`) |
 
-## HPC info & status <a name='hpc'></a>
-`mu hpc` aggregates cross-cluster info — run it from your workstation to reach every cluster:
+> **NOTE:** connect to one HPC at a time — nested tunnels don't work.
 
-    user@laptop: mu hpc nodes        # table of configured nodes
-    user@laptop: mu hpc nodes -s     # + ssh reachability probe (● up / ○ down)
-    user@laptop: mu hpc ticket       # local Kerberos ticket status (--renew runs pkinit)
+**Process & log** (local, always):
 
-The shell commands `mu_status` (compact) and `mu_ctx` (per-cluster detail) print environment summaries.
+| Command | Engine form | Does |
+|---------|-------------|------|
+| `mps [mask]` | `mu ps` | list processes; `mps -i` = interactive picker |
+| `mkill <sel>` | `mu ps kill` | signal by id/range/name (preview + confirm) |
+| `mlog` | `mu log` | the event log |
 
-## Command Summary <a name='summary'></a>
+**Queue** (scheduler-neutral; the create/cancel pair adapts — `mstat`/`mdel` for PBS, `mqueue`/`mcancel` for SLURM):
 
-The short shell commands are the everyday drivers; where a richer `mu` form exists (progress bar, flags, tab-completion) it is listed alongside. The *Where* column notes whether a command applies on a local workstation, an HPC, or both.
+| Command | Engine form | Does |
+|---------|-------------|------|
+| `mstat` | `mu hpc queue` | your jobs; `--all` cross-cluster, `-u <user>`, `-i` inspect |
+| `mdel <id>` | `mu hpc queue kill` | cancel a job |
+| `minfo` / `mpeek` / `mhold` / `mrls` / `mhist` | `mu hpc queue …` | info / peek out+err / hold / release / finished-history |
 
-#### Per-node (generated by `mu shell-init`)
+**SSHFS** (local) — register once, then use the `h*` shortcuts:
 
-| Command | Engine form | Where | Description |
-|---------|-------------|-------|-------------|
-| `<node>` | — | both | ssh login (Kerberos handled automatically) |
-| `<node> push <src> <dst>` | `mu cp push <node> <src> <dst>` | both | copy local → node |
-| `<node> pull <src> <dst>` | `mu cp pull <node> <src> <dst>` | both | copy node → local |
-| `<node> <cmd>` | — | both | run `<cmd>` on the node over ssh |
+| Command | Engine form | Does |
+|---------|-------------|------|
+| `hadd <name> <node> <path>` | `mu sshfs add` | register a mount (name → node:path) |
+| `hcd <name>` | `mu sshfs mount` + `cd` | mount (if needed) and cd in |
+| `hmt <name>… \| @group \| --all` | `mu sshfs mount` | mount one/many/a group/all, no cd |
+| `hls` | `mu sshfs list` | list mounts with live status + groups |
+| `hset <name> [--node\|--path\|--ro\|--rw]` | `mu sshfs set` | repoint or swap ro↔rw (remounts if live) |
+| `hum <name> \| --all` | `mu sshfs umount` | unmount one / all live |
+| `hgroup` / `hungroup <group> <name>…` | `mu sshfs group` | add/remove mounts to a free-form group |
 
-#### SSHFS mounts (local)
+Every sshfs operation is timeout-bounded and **aborts on a fatal sshfs error** (e.g. a missing remote path) instead of hanging.
 
-| Command | Engine form | Where | Description |
-|---------|-------------|-------|-------------|
-| `hcd <name>` | `mu sshfs mount <name>` + `cd` | local | mount (if needed) and cd in |
-| `hadd <name> <node> <path>` | `mu sshfs add` | local | register a mount |
-| `hls` | `mu sshfs list` | local | list mounts with live status |
-| `hset <name> [--node\|--path\|--ro\|--rw]` | `mu sshfs set` | local | repoint node/path or swap ro↔rw (remounts if live) |
-| `hum <name>` | `mu sshfs umount` | local | unmount |
+**Tar** (both):
 
-#### Tar
+| Command | Engine form | Does |
+|---------|-------------|------|
+| `qtar <dir\|archive>` | `mu tar` | create → `.tar`, or extract |
+| `gtar <dir\|archive>` | `mu tar -z` | create → `.tar.gz`, or extract |
+| `bqtar` / `bgtar` | — | background, low-priority (`nice`) variants, logging to `.log` |
 
-| Command | Engine form | Where | Description |
-|---------|-------------|-------|-------------|
-| `qtar <dir\|archive>` | `mu tar` | both | create or extract a `.tar` |
-| `gtar <dir\|archive>` | `mu tar -z` | both | create or extract a `.tar.gz` |
-| `bqtar` / `bgtar` | — | both | background, low-priority `qtar` / `gtar` |
+## Setup & lifecycle <a name='setup'></a>
 
-#### HPC info, status & setup
+`mu setup` covers shell wiring and the machine lifecycle:
 
-| Command | Where | Description |
-|---------|-------|-------------|
-| `mu hpc nodes [-s]` | local | node inventory (`-s` = ssh reachability) |
-| `mu hpc ticket [--renew]` | local | Kerberos ticket status / obtain via pkinit |
-| `mu_status` / `mu_ctx` | both | compact / detailed environment summary |
-| `mu shell-init` | both | emit the shell integration (auto-`eval`'d by `init.sh`) |
-| `mu_kitty_bootstrap` | local | push kitty terminfo to each configured node |
+| Command | Does |
+|---------|------|
+| `mu setup shell-init` / `--eval <shell>` | emit the shell layer (the rc hook) |
+| `mu setup completion <shell>` | a standalone completion script |
+| `mu setup onboard <node>` | cross-build + push `mu` and `.config` to a fresh box; seed `config.toml` |
+| `mu setup toolchain` | install the dev toolchain (via mise) |
+| `mu setup sync <node>` | push this machine's `config.toml` inventory (keeps the target's `[ssh]`/`[sshfs]`) |
+| `mu setup sync <node> --dotfiles` | also git-reconcile the `.config` repo; `sync pull …` reverses either direction |
 
-> **NOTE:** Add `-h` to any `mu` command for help. `node1 push …` and `mu cp push node1 …` do the same transfer — the per-node form is a generated shorthand.
+**`mu doctor`** reports health (each also reachable as `mu <module> doctor`):
+
+| Command | Does |
+|---------|------|
+| `mu doctor` | built-in environment checks (tools, config, plugins) |
+| `mu doctor setup` | shell wiring, toolchain, build freshness, repo drift |
+| `mu doctor fmt` | the formatter / linter / debug / LSP matrix (mise-enforced vs editor) |
+| `mu doctor git` | git on PATH + the `.config` git-workflow files (opt-in) |
+
+## Modules <a name='modules'></a>
+
+Newer features are opt-in via **`MU_MODULES`** (a space/comma list) in your rc — core commands are always on, and an unlisted module stays inert:
+
+    export MU_MODULES='git fmt'
+
+* **`git`** — `mu git` gives colored, read-only previews of the `signwip` / `pushsigned` / `reviewed` / `doctor` workflow (it never signs or pushes).
+* **`fmt`** — turns on the mise formatter/linter enforcement tier (surfaced by `mu doctor fmt`; consumed by nvim).
 
 ## Development <a name='dev'></a>
 
@@ -165,16 +180,15 @@ The engine is pure Go; the `Makefile` wraps the common tasks.
 
 | Command | Does |
 |---------|------|
-| `make build` | native `mu` binary for this machine |
-| `make build-linux` | static `linux/amd64` binary for HPC deploy |
-| `make test` | run the whole suite (`go test ./...`) |
+| `make build` / `make build-linux` | native binary / static `linux/amd64` for HPC deploy |
+| `make test` | the hermetic suite (`go test ./...`) |
 | `make fmt` / `make lint` | gofumpt / golangci-lint |
 
-Running the tests directly gives finer control:
+The default suite is **hermetic** — no cluster, network, or ssh; the per-node dispatcher test drives the generated shell under both bash and zsh (skipping a shell that isn't installed).
 
-    make test                               # everything, the short way
-    go test ./... -race -count=1            # race detector, no test cache
-    go test ./internal/shellinit/ -v        # one package, verbose
-    go test ./internal/hpc/ -run TestProbe  # one test by name (regex)
+A separate **sandbox** rig runs a local Docker box that stands in for an HPC login node, for the end-to-end onboard / cp / queue / shell-layer tests:
 
-> **NOTE:** The suite is hermetic — no cluster, network, or ssh. The per-node dispatcher test drives the generated shell under **both bash and zsh**, skipping a shell that isn't installed (`--- SKIP`), so results are consistent wherever you run it.
+    cd internal/integration/sandbox && docker compose up -d      # bring the box up
+    go test -tags sandbox ./internal/integration/                # from the repo root; skips cleanly if the box is down
+
+> **NOTE:** the shell library files (`lib/`, `platform/`, `shared/`) are embedded into the binary (`shellassets.go`) and emitted by `mu shell-init` — so editing them and rebuilding is all it takes to change the shell layer everywhere.
