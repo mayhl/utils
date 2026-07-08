@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# shared/recording.sh — asciinema cast pipeline.  ON HOLD / WIP.
+# attic/recording.sh — asciinema cast pipeline.  ON HOLD / WIP (parked, not wired).
 #
 # NOT sourced by init.sh — parked verbatim from general.sh pending the recording
 # rework (see ARCHITECTURE.md "Recording"). Known issues to resolve in the
