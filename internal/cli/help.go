@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -10,6 +11,41 @@ import (
 
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
+
+// muVersion is the build version for the root help title: the short VCS revision `go
+// build` stamps in a git checkout (with -dirty if the tree had uncommitted changes),
+// preferred over Go's ugly in-repo pseudo-version; a real module tag only when there's no
+// VCS stamp; else "" (nothing shown). Best-effort chrome — `mu --version` (fang) stays
+// the authoritative report.
+func muVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	var rev string
+	var dirty bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev != "" {
+		if len(rev) > 7 {
+			rev = rev[:7]
+		}
+		if dirty {
+			rev += "-dirty"
+		}
+		return rev
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		return v // installed via `go install path@tag`, no VCS stamp
+	}
+	return ""
+}
 
 // House help renderer: a reusable, opt-in wrapper that renders any cobra command as
 // house-styled bordered panels (synopsis / commands / flags / examples). Opt a module
@@ -174,8 +210,14 @@ func houseHelp(c *cobra.Command, _ []string) {
 
 	var b strings.Builder
 
-	// Synopsis: title (color1) + badge (color5), the colored usage legend, then the desc.
+	// Synopsis: title (color1) + version (root only, dim) + badge (color5), the colored
+	// usage legend, then the desc.
 	title := render.Bold(helpTitle(c), hueTitle)
+	if !c.HasParent() {
+		if v := muVersion(); v != "" {
+			title += " " + render.Fg(v, hueBadge)
+		}
+	}
 	if t, _ := helpLabel(c); t != "" {
 		title += " " + render.Badge(t, hueBadge)
 	}
@@ -334,7 +376,13 @@ func flow(s string) string {
 // plainHelp is the borderless/no-color fallback (piped, --plain, NO_COLOR).
 func plainHelp(c *cobra.Command) {
 	w := os.Stdout
-	fmt.Fprintln(w, helpTitle(c))
+	title := helpTitle(c)
+	if !c.HasParent() {
+		if v := muVersion(); v != "" {
+			title += " " + v
+		}
+	}
+	fmt.Fprintln(w, title)
 	fmt.Fprintln(w, c.UseLine())
 	desc := c.Long
 	if desc == "" {
