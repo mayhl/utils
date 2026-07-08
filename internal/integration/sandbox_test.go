@@ -123,6 +123,127 @@ func TestQueueSLURM(t *testing.T) {
 	mustContain(t, out, "8359638", "run_wave", "mesh_gen", "nest_grid")
 }
 
+// repoRoot is the mayhl_utils checkout root, from the package dir (internal/integration).
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// TestOnboard drives `mu setup onboard sandbox` end-to-end: cross-build a linux mu, push
+// it + the tracked .config, and seed config.toml. Then verifies each landed on the box.
+// The box is throwaway and onboard is idempotent, so re-running is safe.
+func TestOnboard(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	mustContain(t, out, "onboard complete")
+	// The pushed mu binary runs on the box.
+	if err := exec.Command("ssh", "sandbox", "~/.local/bin/mu --version").Run(); err != nil {
+		t.Errorf("pushed mu not runnable on box: %v", err)
+	}
+	// .config landed as a live git repo (not a loose tar snapshot), so it stays
+	// git-managed on the box (git pull to update).
+	if got, _ := exec.Command("ssh", "sandbox", "git -C ~/.config rev-parse --is-inside-work-tree").CombinedOutput(); strings.TrimSpace(string(got)) != "true" {
+		t.Errorf(".config is not a git work tree on box: %q", got)
+	}
+	// origin points at the public https remote (keyless pull on an egress box).
+	if got, _ := exec.Command("ssh", "sandbox", "git -C ~/.config remote get-url origin").CombinedOutput(); !strings.HasPrefix(strings.TrimSpace(string(got)), "https://") {
+		t.Errorf("origin not set to https remote: %q", got)
+	}
+	// A tracked file (checked out) and the untracked, machine-specific config.toml
+	// (seeded, left intact by reset --hard) both present.
+	for _, path := range []string{"~/.config/mu/config.toml", "~/.config/mise/config.toml"} {
+		if err := exec.Command("ssh", "sandbox", "test -f "+path).Run(); err != nil {
+			t.Errorf("expected %s on box: %v", path, err)
+		}
+	}
+}
+
+// TestOnboardDirtyGuard checks the reset --hard guard: a tracked file edited on the box
+// must survive a plain re-onboard (skipped with a warning), and only --force overwrites it
+// — after backing the work up to branch mu-onboard-backup + a stash.
+func TestOnboardDirtyGuard(t *testing.T) {
+	requireSandbox(t)
+	const sentinel = "MU-LOCAL-EDIT-KEEP"
+	// Start from a clean synced .config, then dirty a tracked file on the box.
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	if err := exec.Command("ssh", "sandbox", "echo "+sentinel+" >> ~/.config/mise/config.toml").Run(); err != nil {
+		t.Fatalf("dirty the box file: %v", err)
+	}
+	// Plain re-onboard: must NOT clobber the local edit.
+	out := mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	mustContain(t, out, "skipped .config sync")
+	if err := exec.Command("ssh", "sandbox", "grep -q "+sentinel+" ~/.config/mise/config.toml").Run(); err != nil {
+		t.Errorf("local edit was lost by a non-force onboard: %v", err)
+	}
+	// --force: overwrites the edit but backs it up to branch mu-onboard-backup.
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t), "--force")
+	if err := exec.Command("ssh", "sandbox", "grep -q "+sentinel+" ~/.config/mise/config.toml").Run(); err == nil {
+		t.Error("--force did not overwrite the local edit")
+	}
+	if err := exec.Command("ssh", "sandbox", "git -C ~/.config rev-parse --verify mu-onboard-backup").Run(); err != nil {
+		t.Errorf("--force did not create the backup branch: %v", err)
+	}
+}
+
+// TestToolchainDryRun runs `mu setup toolchain --dry-run` on the box (the linux install
+// path) and checks the plan names the embedded tools and the modulefile target. Onboard
+// first so the box has the current toolchain-aware mu. Dry-run keeps it deterministic and
+// network-free — the real mise install + modulefile load is verified by hand, not in CI.
+func TestToolchainDryRun(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	out, err := exec.Command("ssh", "sandbox",
+		"MU_RENDER=plain ~/.local/bin/mu setup toolchain --dry-run --prefix /home/tester/tc --module").CombinedOutput()
+	if err != nil {
+		t.Fatalf("toolchain --dry-run on box: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "delta", "difftastic", "modulefiles/mu-toolchain", "dry-run")
+}
+
+// TestKillPBS cancels a PBS job by its SHORT id (`mdel`/`mu hpc queue kill`). 1284570
+// is the short id mstat shows; it must resolve back to the full 1284570.hpc1 the box's
+// qdel stub receives. -y skips the confirm prompt (no tty in a test).
+func TestKillPBS(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "1284570")
+	mustContain(t, out, "cancelled 1 job(s) on sandbox")
+}
+
+// TestKillSLURM cancels a SLURM job by id (already bare) — drives scancel on the box.
+func TestKillSLURM(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "kill", "--node", "sandslurm", "-y", "8359638")
+	mustContain(t, out, "cancelled 1 job(s) on sandslurm")
+}
+
+// TestKillByName cancels via a name mask rather than an id — run_wave is non-numeric so
+// the selector treats it as a mask, matching exactly the one job.
+func TestKillByName(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "run_wave")
+	mustContain(t, out, "cancelled 1 job(s) on sandbox")
+}
+
+// TestKillRange cancels a contiguous short-id range — 1284570-1284571 covers run_wave
+// and post_proc, so two jobs go in one batched qdel.
+func TestKillRange(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "1284570-1284571")
+	mustContain(t, out, "cancelled 2 job(s) on sandbox")
+}
+
+// TestKillNoMatch exits cleanly (0) with a notice when a selector picks nothing — no
+// qdel is run and the command must not error.
+func TestKillNoMatch(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "9999999")
+	mustContain(t, out, "no matching jobs on sandbox")
+}
+
 // TestCPRoundtrip pushes a file to the box with `mu cp push` and pulls it back with
 // `mu cp pull`, asserting the contents survive the round trip.
 func TestCPRoundtrip(t *testing.T) {
