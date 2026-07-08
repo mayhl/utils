@@ -23,9 +23,8 @@ func gitCmd() *cobra.Command {
 	setHelpLabel(ps, "preview", render.HueLoc)
 	setHelpLabel(dr, "check", render.HueUser)
 	c.AddCommand(sw, ps, dr)
-	// Opt into the house help renderer (subtree inherits); badge the module as
-	// MU_MODULES-gated. First consumer of the reusable wrapHelp/setHelpLabel framework.
-	wrapHelp(c)
+	// The house help renderer is inherited from root (wrapHelp(root)); here we just
+	// give the module its heading, MU_MODULES-gated badge, and shell-front-door panel.
 	setHelpTitle(c, "Git Workflow Previews")
 	setHelpLabel(c, "opt-in", render.HueGroup)
 	setHelpShortcuts(c,

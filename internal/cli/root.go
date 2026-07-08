@@ -3,6 +3,8 @@
 package cli
 
 import (
+	"io"
+
 	"charm.land/lipgloss/v2"
 
 	"github.com/charmbracelet/fang"
@@ -22,11 +24,21 @@ func HelpColorScheme(c lipgloss.LightDarkFunc) fang.ColorScheme {
 	return s
 }
 
+// HouseError replaces fang's black-on-red inverted "ERROR" badge with the house error
+// tier line (glyph + message, Plain-aware) — the inverted status pill violates the
+// color policy. It writes via render.Err to stderr (the same sink fang passes as w),
+// generalizing the render.Err + os.Exit precedent in cp.go across all commands.
+func HouseError(_ io.Writer, _ fang.Styles, err error) {
+	render.Err(err.Error())
+}
+
 // Root builds the top-level `mu` command with all subcommand trees attached.
 func Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "mu",
 		Short: "mayhl_utils — HPC toolkit",
+		Long: "HPC toolkit: SSH/rsync helpers, sshfs mounts, queue and process views,\n" +
+			"and the git signwip workflow. Run a command below, or `mu <command> --help`.",
 		// fang/main own error + usage printing; RunE returns bare errors for
 		// exit codes without Cobra also dumping usage on a runtime failure.
 		SilenceUsage:  true,
@@ -46,6 +58,13 @@ func Root() *cobra.Command {
 	// hidden from the root menu.
 	root.AddCommand(hidden(shellInitCmd()))
 	root.CompletionOptions.HiddenDefaultCmd = true
+	// House help on every subcommand: each direct child gets the house renderer and its
+	// subtree inherits it (Cobra resolves the nearest SetHelpFunc). fang overrides only
+	// the ROOT's help func at Execute, so `mu --help` stays fang-styled by necessity;
+	// wrapping the children keeps every `mu <cmd> --help` in the house language.
+	for _, c := range root.Commands() {
+		wrapHelp(c)
+	}
 	return root
 }
 

@@ -17,7 +17,8 @@ import (
 
 func main() {
 	if err := fang.Execute(context.Background(), cli.Root(),
-		fang.WithColorSchemeFunc(cli.HelpColorScheme)); err != nil {
+		fang.WithColorSchemeFunc(cli.HelpColorScheme),
+		fang.WithErrorHandler(cli.HouseError)); err != nil {
 		os.Exit(1)
 	}
 }
