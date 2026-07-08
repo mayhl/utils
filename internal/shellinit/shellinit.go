@@ -166,6 +166,14 @@ func frontDoors() string {
 // a platform seam. TODO: retire this bridge once those shell consumers call `mu`.
 func configExports() string {
 	var b strings.Builder
+	// Mode (local/hpc), derived from MU_SYSTEM/$BC_HOST. init.sh used to export this; the
+	// binary owns it now so consumers (the .config web-search gate, mise MISE_ENV) still see
+	// it once init.sh is retired. Unguarded — always set, cheap.
+	sys := "local"
+	if onHPC() {
+		sys = "hpc"
+	}
+	fmt.Fprintf(&b, "export MU_SYSTEM=%q\n", sys)
 	if u := config.HPCUser(); u != "" {
 		fmt.Fprintf(&b, "export MU_HPC_UNAME=%q\n", u)
 	}
