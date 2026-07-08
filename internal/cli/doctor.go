@@ -83,7 +83,7 @@ func doctorCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
-	c.AddCommand(doctorFmtCmd())
+	c.AddCommand(doctorFmtCmd(), doctorSetupCmd())
 	return c
 }
 
