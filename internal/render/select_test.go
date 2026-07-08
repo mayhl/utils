@@ -96,3 +96,32 @@ func TestDetailMsgOpensOverlay(t *testing.T) {
 		t.Errorf("blank fetch should fall back to a notice, got %q", m.detail)
 	}
 }
+
+// The facet key cycles the list through a column's distinct values (all → v1 → … → all)
+// and the recompute filters visible rows to the active value.
+func TestSelectFacetCycle(t *testing.T) {
+	rows := []SelectRow{row("a", "a", "CPU"), row("b", "b", "GPU"), row("c", "c", "CPU")}
+	m := newSelectModel(SelectSpec{Columns: []string{"NAME", "CLASS"}, FacetCol: 2}, rows)
+
+	if got := m.facetValues(); len(got) != 2 || got[0] != "CPU" || got[1] != "GPU" {
+		t.Fatalf("facetValues = %v, want [CPU GPU]", got)
+	}
+	steps := []struct {
+		want    string
+		visible int
+	}{
+		{"CPU", 2}, // a, c
+		{"GPU", 1}, // b
+		{"", 3},    // back to all
+	}
+	for i, s := range steps {
+		m.facetVal = m.nextFacet()
+		m.recompute()
+		if m.facetVal != s.want {
+			t.Errorf("step %d facetVal = %q, want %q", i, m.facetVal, s.want)
+		}
+		if len(m.visible) != s.visible {
+			t.Errorf("step %d visible = %d, want %d", i, len(m.visible), s.visible)
+		}
+	}
+}

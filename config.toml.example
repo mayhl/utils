@@ -46,12 +46,22 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #                                  mstat off HPC) skip it. --all includes it regardless.
 #   account   = "ALLOC-ID"       — optional default allocation `mu job sub` charges
 #                                  (-A overrides); omit to use the script's own directive.
+#   cores_per_node = 128         — cores per compute node; enables the `mu hpc queues`
+#                                  MaxNodes column (ceil(MaxCores / cores_per_node)). Omit
+#                                  → MaxNodes shows "--".
+#   queue_class = { q = "GPU" }  — force a queue's node class when the name heuristic is
+#                                  wrong (CPU/GPU/VIS/BigMem/Transfer/Archive).
+#   queue_cores = { q = 64 }     — per-queue cores/node override (GPU/specialty nodes whose
+#                                  core count differs from cores_per_node; feeds MaxNodes).
 [[cluster]]
 name      = "dsrc1"
 domain    = "dsrc1.example.hpc.mil"
 nodes     = ["node-a", "node-b", "node-c"]
 scheduler = "slurm"
 account   = "ALLOC-1234"
+cores_per_node = 128
+# queue_class = { "gpu-debug" = "GPU" }
+# queue_cores = { "gpu-debug" = 64 }
 
 [[cluster]]
 name      = "dsrc2"

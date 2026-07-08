@@ -20,12 +20,15 @@ import (
 // Cluster is one HPC cluster: its name, FQDN suffix, node list, scheduler, and whether
 // it's in the active set (collate targets active clusters by default).
 type Cluster struct {
-	Name      string
-	Domain    string
-	Nodes     []string // sorted
-	Scheduler string   // "pbs" | "slurm"; "" if unset
-	Active    bool     // in the default collate set (config `active`, default true)
-	Account   string   // default allocation to charge on submit; "" if unset (mu job sub -A overrides)
+	Name         string
+	Domain       string
+	Nodes        []string          // sorted
+	Scheduler    string            // "pbs" | "slurm"; "" if unset
+	Active       bool              // in the default collate set (config `active`, default true)
+	Account      string            // default allocation to charge on submit; "" if unset (mu job sub -A overrides)
+	CoresPerNode int               // cores per compute node → MaxNodes = ceil(MaxCores / this); 0 = unset
+	QueueClass   map[string]string // queue name → forced node class, overriding the name heuristic
+	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
 }
 
 // file is the config.toml schema. Clusters use an array-of-tables so their order
@@ -47,12 +50,15 @@ type file struct {
 		QueueAliases string `toml:"queue_aliases"` // idiom for the queue front-door names: "pbs"|"slurm"|"both"
 	} `toml:"shell"`
 	Clusters []struct {
-		Name      string   `toml:"name"`
-		Domain    string   `toml:"domain"`
-		Nodes     []string `toml:"nodes"`
-		Scheduler string   `toml:"scheduler"`
-		Active    *bool    `toml:"active"`  // nil (omitted) → active by default
-		Account   string   `toml:"account"` // default submit allocation; optional
+		Name         string            `toml:"name"`
+		Domain       string            `toml:"domain"`
+		Nodes        []string          `toml:"nodes"`
+		Scheduler    string            `toml:"scheduler"`
+		Active       *bool             `toml:"active"`         // nil (omitted) → active by default
+		Account      string            `toml:"account"`        // default submit allocation; optional
+		CoresPerNode int               `toml:"cores_per_node"` // cores per node → MaxNodes; optional
+		QueueClass   map[string]string `toml:"queue_class"`    // queue → forced node class; optional
+		QueueCores   map[string]int    `toml:"queue_cores"`    // queue → cores/node override; optional
 	} `toml:"cluster"`
 }
 
@@ -128,9 +134,12 @@ func ClusterDefs() []Cluster {
 		sort.Strings(nodes)
 		out = append(out, Cluster{
 			Name: c.Name, Domain: c.Domain, Nodes: nodes,
-			Scheduler: strings.ToLower(c.Scheduler),
-			Active:    c.Active == nil || *c.Active, // default true
-			Account:   c.Account,
+			Scheduler:    strings.ToLower(c.Scheduler),
+			Active:       c.Active == nil || *c.Active, // default true
+			Account:      c.Account,
+			CoresPerNode: c.CoresPerNode,
+			QueueClass:   c.QueueClass,
+			QueueCores:   c.QueueCores,
 		})
 	}
 	return out
@@ -165,6 +174,45 @@ func AccountFor(node string) string {
 		}
 	}
 	return ""
+}
+
+// clusterFor returns the cluster owning node n — matched by cluster name (the `mu hpc
+// queues` label is a cluster) or by a node in its list — and whether one matched.
+func clusterFor(node string) (Cluster, bool) {
+	for _, c := range ClusterDefs() {
+		if c.Name == node {
+			return c, true
+		}
+		for _, n := range c.Nodes {
+			if n == node {
+				return c, true
+			}
+		}
+	}
+	return Cluster{}, false
+}
+
+// CoresPerNodeFor returns the cluster's default cores-per-node (for the MaxNodes column),
+// or 0 if unset — callers render "--" when it's 0.
+func CoresPerNodeFor(node string) int {
+	c, _ := clusterFor(node)
+	return c.CoresPerNode
+}
+
+// QueueClassOverride returns the config-forced node class for a specific queue on the
+// cluster owning node, or "" when there's no override (caller falls back to the name
+// heuristic).
+func QueueClassOverride(node, queue string) string {
+	c, _ := clusterFor(node)
+	return c.QueueClass[queue]
+}
+
+// QueueCoresOverride returns the per-queue cores/node override, or 0 when there's none
+// (caller falls back to CoresPerNodeFor) — for GPU/specialty queues whose node core count
+// differs from the cluster default.
+func QueueCoresOverride(node, queue string) int {
+	c, _ := clusterFor(node)
+	return c.QueueCores[queue]
 }
 
 // Fleet is the explicit list of node names `--fleet` queries — one fetch per node, so a

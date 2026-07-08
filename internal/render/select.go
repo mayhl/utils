@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,6 +46,12 @@ type SelectSpec struct {
 	// title instead of "Select to <verb>").
 	ReadOnly bool
 	Title    string
+	// FacetCol enables the `f` key to cycle the list through the distinct values of one
+	// column: all → value1 → value2 → … → all. It's the 1-based index of that column in
+	// Columns (0 = disabled). Domain-free — the widget just cycles the cell values.
+	// FacetLabel names it in the footer ("f class: GPU"); defaults to the column header.
+	FacetCol   int
+	FacetLabel string
 }
 
 // Select runs the interactive picker and returns the IDs the user marked (nil if
@@ -95,6 +102,7 @@ type selectModel struct {
 	top           int // scroll offset into visible
 	filter        string
 	filtering     bool
+	facetVal      string // active FacetCol filter value; "" = all (no facet filter)
 	detail        string // inspect overlay text; "" = list view
 	detailLoading bool   // Detail fetch in flight (overlay shows a spinner-less notice)
 	interval      time.Duration
@@ -216,6 +224,12 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "/":
 			m.filtering = true
+		case "f": // cycle the facet filter (e.g. class): all → v1 → … → all
+			if m.spec.FacetCol > 0 {
+				m.facetVal = m.nextFacet()
+				m.recompute()
+				m.clampScroll()
+			}
 		case "i": // inspect the cursor row (job card); async so a remote fetch doesn't freeze
 			if m.spec.Detail != nil && m.cursor < len(m.visible) {
 				id := m.rows[m.visible[m.cursor]].ID
@@ -259,17 +273,81 @@ func (m selectModel) updateFilter(msg tea.KeyPressMsg) tea.Model {
 	return m
 }
 
-// recompute rebuilds the visible set from the filter (case-insensitive substring
-// over the ID + all cells) and resets the cursor to the top.
+// recompute rebuilds the visible set from the facet filter (an exact match on the
+// FacetCol cell) and the text filter (case-insensitive substring over the ID + all
+// cells), then resets the cursor to the top.
 func (m *selectModel) recompute() {
 	q := strings.ToLower(m.filter)
 	m.visible = m.visible[:0]
 	for i, r := range m.rows {
+		if m.facetVal != "" && m.facetCell(r) != m.facetVal {
+			continue
+		}
 		if q == "" || strings.Contains(strings.ToLower(r.ID+" "+strings.Join(r.Cells, " ")), q) {
 			m.visible = append(m.visible, i)
 		}
 	}
 	m.cursor, m.top = 0, 0
+}
+
+// facetCell returns a row's FacetCol value ("" when the facet is disabled or the row is
+// too short — such a row is filtered out while a facet is active).
+func (m selectModel) facetCell(r SelectRow) string {
+	if m.spec.FacetCol <= 0 || m.spec.FacetCol > len(r.Cells) {
+		return ""
+	}
+	return r.Cells[m.spec.FacetCol-1]
+}
+
+// facetValues returns the sorted distinct non-empty FacetCol values across all rows.
+func (m selectModel) facetValues() []string {
+	seen := map[string]bool{}
+	var vals []string
+	for _, r := range m.rows {
+		if v := m.facetCell(r); v != "" && !seen[v] {
+			seen[v] = true
+			vals = append(vals, v)
+		}
+	}
+	sort.Strings(vals)
+	return vals
+}
+
+// nextFacet advances the facet cycle: all → value1 → … → last → all. A current value
+// that vanished after a refresh restarts at the first value.
+func (m selectModel) nextFacet() string {
+	vals := m.facetValues()
+	if len(vals) == 0 {
+		return ""
+	}
+	if m.facetVal == "" {
+		return vals[0]
+	}
+	for i, v := range vals {
+		if v == m.facetVal {
+			if i+1 < len(vals) {
+				return vals[i+1]
+			}
+			return "" // past the last → back to all
+		}
+	}
+	return vals[0]
+}
+
+// facetHint is the footer fragment for the f key: the label + the active value (or "all").
+func (m selectModel) facetHint(dot string) string {
+	if m.spec.FacetCol <= 0 {
+		return ""
+	}
+	label := m.spec.FacetLabel
+	if label == "" && m.spec.FacetCol-1 < len(m.spec.Columns) {
+		label = strings.ToLower(m.spec.Columns[m.spec.FacetCol-1])
+	}
+	val := m.facetVal
+	if val == "" {
+		val = "all"
+	}
+	return dot + "f " + label + ": " + val
 }
 
 func (m *selectModel) pageSize() int {
@@ -384,12 +462,14 @@ func (m selectModel) View() tea.View {
 	var foot string
 	if m.spec.ReadOnly {
 		foot = aglyph("↑↓", "u/d") + " move" + dot + "/ filter"
+		foot += m.facetHint(dot)
 		if m.spec.Detail != nil {
 			foot += dot + "i info"
 		}
 		foot += dot + "q quit"
 	} else {
 		foot = aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" + dot + "/ filter"
+		foot += m.facetHint(dot)
 		if m.spec.Detail != nil {
 			foot += dot + "i info"
 		}
