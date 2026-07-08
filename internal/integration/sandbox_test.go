@@ -347,6 +347,38 @@ func TestSyncPullDotfiles(t *testing.T) {
 	mustContain(t, out, "already up to date")
 }
 
+// TestShellLayerOnBox proves the binary is self-sufficient on a real box: after onboard
+// (mu binary + .config, NO mayhl_utils source, no init.sh), eval'ing `mu setup --eval zsh`
+// on the box defines the full functional shell layer — the connectivity seam
+// (mu_ssh_login/mu_auth), support libs, shared tooling, and front-doors. This is the
+// contract .zshrc.hpc relies on for a no-checkout HPC login node.
+func TestShellLayerOnBox(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	// Eval the wire on the box (as MU_SYSTEM=hpc → the HPC seam) and report each helper.
+	script := `export MU_SYSTEM=hpc
+export PATH="$HOME/.local/bin:$PATH"
+eval "$(mu setup --eval zsh 2>/dev/null)"
+for f in mu_log mu_ssh_login mu_auth qtar mu_status gkill mu_run mps mlog; do
+  command -v "$f" >/dev/null 2>&1 && echo "HAVE $f" || echo "MISS $f"
+done`
+	cmd := exec.Command("ssh", "-q", "sandbox", "zsh -s")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("box shell-layer eval: %v\n%s", err, out)
+	}
+	got := string(out)
+	if strings.Contains(got, "MISS ") {
+		t.Errorf("binary not self-sufficient on the box (a helper was undefined):\n%s", got)
+	}
+	for _, w := range []string{"mu_ssh_login", "mu_auth", "qtar", "mu_status", "gkill", "mps", "mlog"} {
+		if !strings.Contains(got, "HAVE "+w) {
+			t.Errorf("missing HAVE %s on the box:\n%s", w, got)
+		}
+	}
+}
+
 // TestSSHBannerQuieted checks mu's ssh calls pass -q so the box's login banner never leaks
 // into mu's output. Baseline: a raw ssh shows the mock banner; a sync push (which forwards
 // ssh stderr via pipeSSH) must not. Skips if the box serves no banner (pre-banner image).

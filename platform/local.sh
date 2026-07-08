@@ -13,14 +13,14 @@ case ":$PATH:" in
 esac
 export KRB5_CONFIG="${KRB5_CONFIG:-/etc/krb5.conf}"
 
-# ssh binary: the Kerberos `ossh` build, else system ssh.
-# `ossh` is usually a shell alias (invisible to this subshell), so its binary path
-# comes from config.toml ([ssh] ossh), exported as MU_OSSH by `mu shell-init`
-# (which runs before this seam). Authoritative — this module owns the seam.
+# ssh binary: plain `ssh` by default; the Kerberos `ossh` build overrides it when
+# configured. `ossh` is opt-in via config.toml ([ssh] ossh) → exported as MU_OSSH by
+# `mu shell-init` (which runs before this seam). No `command -v ossh` probe: a box
+# without ossh configured just uses ssh. Authoritative — this module owns the seam.
 if [ -n "${MU_OSSH}" ] && [ -x "${MU_OSSH}" ]; then
   MU_SSH="${MU_OSSH}"
 else
-  MU_SSH="$(command -v ossh || command -v ssh)"
+  MU_SSH=ssh
 fi
 export MU_SSH
 
@@ -96,10 +96,10 @@ hcd() {
   for a in "$@"; do case "$a" in -*) ;; *) name=$a ;; esac done
   [ -n "$name" ] && cd "$(mu sshfs path "$name")"
 }
-hmt() { mu sshfs mount "$@"; }  # mount, no cd; hmt <name>… / hmt @group / hmt --all
-hadd() { mu sshfs add "$@"; }   # hadd <name> <node> <remote-path>
-hset() { mu sshfs set "$@"; }   # hset <name> [--node|--path|--ro|--rw]
-hum() { mu sshfs umount "$@"; } # unmount; hum --all = all live
+hmt() { mu sshfs mount "$@"; }        # mount, no cd; hmt <name>… / hmt @group / hmt --all
+hadd() { mu sshfs add "$@"; }         # hadd <name> <node> <remote-path>
+hset() { mu sshfs set "$@"; }         # hset <name> [--node|--path|--ro|--rw]
+hum() { mu sshfs umount "$@"; }       # unmount; hum --all = all live
 hgroup() { mu sshfs group "$@"; }     # hgroup <group> <name>…  add mounts to a group
 hungroup() { mu sshfs ungroup "$@"; } # hungroup <group> <name>…  remove
-alias hls='mu sshfs list'       # table with live status
+alias hls='mu sshfs list'             # table with live status

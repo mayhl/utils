@@ -99,3 +99,65 @@ hpc1 -h
 		})
 	}
 }
+
+// TestSeamSelfSufficient verifies the generated shell-init DEFINES the connectivity seam
+// (mu_auth/mu_ssh_login/$MU_SSH) and its support libs (mu_log/mu_indirect/…) on its own —
+// so a box with only the mu binary + config (no mayhl_utils checkout, no init.sh) has a
+// working shell layer. This is the inverse of TestDispatchExec, which pre-stubs the seam
+// and relies on the guards making the emitted blocks a no-op.
+func TestSeamSelfSufficient(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	body := `
+hpc_user = "alice"
+[[cluster]]
+name = "alpha"
+domain = "alpha.example.mil"
+nodes = ["hpc1"]
+`
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", cfg)
+	t.Setenv("MU_SYSTEM", "hpc") // emit the HPC seam (plain ssh, no-op auth)
+	t.Setenv("MU_NODE", "none")
+	config.ResetForTest()
+
+	// No stubs — a bare shell. Eval the generated layer, then report each helper: the
+	// seam + support libs, the shared tooling (tar/status/utils), and the front-doors.
+	driver := Generate() + `
+for f in mu_log mu_indirect mu_have mu_auth mu_ssh_login qtar mu_status gkill mu_run mps mlog; do
+  command -v "$f" >/dev/null 2>&1 && echo "HAVE $f" || echo "MISS $f"
+done
+[ -n "$MU_SSH" ] && echo "MU_SSH_SET"
+`
+	script := filepath.Join(dir, "driver.sh")
+	if err := os.WriteFile(script, []byte(driver), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wants := []string{
+		"HAVE mu_log", "HAVE mu_indirect", "HAVE mu_have", "HAVE mu_auth", "HAVE mu_ssh_login",
+		"HAVE qtar", "HAVE mu_status", "HAVE gkill", "HAVE mu_run", "HAVE mps", "HAVE mlog", "MU_SSH_SET",
+	}
+	for _, sh := range []string{"bash", "zsh"} {
+		t.Run(sh, func(t *testing.T) {
+			bin, err := exec.LookPath(sh)
+			if err != nil {
+				t.Skipf("%s not on PATH", sh)
+			}
+			out, err := exec.Command(bin, script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s exited with error: %v\n%s", sh, err, out)
+			}
+			got := string(out)
+			if strings.Contains(got, "MISS ") {
+				t.Errorf("%s: a seam helper was undefined (not self-sufficient):\n%s", sh, got)
+			}
+			for _, w := range wants {
+				if !strings.Contains(got, w) {
+					t.Errorf("%s: missing %q:\n%s", sh, w, got)
+				}
+			}
+		})
+	}
+}
