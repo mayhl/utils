@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/git"
@@ -18,21 +21,51 @@ func gitCmd() *cobra.Command {
 			"or push, in the house visual language. Read-only: the shell tools still do the\n" +
 			"actual signing/pushing. Opt-in via MU_MODULES=git.",
 	}
-	sw, ps, dr := gitSignwipCmd(), gitPushsignedCmd(), gitDoctorCmd()
+	rv, sw, ps, dr := gitReviewedCmd(), gitSignwipCmd(), gitPushsignedCmd(), gitDoctorCmd()
+	setHelpLabel(rv, "preview", render.HueLoc)
 	setHelpLabel(sw, "preview", render.HueLoc)
 	setHelpLabel(ps, "preview", render.HueLoc)
 	setHelpLabel(dr, "check", render.HueUser)
-	c.AddCommand(sw, ps, dr)
+	c.AddCommand(rv, sw, ps, dr)
 	// The house help renderer is inherited from root (wrapHelp(root)); here we just
 	// give the module its heading, MU_MODULES-gated badge, and shell-front-door panel.
 	setHelpTitle(c, "Git Workflow Previews")
 	setHelpLabel(c, "opt-in", render.HueGroup)
 	setHelpShortcuts(
 		c,
+		[2]string{"grv", "git reviewed — un-tag reviewed WIP oldest-first (previews via mu git)"},
 		[2]string{"gsw", "git signwip — sign the reviewed WIP (previews via mu git)"},
 		[2]string{"gps", "git pushsigned — push the signed prefix (previews via mu git)"},
 	)
 	return c
+}
+
+func gitReviewedCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reviewed [N]",
+		Short: "Which [unreviewed] WIP `git reviewed` would un-tag (oldest-first).",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			n := 0 // 0 = all
+			if len(args) == 1 && args[0] != "all" {
+				v, err := strconv.Atoi(args[0])
+				if err != nil || v < 0 {
+					return fmt.Errorf("count must be a non-negative number or 'all' (got %q)", args[0])
+				}
+				n = v
+			}
+			r, err := git.ReviewedPreview(n)
+			if err != nil {
+				return err
+			}
+			if !r.HasBase {
+				render.Warn("no signed commit to base on")
+				return nil
+			}
+			render.GitReviewed(r)
+			return nil
+		},
+	}
 }
 
 func gitSignwipCmd() *cobra.Command {

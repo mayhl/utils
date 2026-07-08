@@ -96,6 +96,46 @@ func GitSignwip(s git.Signwip) {
 	gitLegend(s.Tagged > 0)
 }
 
+// GitReviewed renders the read-only `git reviewed` preview: which [unreviewed] WIP would
+// be un-tagged (oldest-first) vs kept. The ACT label carries the action; the ⚑ still
+// flags every [unreviewed] subject.
+func GitReviewed(r git.Reviewed) {
+	var title string
+	if r.Untag == r.Tagged {
+		title = fmt.Sprintf("git reviewed — un-tag all %d %s", r.Tagged, glyph("⚑", "!"))
+	} else {
+		title = fmt.Sprintf("git reviewed — un-tag %d of %d %s", r.Untag, r.Tagged, glyph("⚑", "!"))
+	}
+	t := gitTable(title)
+	t.AppendHeader(table.Row{"ACT", "HASH", "SUBJECT"})
+	actW, hashW := len("ACT"), len("HASH")
+	for _, row := range r.Rows {
+		t.AppendRow(table.Row{row.Act, row.Hash, row.Subject})
+		actW, hashW = max(actW, len(row.Act)), max(hashW, len(row.Hash))
+	}
+	t.SetColumnConfigs([]table.ColumnConfig{
+		{Name: "ACT", Transformer: reviewedActTransformer},
+		{Name: "HASH", Colors: gitHashColor()},
+		{Name: "SUBJECT", WidthMax: subjectBudget(actW+hashW, 3), WidthMaxEnforcer: subjectFit},
+	})
+	t.Render()
+	gitLegend(r.Tagged > 0)
+}
+
+// reviewedActTransformer colors the ACT cell: green untag (being cleared), magenta keep
+// (stays tagged), and dim for clean / base (not acted on).
+func reviewedActTransformer(v any) string {
+	s := fmt.Sprint(v)
+	switch s {
+	case "untag":
+		return text.Colors{text.FgGreen}.Sprint(s)
+	case "keep":
+		return text.Colors{text.FgMagenta}.Sprint(s)
+	default: // "clean" | "base"
+		return text.Colors{text.FgHiBlack}.Sprint(s)
+	}
+}
+
 // GitPushsigned renders the read-only pushsigned preview: the contiguous signed
 // prefix that would push vs the WIP held local. The ✓/✗ glyph carries signedness.
 func GitPushsigned(p git.Pushsigned) {

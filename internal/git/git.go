@@ -102,6 +102,85 @@ func SignwipPreview() (Signwip, error) {
 	return s, nil
 }
 
+// ReviewRow is one line of the reviewed preview: a commit in the unsigned WIP stack
+// above the signed base. Act is "untag" (an [unreviewed] commit among the oldest-N that
+// `git reviewed` would clear), "keep" (an [unreviewed] commit beyond N, left tagged),
+// "clean" (already untagged), or "base" (the newest signed commit).
+type ReviewRow struct {
+	Act     string
+	Hash    string
+	Subject string
+}
+
+// Reviewed is the read-only `git reviewed [N]` preview: the WIP above the signed base,
+// with the oldest-N [unreviewed] commits marked untag.
+type Reviewed struct {
+	HasBase bool
+	Rows    []ReviewRow
+	Tagged  int // total [unreviewed] above base
+	Untag   int // how many the oldest-N selection clears
+}
+
+// ReviewedPreview mirrors git-reviewed.sh's preview without un-tagging anything: it marks
+// the oldest n [unreviewed] commits above the signed base as untag (n<=0 → all of them),
+// the rest keep, oldest-first.
+func ReviewedPreview(n int) (Reviewed, error) {
+	var r Reviewed
+	base, err := signedBase()
+	if err != nil {
+		return r, err
+	}
+	if base == "" {
+		return r, nil // no signed base — HasBase stays false
+	}
+	r.HasBase = true
+	if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
+		if h, sub, ok := strings.Cut(bh, "\t"); ok {
+			r.Rows = append(r.Rows, ReviewRow{Act: "base", Hash: h, Subject: sub})
+		}
+	}
+	wip, err := out("log", "--reverse", "--format=%h%x09%s", base+"..HEAD")
+	if err != nil {
+		return r, err
+	}
+	rows, tagged, untag := classifyWip(splitNonEmpty(wip), n)
+	r.Rows = append(r.Rows, rows...)
+	r.Tagged, r.Untag = tagged, untag
+	return r, nil
+}
+
+// classifyWip marks the WIP log lines ("hash\tsubject", oldest→newest): the oldest n
+// [unreviewed] commits as untag (n<=0 or n>tagged → all of them), any later [unreviewed]
+// as keep, and already-untagged commits as clean. Returns the rows plus the total tagged
+// count and how many were selected to untag. Pure (no git) so the selection is unit-tested.
+func classifyWip(lines []string, n int) (rows []ReviewRow, tagged, untag int) {
+	for _, line := range lines {
+		if _, sub, ok := strings.Cut(line, "\t"); ok && strings.HasPrefix(sub, unreviewed) {
+			tagged++
+		}
+	}
+	lim := n
+	if lim <= 0 || lim > tagged {
+		lim = tagged
+	}
+	for _, line := range lines {
+		h, sub, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		act := "clean"
+		if strings.HasPrefix(sub, unreviewed) {
+			if untag < lim {
+				act, untag = "untag", untag+1
+			} else {
+				act = "keep"
+			}
+		}
+		rows = append(rows, ReviewRow{Act: act, Hash: h, Subject: sub})
+	}
+	return rows, tagged, untag
+}
+
 // PushRow is one line of the pushsigned preview.
 type PushRow struct {
 	Push    bool // in the contiguous signed prefix → would push
