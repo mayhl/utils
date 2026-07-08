@@ -1,0 +1,19 @@
+# Laptop-side mu config for the local sandbox container. Use it with:
+#   MU_CONFIG_FILE=~/.config/sandbox/test-config.toml mu hpc queue --node sandbox
+# Points mu's remote verbs at the docker box (tester@<node>.local → ssh_config alias
+# → localhost:2222). hpc_user=tester matches the container user; leave MU_HPC_UNAME
+# UNSET so EnsureTicket skips Kerberos (the box uses key auth). Two clusters share the
+# one box so both scheduler idioms are exercised: sandbox=PBS, sandslurm=SLURM.
+hpc_user = "tester"
+
+[[cluster]]
+name      = "sbpbs"
+domain    = "local"
+nodes     = ["sandbox"]
+scheduler = "pbs"
+
+[[cluster]]
+name      = "sbslurm"
+domain    = "local"
+nodes     = ["sandslurm"]
+scheduler = "slurm"

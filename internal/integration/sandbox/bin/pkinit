@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Safety stub: the sandbox uses ssh key auth, so mu must NEVER pkinit against the real
+# Kerberos realm during tests. If anything still calls pkinit, it hits this no-op.
+echo "sandbox: pkinit suppressed (key-auth box, no Kerberos)" >&2
+exit 0

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake SLURM squeue for the sandbox. mu calls:
+#   squeue -h [--me|-u ..] -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"
+# so emit pipe-delimited, no header (-h):
+#   JobID|Partition|Name|User|State|Elapsed|TimeLimit|Nodes|Reason/NodeList|StartTime
+cat <<'EOF'
+8359638|standard|run_wave|tester|R|6:14:32|1-00:00:00|4|nid00[123-126]|2026-07-06T00:00:00
+8359639|standard|post_proc|tester|PD|0:00|2:00:00|1|(Priority)|N/A
+8359640|debug|mesh_gen|tester|R|12:47|1:00:00|2|nid00[201-202]|2026-07-06T05:30:00
+8359641|standard|nest_grid|tester|CG|1:02:11|2-00:00:00|8|nid01[001-008]|2026-07-05T20:00:00
+EOF

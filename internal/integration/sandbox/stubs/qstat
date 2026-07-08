@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Fake PBS qstat for the sandbox. Dispatches by flags:
+#   -f  → full detail  (minfo:  qstat -f <ids>)
+#   -x  → finished list (mhist: qstat -xa)
+#   else→ running/queued (mstat: qstat -a)
+# Output formats match mu's ParsePBS / ParseDetail fixtures.
+case " $* " in
+  *" -f"*|*-f\ *)
+    cat <<'EOF'
+Job Id: 1284570.hpc1
+    Job_Name = run_wave
+    Job_Owner = tester@hpc1
+    job_state = R
+    queue = standard
+    Resource_List.nodect = 4
+    Resource_List.ncpus = 96
+    Resource_List.walltime = 24:00:00
+    resources_used.walltime = 06:14:52
+    ctime = Sat Jul  5 17:40:00 2026
+    stime = Sun Jul  6 00:00:00 2026
+    Output_Path = hpc1:/home/tester/run/run.o1284570
+    Error_Path = hpc1:/home/tester/run/run.e1284570
+    init_work_dir = /home/tester/run
+    Exit_status = 0
+EOF
+    ;;
+  *-x*)
+    cat <<'EOF'
+hpc1:
+                                                            Req'd  Req'd   Elap
+Job ID          Username Queue    Jobname    SessID NDS TSK Memory Time  S Time
+--------------- -------- -------- ---------- ------ --- --- ------ ----- - -----
+1284560.hpc1 tester   standard done_run    41001   4 512    --  24:00 F 23:41
+1284561.hpc1 tester   debug    quick_test  41010   1  32    --  01:00 F 00:12
+EOF
+    ;;
+  *)
+    cat <<'EOF'
+hpc1:
+                                                            Req'd  Req'd   Elap
+Job ID          Username Queue    Jobname    SessID NDS TSK Memory Time  S Time
+--------------- -------- -------- ---------- ------ --- --- ------ ----- - -----
+1284570.hpc1 tester   standard run_wave    48213   4 512    --  24:00 R 06:14
+1284571.hpc1 tester   standard post_proc      --   1  32    --  02:00 Q   --
+1284572.hpc1 tester   debug    mesh_gen    49001   2 256    --  01:00 H   --
+1284573.hpc1 tester   standard nest_grid   47882   8 1024   --  48:00 R 12:47
+EOF
+    ;;
+esac

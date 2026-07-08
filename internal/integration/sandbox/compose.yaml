@@ -1,0 +1,12 @@
+# Local mu test box (general sandbox: onboard, cp, sshfs, queue).
+#   docker compose up -d --build          # bring up / rebuild
+#   ssh sandbox   (zsh)  /  ssh sandbox-bash   (bash)
+#   docker compose down                    # tear down
+services:
+  sandbox:
+    build: .
+    image: sandbox:sles15
+    container_name: sandbox
+    hostname: sandbox
+    ports:
+      - "2222:22"       # host 2222 → container sshd; ssh_config maps the aliases here

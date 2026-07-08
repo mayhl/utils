@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Fake SLURM scontrol for the sandbox. mu calls `scontrol show job <ids>` for minfo.
+case "$1" in
+  show)
+    cat <<'EOF'
+JobId=8359638 JobName=run_wave
+   UserId=tester(30015) GroupId=tester(30015)
+   Account=proj123 JobState=RUNNING Reason=None
+   Partition=standard
+   NumNodes=4 NumCPUs=96 NumTasks=96
+   RunTime=06:14:52 TimeLimit=1-00:00:00
+   SubmitTime=2026-07-05T17:40:00 StartTime=2026-07-06T00:00:00 EndTime=Unknown
+   WorkDir=/home/tester/run
+   StdOut=/home/tester/run/run.8359638.out
+   StdErr=/home/tester/run/run.8359638.err
+   ExitCode=0:0
+EOF
+    ;;
+  *) : ;;
+esac

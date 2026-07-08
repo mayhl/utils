@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake SLURM sacct for the sandbox. mu calls (mhist):
+#   sacct -X -n -p -o JobIDRaw,JobName,User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End
+# -p → pipe-delimited with a trailing pipe; -n → no header.
+cat <<'EOF'
+8359600|done_run|tester|standard|COMPLETED|23:41:02|1-00:00:00|4|2026-07-04T10:00:00|2026-07-04T10:05:00|2026-07-05T09:46:02|
+8359601|quick_test|tester|debug|COMPLETED|00:12:33|1:00:00|1|2026-07-05T08:00:00|2026-07-05T08:01:00|2026-07-05T08:13:33|
+8359602|failed_run|tester|standard|FAILED|00:03:10|24:00:00|2|2026-07-05T11:00:00|2026-07-05T11:00:30|2026-07-05T11:03:40|
+EOF

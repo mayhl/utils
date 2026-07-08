@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake PBS qdel / SLURM scancel — accept an id (or list) and succeed quietly.
+echo "${0##*/}: cancelled ${*:-<no id>}" >&2
+exit 0

@@ -34,7 +34,19 @@ func TestMain(m *testing.M) {
 // sshes to the box). Any failure becomes a skip, not a hard error.
 func setup() error {
 	if os.Getenv("MU_SANDBOX_CONFIG") == "" {
-		return errors.New("MU_SANDBOX_CONFIG unset")
+		// Default to the in-repo rig config (this test's CWD is the package dir), so
+		// `go test -tags sandbox ./internal/integration/` works with no env var. Absolute,
+		// so the mu subprocess resolves it regardless of its own CWD.
+		abs, err := filepath.Abs("sandbox/test-config.toml")
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return errors.New("no sandbox/test-config.toml (and MU_SANDBOX_CONFIG unset)")
+		}
+		if err := os.Setenv("MU_SANDBOX_CONFIG", abs); err != nil {
+			return err
+		}
 	}
 	if err := exec.Command("ssh", "sandbox", "true").Run(); err != nil {
 		return errors.New("box unreachable — cd ~/.config/sandbox && docker compose up -d")
