@@ -25,7 +25,7 @@ func psCmd() *cobra.Command {
 			"the list — a name mask (grep-style), a PID, a PID range (4501-4510), or a\n" +
 			"list (4501,4507). Prefix a numeric that's really a name with ~ to force a\n" +
 			"mask. With -i, open the interactive picker to filter, multi-select, and\n" +
-			"kill. Front-door: `mps`. To signal matches headlessly, see `mu ps kill`.",
+			"kill. To signal matches headlessly, see `mu ps kill`.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			mask := ""
@@ -55,6 +55,7 @@ func psCmd() *cobra.Command {
 	c.Flags().StringVarP(&userFlag, "user", "u", "", "filter by user (default: you)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "include every user's processes")
 	c.AddCommand(psKillCmd())
+	setHelpShortcuts(c, [2]string{"mps", "list local processes (mps -i = interactive picker)"})
 	return c
 }
 

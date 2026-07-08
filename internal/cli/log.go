@@ -43,6 +43,7 @@ func logCmd() *cobra.Command {
 	f.BoolVarP(&interactive, "interactive", "i", false, "browse in a live, scrollable, filterable viewer")
 	f.BoolVar(&jsonOut, "json", false, "emit events as NDJSON (one record per line, payloads inline)")
 	c.AddCommand(logWriteCmd(), logClearCmd())
+	setHelpShortcuts(c, [2]string{"mlog", "view the event log"})
 	return c
 }
 

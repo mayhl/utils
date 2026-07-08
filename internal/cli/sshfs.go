@@ -21,18 +21,21 @@ func sshfsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sshfs",
 		Short: "Mount HPC dirs locally over sshfs (macOS/fuse-t).",
-		Long: `Mount HPC dirs locally over sshfs (macOS/fuse-t).
-
-Shortcuts (shell functions — not 1:1 with the subcommands below):
-  hcd <name>      mount if needed + cd into it    (mu sshfs mount)
-  hmt <name>…     mount, no cd (hmt @grp / --all)  (mu sshfs mount)
-  hls             list mounts with live status    (mu sshfs list)
-  hadd            register a new mount            (mu sshfs add)
-  hset            change/repoint a mount          (mu sshfs set)
-  hum             unmount (hum --all = all live)   (mu sshfs umount)
-  hgroup <g> <n>… add mounts to a group           (mu sshfs group)`,
+		Long: "Mount HPC dirs onto the local workstation over sshfs (macOS/fuse-t) so remote\n" +
+			"paths behave like local files. Local-only. The h* shell shortcuts below are the\n" +
+			"day-to-day front-doors (not 1:1 with the subcommands).",
 	}
 	c.AddCommand(sshfsListCmd(), sshfsMountCmd(), sshfsUmountCmd(), sshfsPathCmd(), sshfsAddCmd(), sshfsSetCmd(), sshfsRmCmd(), sshfsGroupCmd(false), sshfsGroupCmd(true))
+	setHelpShortcuts(
+		c,
+		[2]string{"hcd <name>", "mount if needed + cd into it (mu sshfs mount)"},
+		[2]string{"hmt <name>…", "mount, no cd; hmt @group / --all (mu sshfs mount)"},
+		[2]string{"hls", "list mounts with live status (mu sshfs list)"},
+		[2]string{"hadd", "register a new mount (mu sshfs add)"},
+		[2]string{"hset", "change/repoint a mount (mu sshfs set)"},
+		[2]string{"hum", "unmount; hum --all = all live (mu sshfs umount)"},
+		[2]string{"hgroup <g> <n>…", "add mounts to a group (mu sshfs group)"},
+	)
 	return c
 }
 
