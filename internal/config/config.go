@@ -105,6 +105,11 @@ func configPath() string {
 	return ""
 }
 
+// Path returns the resolved config.toml path ($MU_CONFIG_FILE, else $MU_ROOT/config.toml
+// when it exists), or "" when none is set. Exported for `mu setup sync`, which reads and
+// propagates the raw file rather than the parsed struct (to preserve comments).
+func Path() string { return configPath() }
+
 // ClusterDefs yields the configured clusters from config.toml, order preserved. A
 // cluster with no domain is skipped, matching the shell codegen and old resolver.
 func ClusterDefs() []Cluster {

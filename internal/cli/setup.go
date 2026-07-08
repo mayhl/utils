@@ -44,7 +44,7 @@ func setupCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&evalShell, "eval", "", "print shell-init + completion to `eval` at rc time (bash|zsh|fish)")
-	c.AddCommand(shellInitCmd(), setupCompletionCmd(), onboardCmd(), toolchainCmd())
+	c.AddCommand(shellInitCmd(), setupCompletionCmd(), onboardCmd(), toolchainCmd(), syncCmd())
 	return c
 }
 
