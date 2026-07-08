@@ -1,0 +1,9 @@
+# mu dev toolchain — base CLI tier, installed by `mu setup toolchain` via mise.
+# Embedded in the mu binary so a fresh box needs no .config clone to know what to
+# install (the self-contained win). Relocated from ~/.config/mise/config.toml.
+# Print the effective copy with `mu setup toolchain --dump-manifest`.
+[tools]
+# delta pinned to 0.18.2 — the last release with an x86_64-apple-darwin prebuilt
+# (0.19+ is arm-mac-only); covers Intel mac + arm mac + linux.
+"github:dandavison/delta" = "0.18.2" # syntax-highlighting diff/log pager
+difftastic = "latest"                # structural tree-sitter diff (git dft)
