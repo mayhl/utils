@@ -21,10 +21,10 @@ func out(args ...string) (string, error) {
 	return strings.TrimSpace(string(b)), err
 }
 
-// WipRow is one line of the signwip preview.
+// WipRow is one line of the signwip preview. The base (newest signed) row carries
+// Act "base"; the WIP stacked on it carries "sign" (untagged) or "skip" ([unreviewed]).
 type WipRow struct {
-	Role    string // "base" | "wip"
-	Act     string // "-" | "sign" | "skip"
+	Act     string // "base" | "sign" | "skip"
 	Hash    string // short
 	Subject string
 }
@@ -78,7 +78,7 @@ func SignwipPreview() (Signwip, error) {
 	s.HasBase = true
 	if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
 		if h, sub, ok := strings.Cut(bh, "\t"); ok {
-			s.Rows = append(s.Rows, WipRow{Role: "base", Act: "-", Hash: h, Subject: sub})
+			s.Rows = append(s.Rows, WipRow{Act: "base", Hash: h, Subject: sub})
 		}
 	}
 	wip, err := out("log", "--reverse", "--format=%h%x09%s", base+"..HEAD")
@@ -96,7 +96,7 @@ func SignwipPreview() (Signwip, error) {
 			act = "skip"
 			s.Tagged++
 		}
-		s.Rows = append(s.Rows, WipRow{Role: "wip", Act: act, Hash: h, Subject: sub})
+		s.Rows = append(s.Rows, WipRow{Act: act, Hash: h, Subject: sub})
 	}
 	s.ToSign = s.Total - s.Tagged
 	return s, nil

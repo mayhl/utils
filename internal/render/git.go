@@ -81,17 +81,16 @@ func gitTable(title string) table.Writer {
 // vs skip ([unreviewed]). Meaning rides the ACT label; color is accent only.
 func GitSignwip(s git.Signwip) {
 	t := gitTable(fmt.Sprintf("git signwip — %d to sign, %d %s skipped", s.ToSign, s.Tagged, glyph("⚑", "!")))
-	t.AppendHeader(table.Row{"ROLE", "ACT", "HASH", "SUBJECT"})
-	roleW, actW, hashW := len("ROLE"), len("ACT"), len("HASH")
+	t.AppendHeader(table.Row{"ACT", "HASH", "SUBJECT"})
+	actW, hashW := len("ACT"), len("HASH")
 	for _, r := range s.Rows {
-		t.AppendRow(table.Row{r.Role, r.Act, r.Hash, r.Subject})
-		roleW, actW, hashW = max(roleW, len(r.Role)), max(actW, len(r.Act)), max(hashW, len(r.Hash))
+		t.AppendRow(table.Row{r.Act, r.Hash, r.Subject})
+		actW, hashW = max(actW, len(r.Act)), max(hashW, len(r.Hash))
 	}
 	t.SetColumnConfigs([]table.ColumnConfig{
-		{Name: "ROLE", Colors: text.Colors{text.FgHiBlack}},
 		{Name: "ACT", Transformer: signwipActTransformer},
 		{Name: "HASH", Colors: gitHashColor()},
-		{Name: "SUBJECT", WidthMax: subjectBudget(roleW+actW+hashW, 4), WidthMaxEnforcer: subjectFit},
+		{Name: "SUBJECT", WidthMax: subjectBudget(actW+hashW, 3), WidthMaxEnforcer: subjectFit},
 	})
 	t.Render()
 	gitLegend(s.Tagged > 0)
@@ -137,6 +136,8 @@ func pushHasFlag(p git.Pushsigned) bool {
 	return false
 }
 
+// signwipActTransformer colors the ACT cell: green sign, magenta skip, and the base
+// (newest signed) row dim — it anchors the stack but isn't itself acted on.
 func signwipActTransformer(v any) string {
 	s := fmt.Sprint(v)
 	switch s {
@@ -144,7 +145,7 @@ func signwipActTransformer(v any) string {
 		return text.Colors{text.FgGreen}.Sprint(s)
 	case "skip":
 		return text.Colors{text.FgMagenta}.Sprint(s)
-	default:
+	default: // "base"
 		return text.Colors{text.FgHiBlack}.Sprint(s)
 	}
 }
