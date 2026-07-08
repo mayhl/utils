@@ -99,6 +99,25 @@ func mu(t *testing.T, args ...string) string {
 	return string(out)
 }
 
+// muCfg is mu() but pointed at a specific config.toml (overriding MU_CONFIG_FILE) — used by
+// the pull test so it writes a temp copy instead of the shared fixture.
+func muCfg(t *testing.T, cfg string, args ...string) string {
+	t.Helper()
+	env := muEnv()
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "MU_CONFIG_FILE=") {
+			env[i] = "MU_CONFIG_FILE=" + cfg
+		}
+	}
+	cmd := exec.Command(muBin, args...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mu %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
 func mustContain(t *testing.T, out string, wants ...string) {
 	t.Helper()
 	for _, w := range wants {
@@ -106,6 +125,16 @@ func mustContain(t *testing.T, out string, wants ...string) {
 			t.Errorf("missing %q in output:\n%s", w, out)
 		}
 	}
+}
+
+// gitOut runs a git command in dir and returns its output, failing the test on error.
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // TestQueuePBS drives `mu hpc queue --node sandbox` — PBS idiom (qstat -a) — and checks
@@ -146,11 +175,11 @@ func TestOnboard(t *testing.T) {
 	}
 	// .config landed as a live git repo (not a loose tar snapshot), so it stays
 	// git-managed on the box (git pull to update).
-	if got, _ := exec.Command("ssh", "sandbox", "git -C ~/.config rev-parse --is-inside-work-tree").CombinedOutput(); strings.TrimSpace(string(got)) != "true" {
+	if got, _ := exec.Command("ssh", "-q", "sandbox", "git -C ~/.config rev-parse --is-inside-work-tree").CombinedOutput(); strings.TrimSpace(string(got)) != "true" {
 		t.Errorf(".config is not a git work tree on box: %q", got)
 	}
 	// origin points at the public https remote (keyless pull on an egress box).
-	if got, _ := exec.Command("ssh", "sandbox", "git -C ~/.config remote get-url origin").CombinedOutput(); !strings.HasPrefix(strings.TrimSpace(string(got)), "https://") {
+	if got, _ := exec.Command("ssh", "-q", "sandbox", "git -C ~/.config remote get-url origin").CombinedOutput(); !strings.HasPrefix(strings.TrimSpace(string(got)), "https://") {
 		t.Errorf("origin not set to https remote: %q", got)
 	}
 	// A tracked file (checked out) and the untracked, machine-specific config.toml
@@ -202,6 +231,132 @@ func TestSync(t *testing.T) {
 	// Idempotent: nothing changed since, so the second run is a no-op.
 	out := mu(t, "setup", "sync", "sandbox", "-y")
 	mustContain(t, out, "already in sync")
+}
+
+// TestSyncPull checks `mu setup sync pull`: a box's config.toml inventory comes INTO this
+// machine's config.toml, this machine's [sshfs] seam survives, the box's seam does not, a
+// config.toml.bak backup is written, and a second run is a no-op. Writes to a temp config so
+// the shared fixture is never touched.
+func TestSyncPull(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+
+	// Box config: the shared inventory (so `sandbox` still resolves after the pull) plus a
+	// distinct marker cluster to prove inventory flowed, and a box-only [sshfs] seam to DROP.
+	boxConfig := "hpc_user = \"tester\"\n\n" +
+		"[[cluster]]\nname = \"sbpbs\"\ndomain = \"local\"\nnodes = [\"sandbox\"]\nscheduler = \"pbs\"\n\n" +
+		"[[cluster]]\nname = \"sbslurm\"\ndomain = \"local\"\nnodes = [\"sandslurm\"]\nscheduler = \"slurm\"\n\n" +
+		"[[cluster]]\nname = \"pulledclust\"\ndomain = \"local\"\nnodes = [\"boxnode\"]\nscheduler = \"pbs\"\n\n" +
+		"[sshfs]\nroot = \"/box/only/mnt\"\n"
+	w := exec.Command("ssh", "sandbox", "cat > ~/.config/mu/config.toml")
+	w.Stdin = strings.NewReader(boxConfig)
+	if err := w.Run(); err != nil {
+		t.Fatalf("seed box config: %v", err)
+	}
+
+	// Local config: the fixture inventory (resolves `sandbox`) plus a laptop-only [sshfs] seam
+	// pull must KEEP. In a temp file so the real fixture is never mutated.
+	base, err := os.ReadFile(os.Getenv("MU_SANDBOX_CONFIG"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte(string(base)+"\n[sshfs]\nroot = \"/laptop/only/mnt\"\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	muCfg(t, cfg, "setup", "sync", "pull", "sandbox", "-y")
+
+	got, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatalf("read pulled config: %v", err)
+	}
+	s := string(got)
+	if !strings.Contains(s, "pulledclust") {
+		t.Errorf("box inventory not pulled (no pulledclust cluster):\n%s", s)
+	}
+	if !strings.Contains(s, "/laptop/only/mnt") {
+		t.Errorf("local [sshfs] seam was clobbered:\n%s", s)
+	}
+	if strings.Contains(s, "/box/only/mnt") {
+		t.Errorf("box [sshfs] seam leaked into local config:\n%s", s)
+	}
+	if _, err := os.Stat(cfg + ".bak"); err != nil {
+		t.Errorf("no config.toml.bak backup written: %v", err)
+	}
+	// Idempotent: nothing changed, so the second pull is a no-op.
+	out := muCfg(t, cfg, "setup", "sync", "pull", "sandbox", "-y")
+	mustContain(t, out, "already in sync")
+}
+
+// TestSyncPullDotfiles checks `mu setup sync pull --dotfiles`: the .config git repo is
+// reconciled box → this machine (fetch + backup ref + fast-forward). It works on a local
+// CLONE of the box's .config (via --config-dir) so the real ~/.config is never touched, and
+// rewinds that clone one commit so the box is one ahead — the pull must FF it back up.
+func TestSyncPullDotfiles(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	const boxTarget = "tester@sandbox.local" // hpc_user=tester, node=sandbox, domain=local
+
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "config")
+	if out, err := exec.Command("git", "clone", "-q", boxTarget+":.config", dir).CombinedOutput(); err != nil {
+		t.Fatalf("clone box .config: %v\n%s", err, out)
+	}
+	boxHead := gitOut(t, dir, "rev-parse", "HEAD")
+	if _, err := exec.Command("git", "-C", dir, "reset", "--hard", "-q", "HEAD~1").CombinedOutput(); err != nil {
+		t.Fatalf("rewind clone: %v", err)
+	}
+	oldHead := gitOut(t, dir, "rev-parse", "HEAD")
+	if boxHead == oldHead {
+		t.Fatal("rewind was a no-op")
+	}
+
+	// Temp config.toml so the config.toml half of the pull doesn't touch the fixture.
+	base, err := os.ReadFile(os.Getenv("MU_SANDBOX_CONFIG"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	cfg := filepath.Join(tmp, "config.toml")
+	if err := os.WriteFile(cfg, base, 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	muCfg(t, cfg, "setup", "sync", "pull", "sandbox", "--dotfiles", "--config-dir", dir, "-y")
+
+	if got := gitOut(t, dir, "rev-parse", "HEAD"); got != boxHead {
+		t.Errorf(".config not fast-forwarded to box HEAD: got %s want %s", got, boxHead)
+	}
+	if got := gitOut(t, dir, "rev-parse", "mu-sync-backup"); got != oldHead {
+		t.Errorf("backup ref not at pre-merge HEAD: got %s want %s", got, oldHead)
+	}
+	// Idempotent: nothing new on the box, so a second --dotfiles pull is up to date.
+	out := muCfg(t, cfg, "setup", "sync", "pull", "sandbox", "--dotfiles", "--config-dir", dir, "-y")
+	mustContain(t, out, "already up to date")
+}
+
+// TestSSHBannerQuieted checks mu's ssh calls pass -q so the box's login banner never leaks
+// into mu's output. Baseline: a raw ssh shows the mock banner; a sync push (which forwards
+// ssh stderr via pipeSSH) must not. Skips if the box serves no banner (pre-banner image).
+func TestSSHBannerQuieted(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	const mark = "MU-MOCK-BANNER"
+	raw, _ := exec.Command("ssh", "tester@sandbox.local", "true").CombinedOutput()
+	if !strings.Contains(string(raw), mark) {
+		t.Skip("box serves no banner (rebuild the sandbox image with the mock banner)")
+	}
+	// Give the box a differing config.toml so `sync` actually writes via pipeSSH — the
+	// stderr-forwarding path that would leak the banner without -q.
+	w := exec.Command("ssh", "sandbox", "cat > ~/.config/mu/config.toml")
+	w.Stdin = strings.NewReader("hpc_user = \"boxuser\"\n[sshfs]\nroot = \"/box/only/mnt\"\n")
+	if err := w.Run(); err != nil {
+		t.Fatalf("seed box config: %v", err)
+	}
+	out := mu(t, "setup", "sync", "sandbox", "-y")
+	if strings.Contains(out, mark) {
+		t.Errorf("ssh banner leaked into mu output (missing -q?):\n%s", out)
+	}
 }
 
 // TestOnboardDirtyGuard checks the reset --hard guard: a tracked file edited on the box

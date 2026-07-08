@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,81 +14,224 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
 
+// syncOpts carries the resolved flags for a sync run in either direction.
+type syncOpts struct {
+	muRoot    string
+	configDir string // the .config git repo, for --dotfiles
+	yes       bool
+	pull      bool
+	dotfiles  bool
+	force     bool // push --dotfiles: overwrite the box's .config even if diverged
+}
+
+// defaultConfigDir is the .config git repo synced by --dotfiles (default ~/.config).
+func defaultConfigDir() string { return filepath.Join(os.Getenv("HOME"), ".config") }
+
 // syncCmd is `mu setup sync <node>`: the machine-lifecycle MAINTAIN step. It propagates
 // this machine's shared inventory (config.toml — hpc_user, [[cluster]] defs, fleet, prefs)
 // to a target, while KEEPING the target's machine-local [ssh]/[sshfs] seams. The sshfs
 // mount registry and any secrets live in other files and are never touched. Diff + confirm
-// before writing. Reuses onboard's ssh plumbing; skips the birth steps.
+// before writing. With --dotfiles it also syncs the .config git repo (git transport, since
+// it's a repo). `sync pull` reconciles the other direction (box → this machine). Reuses
+// onboard's ssh plumbing; skips the birth steps.
 func syncCmd() *cobra.Command {
-	var muRoot string
-	var yes bool
+	o := syncOpts{muRoot: "~/.config/mu"}
 	c := &cobra.Command{
 		Use:   "sync <node|user@host>",
 		Short: "Push this machine's config.toml (clusters/fleet) to another box.",
 		Long: "Propagate this machine's shared inventory — hpc_user, [[cluster]] defs, fleet,\n" +
 			"prefs — to a target's config.toml, keeping the target's machine-local [ssh] and\n" +
 			"[sshfs] settings. The sshfs mount registry and secrets are never touched. Shows a\n" +
-			"diff and confirms before writing.",
+			"diff and confirms before writing. --dotfiles also pushes the .config git repo (via\n" +
+			"git bundle). Use `sync pull` to reconcile box → this machine.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runSync(args[0], muRoot, yes)
+			if o.configDir == "" {
+				o.configDir = defaultConfigDir()
+			}
+			return runSync(args[0], o)
 		},
 	}
-	c.Flags().StringVar(&muRoot, "mu-root", "~/.config/mu", "target MU_ROOT (holds config.toml)")
-	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
-	_ = c.RegisterFlagCompletionFunc("mu-root", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	})
+	f := c.Flags()
+	f.StringVar(&o.muRoot, "mu-root", o.muRoot, "target MU_ROOT (holds config.toml)")
+	f.BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt")
+	f.BoolVar(&o.dotfiles, "dotfiles", false, "also sync the .config git repo (git transport)")
+	f.StringVar(&o.configDir, "config-dir", "", "the .config git repo for --dotfiles (default ~/.config)")
+	f.BoolVar(&o.force, "force", false, "with --dotfiles, overwrite the box's .config even if diverged (backs it up first)")
+	_ = c.RegisterFlagCompletionFunc("mu-root", noFileComp)
+	c.AddCommand(syncPullCmd())
 	return c
 }
 
-func runSync(nodeOrTarget, muRoot string, yes bool) error {
+// syncPullCmd is `mu setup sync pull <node>`: the mirror of sync. It brings a target's
+// shared inventory INTO this machine's config.toml, keeping THIS machine's [ssh]/[sshfs]
+// seams. Because it overwrites the real local config.toml, it backs up config.toml.bak
+// first, on top of the diff + confirm. --dotfiles also reconciles the .config git repo
+// (fetch + backup ref + auto fast-forward/merge).
+func syncPullCmd() *cobra.Command {
+	o := syncOpts{muRoot: "~/.config/mu", pull: true}
+	c := &cobra.Command{
+		Use:   "pull <node|user@host>",
+		Short: "Pull another box's config.toml (clusters/fleet) into this machine.",
+		Long: "Reverse of `mu setup sync`: bring a target's shared inventory — hpc_user,\n" +
+			"[[cluster]] defs, fleet, prefs — into this machine's config.toml, keeping THIS\n" +
+			"machine's [ssh]/[sshfs] seams. Backs up the local config.toml to config.toml.bak,\n" +
+			"shows a diff, and confirms before writing. --dotfiles also reconciles the .config\n" +
+			"git repo: fetch the box, snapshot to branch mu-sync-backup, then auto-merge.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if o.configDir == "" {
+				o.configDir = defaultConfigDir()
+			}
+			return runSync(args[0], o)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&o.muRoot, "mu-root", o.muRoot, "target MU_ROOT (holds config.toml)")
+	f.BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt")
+	f.BoolVar(&o.dotfiles, "dotfiles", false, "also reconcile the .config git repo (fetch + auto-merge)")
+	f.StringVar(&o.configDir, "config-dir", "", "the .config git repo for --dotfiles (default ~/.config)")
+	_ = c.RegisterFlagCompletionFunc("mu-root", noFileComp)
+	return c
+}
+
+func noFileComp(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return nil, cobra.ShellCompDirectiveNoFileComp
+}
+
+// runSync syncs a machine's shared state to/from a target. The config.toml payload always
+// syncs (text merge). With --dotfiles the .config repo also syncs, dispatched by transport:
+// it's a git repo, so git (bundle push / fetch+merge pull) — the git analog of the text merge.
+func runSync(nodeOrTarget string, o syncOpts) error {
 	target, err := hpc.Resolve(nodeOrTarget)
 	if err != nil {
 		render.Err(err.Error())
 		os.Exit(2)
 	}
+	if err := syncConfigTOML(target, o); err != nil {
+		return err
+	}
+	if o.dotfiles {
+		if o.pull {
+			return pullDotfiles(target, o.configDir, o.yes)
+		}
+		return pushDotfiles(target, o.configDir, o.force)
+	}
+	return nil
+}
+
+// syncConfigTOML merges the config.toml payload between this machine and target. Inventory
+// flows from the SOURCE; the DESTINATION's [ssh]/[sshfs] seams are preserved. push (default):
+// source = local, dest = remote box. pull: source = remote box, dest = local — so it also
+// backs up and atomically rewrites the real local config.toml. A user abort or an
+// already-in-sync state returns nil (so a --dotfiles run still proceeds to the repo payload).
+func syncConfigTOML(target string, o syncOpts) error {
 	localPath := config.Path()
 	if localPath == "" {
-		render.Err("no local config.toml to sync from (set MU_CONFIG_FILE or MU_ROOT)")
+		render.Err("no local config.toml (set MU_CONFIG_FILE or MU_ROOT)")
 		os.Exit(1)
 	}
-	local, err := os.ReadFile(localPath)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", localPath, err)
+	localBytes, rerr := os.ReadFile(localPath)
+	if rerr != nil && (!o.pull || !os.IsNotExist(rerr)) { // pull tolerates a missing local (fresh)
+		return fmt.Errorf("read %s: %w", localPath, rerr)
 	}
-	remotePath := muRoot + "/config.toml"
-	targetText, _ := captureSSH(target, "cat "+remotePath+" 2>/dev/null") // empty if absent
+	localText := string(localBytes)
+	remotePath := o.muRoot + "/config.toml"
+	remoteText, _ := captureSSH(target, "cat "+remotePath+" 2>/dev/null") // empty if absent
 
-	// Merge: this machine's inventory minus its own [ssh]/[sshfs], plus the target's
-	// seams — so shared inventory propagates and per-machine seams survive.
-	rest, _ := splitTOMLSections(string(local), "ssh", "sshfs")
-	_, seams := splitTOMLSections(targetText, "ssh", "sshfs")
+	// Direction: inventory from source, seams kept from destination.
+	srcText, dstText := localText, remoteText
+	if o.pull {
+		srcText, dstText = remoteText, localText
+	}
+	if strings.TrimSpace(srcText) == "" {
+		src := "local config.toml"
+		if o.pull {
+			src = target + "'s config.toml (check --mu-root)"
+		}
+		render.Err("nothing to sync — " + src + " is empty or missing")
+		os.Exit(1)
+	}
+	rest, _ := splitTOMLSections(srcText, "ssh", "sshfs")
+	_, seams := splitTOMLSections(dstText, "ssh", "sshfs")
 	merged := assembleConfig(rest, seams)
 
-	if strings.TrimSpace(merged) == strings.TrimSpace(targetText) {
-		render.OK(target + ": config.toml already in sync")
+	dstDesc := target
+	if o.pull {
+		dstDesc = localPath
+	}
+	if strings.TrimSpace(merged) == strings.TrimSpace(dstText) {
+		render.OK(dstDesc + ": config.toml already in sync")
 		return nil
 	}
-	showConfigDiff(targetText, merged)
-	if !yes {
-		fmt.Fprintf(os.Stderr, "write config.toml to %s? [y/N] ", target)
+	showConfigDiff(dstText, merged)
+	if !o.yes {
+		fmt.Fprintf(os.Stderr, "write config.toml to %s? [y/N] ", dstDesc)
 		var r string
 		_, _ = fmt.Scanln(&r)
 		if strings.ToLower(strings.TrimSpace(r)) != "y" {
-			render.Info("aborted")
+			render.Info("aborted config.toml")
 			return nil
 		}
 	}
-	// Write atomically on the box: stage to .tmp, then mv into place.
-	script := "mkdir -p " + muRoot + " && cat > " + remotePath + ".tmp && mv " + remotePath + ".tmp " + remotePath
+
+	if o.pull {
+		if err := writeLocalConfig(localPath, localBytes, merged); err != nil {
+			return err
+		}
+		msg := "pulled config.toml ← " + target + keptClause("this machine's", seams)
+		render.OK(msg)
+		render.EventOK("setup", msg)
+		return nil
+	}
+	// push: write atomically on the box — stage to .tmp, then mv into place.
+	script := "mkdir -p " + o.muRoot + " && cat > " + remotePath + ".tmp && mv " + remotePath + ".tmp " + remotePath
 	if err := pipeSSH(target, script, merged); err != nil {
 		return fmt.Errorf("write config.toml: %w", err)
 	}
-	msg := "synced config.toml → " + target + " (kept its [ssh]/[sshfs])"
+	msg := "synced config.toml → " + target + keptClause("its", seams)
 	render.OK(msg)
 	render.EventOK("setup", msg)
 	return nil
+}
+
+// writeLocalConfig backs up the existing local config.toml to config.toml.bak, then writes
+// merged atomically (stage to .tmp, rename into place), preserving the file's mode. A pull
+// overwrites the real local config.toml, so the .bak is the undo.
+func writeLocalConfig(path string, prev []byte, merged string) error {
+	mode := os.FileMode(0o600)
+	if fi, e := os.Stat(path); e == nil {
+		mode = fi.Mode().Perm()
+	}
+	if len(prev) > 0 {
+		if e := os.WriteFile(path+".bak", prev, mode); e != nil {
+			return fmt.Errorf("back up %s: %w", path, e)
+		}
+	}
+	tmp := path + ".tmp"
+	if e := os.WriteFile(tmp, []byte(merged), mode); e != nil {
+		return fmt.Errorf("write %s: %w", path, e)
+	}
+	if e := os.Rename(tmp, path); e != nil {
+		return fmt.Errorf("install %s: %w", path, e)
+	}
+	return nil
+}
+
+// keptClause names the destination seam tables actually preserved, e.g. " (kept its
+// [ssh]/[sshfs])" — or "" when the destination had none, so the success line never claims
+// to keep what wasn't there. whose is "its" (push) or "this machine's" (pull).
+func keptClause(whose string, seams map[string]string) string {
+	var k []string
+	for _, n := range []string{"ssh", "sshfs"} {
+		if strings.TrimSpace(seams[n]) != "" {
+			k = append(k, "["+n+"]")
+		}
+	}
+	if len(k) == 0 {
+		return ""
+	}
+	return " (kept " + whose + " " + strings.Join(k, "/") + ")"
 }
 
 // splitTOMLSections walks TOML text and returns it with the named top-level tables
@@ -147,8 +291,8 @@ func assembleConfig(rest string, seams map[string]string) string {
 	return out
 }
 
-// showConfigDiff prints a unified diff of the target's current config.toml vs the merged
-// one (— target, + synced) via the system `diff`; on no diff tool it prints the new text.
+// showConfigDiff prints a unified diff of the destination's current config.toml vs the
+// merged one (— current, + merged) via the system `diff`; on no diff tool it prints nothing.
 func showConfigDiff(oldText, newText string) {
 	od, err1 := os.CreateTemp("", "cfg-old-*.toml")
 	nd, err2 := os.CreateTemp("", "cfg-new-*.toml")
@@ -160,20 +304,31 @@ func showConfigDiff(oldText, newText string) {
 	_, _ = nd.WriteString(newText)
 	_ = od.Close()
 	_ = nd.Close()
-	render.Detail("config.toml changes (— target, + synced):")
+	render.Detail("config.toml changes (— current, + merged):")
+	// Prefer git's colored diff (honors the user's diff.color config); fall back to plain
+	// `diff -u` in plain/NO_COLOR mode or when git can't run. Both exit 1 on differences, so
+	// output — not exit code — is the signal git produced a diff.
+	if !render.Plain() {
+		if out, _ := exec.Command("git", "diff", "--no-index", "--color=always", od.Name(), nd.Name()).CombinedOutput(); len(out) > 0 {
+			fmt.Fprintln(os.Stderr, strings.TrimRight(string(out), "\n"))
+			return
+		}
+	}
 	out, _ := exec.Command("diff", "-u", od.Name(), nd.Name()).CombinedOutput() // diff exits 1 when they differ
 	fmt.Fprintln(os.Stderr, strings.TrimRight(string(out), "\n"))
 }
 
-// captureSSH runs a read command on the target and returns its stdout.
+// captureSSH runs a read command on the target and returns its stdout. -q quiets ssh's own
+// chatter (login banner/MOTD) so it never contaminates captured output.
 func captureSSH(target, cmd string) (string, error) {
-	out, err := exec.Command("ssh", target, cmd).Output()
+	out, err := exec.Command("ssh", "-q", target, cmd).Output()
 	return string(out), err
 }
 
 // pipeSSH runs a command on the target with stdin fed from content (its stderr surfaced).
+// -q suppresses the login banner so only the command's own stderr reaches the user.
 func pipeSSH(target, cmd, content string) error {
-	c := exec.Command("ssh", target, cmd)
+	c := exec.Command("ssh", "-q", target, cmd)
 	c.Stdin = strings.NewReader(content)
 	c.Stderr = os.Stderr
 	return c.Run()

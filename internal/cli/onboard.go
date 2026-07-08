@@ -103,7 +103,7 @@ func (o *onboard) run(nodeOrTarget string) error {
 
 	// Connectivity (real ssh; skipped under --dry-run).
 	if !o.dryRun {
-		if err := exec.Command("ssh", "-o", "ConnectTimeout=15", target, "true").Run(); err != nil {
+		if err := exec.Command("ssh", "-q", "-o", "ConnectTimeout=15", target, "true").Run(); err != nil {
 			render.Err(fmt.Sprintf("cannot ssh to %s (auth/PKI? host? must be a real ssh target)", target))
 			os.Exit(1)
 		}
@@ -149,7 +149,7 @@ func (o *onboard) run(nodeOrTarget string) error {
 		return err
 	}
 	if !o.dryRun {
-		if out, err := exec.Command("ssh", target, o.bin+" --version").CombinedOutput(); err != nil {
+		if out, err := exec.Command("ssh", "-q", target, o.bin+" --version").CombinedOutput(); err != nil {
 			render.Warn("mu --version failed on target: " + strings.TrimSpace(string(out)))
 		} else {
 			render.Detail("target mu: " + strings.TrimSpace(string(out)))
@@ -159,7 +159,7 @@ func (o *onboard) run(nodeOrTarget string) error {
 	// Push tracked .config — git archive HEAD is the whitelist: committed files only,
 	// no .git, no untracked secrets. This is the default-deny push (leak-safe by design).
 	if o.doConfig {
-		if err := o.pushConfig(target); err != nil {
+		if err := pushConfigBundle(target, o.configDir, o.force, o.dryRun); err != nil {
 			return err
 		}
 	}
@@ -171,86 +171,6 @@ func (o *onboard) run(nodeOrTarget string) error {
 
 	o.printNextSteps(target)
 	render.OK("onboard " + dryLabel(o.dryRun) + "complete")
-	return nil
-}
-
-// pushConfig seeds the tracked .config on the box as a real git checkout (not a tar
-// snapshot) so it stays git-managed there — `git pull` to update, doctor to report drift.
-// A bundle from local HEAD is faithful to this machine (incl. unpushed commits), leak-safe
-// (only reachable commits — never untracked secrets), and needs no egress on the box.
-// `reset --hard` overlays the tracked files (overwriting any collisions) while leaving the
-// box's untracked machine-specific files (config.toml, sshfs registry, …) in place.
-func (o *onboard) pushConfig(target string) error {
-	branch := gitField(o.configDir, "rev-parse", "--abbrev-ref", "HEAD")
-	if branch == "" {
-		branch = "main"
-	}
-	origin := repoHTTPS(gitField(o.configDir, "config", "--get", "remote.origin.url"))
-	render.Info(fmt.Sprintf("Seeding tracked .config → %s:~/.config (git checkout from %s)…", target, branch))
-	if o.dryRun {
-		render.Detail(fmt.Sprintf("[dry] git bundle HEAD → scp → git init+fetch+reset on %s (origin %s)", target, origin))
-		return nil
-	}
-	if err := o.ssh(target, "command -v git >/dev/null"); err != nil {
-		return fmt.Errorf("target has no git to seed .config as a repo (or re-run with --config=false): %w", err)
-	}
-	// Bundle local HEAD (committed history only) and ship it — a single leak-safe file.
-	f, err := os.CreateTemp("", "mu-config-*.bundle")
-	if err != nil {
-		return err
-	}
-	_ = f.Close()
-	defer func() { _ = os.Remove(f.Name()) }()
-	if out, err := exec.Command("git", "-C", o.configDir, "bundle", "create", f.Name(), "HEAD").CombinedOutput(); err != nil {
-		return fmt.Errorf("git bundle: %w\n%s", err, out)
-	}
-	const remoteBundle = "~/.mu-config.bundle"
-	if err := exec.Command("scp", "-q", f.Name(), target+":"+remoteBundle).Run(); err != nil {
-		return fmt.Errorf("scp bundle: %w", err)
-	}
-	return o.seedRepo(target, branch, origin, remoteBundle)
-}
-
-// seedRepo runs the box-side reconciliation as one atomic script: init, fetch the bundle,
-// and reset --hard to the laptop's HEAD — but ONLY when the existing checkout is clean and
-// fast-forwardable (or absent). A box with uncommitted tracked changes or diverged commits
-// aborts (exit 3) instead of clobbering, unless --force first saves that work to branch
-// mu-onboard-backup + a git stash. Then it points origin at the public remote for `git pull`.
-func (o *onboard) seedRepo(target, branch, origin, bundle string) error {
-	force := "0"
-	if o.force {
-		force = "1"
-	}
-	// set -e is safe here: every failing command is the tested side of an && / || .
-	script := fmt.Sprintf(`set -e
-mkdir -p ~/.config && cd ~/.config
-fresh=0; git rev-parse -q --verify HEAD >/dev/null 2>&1 || fresh=1
-git init -q
-[ "$fresh" = 1 ] && git symbolic-ref HEAD refs/heads/%[1]s
-git fetch -q %[2]s HEAD
-if [ "$fresh" = 0 ]; then
-  dirty=$(git status --porcelain --untracked-files=no)
-  git merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null && ff=1 || ff=0
-  if [ -n "$dirty" ] || [ "$ff" = 0 ]; then
-    if [ "%[3]s" != 1 ]; then rm -f %[2]s; echo MU_DIRTY_ABORT; exit 3; fi
-    git branch -f mu-onboard-backup HEAD
-    git stash push -q -m "mu-onboard backup" || true
-  fi
-fi
-git reset --hard -q FETCH_HEAD
-git remote get-url origin >/dev/null 2>&1 || git remote add origin %[4]s
-rm -f %[2]s
-`, shellQuote(branch), bundle, force, shellQuote(origin))
-	out, err := exec.Command("ssh", target, script).CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "MU_DIRTY_ABORT") {
-			render.Warn(".config on the target has local changes or diverged commits — not overwriting.")
-			render.Info("skipped .config sync; reconcile on the box, or re-run with --force (saves the work to branch mu-onboard-backup + a git stash first)")
-			return nil
-		}
-		return fmt.Errorf("seed .config: %w\n%s", err, out)
-	}
-	render.OK(".config is a live git repo on the target (git pull to update)")
 	return nil
 }
 
@@ -332,7 +252,7 @@ func (o *onboard) ssh(target, remote string) error {
 		render.Detail("[dry] ssh " + target + " " + remote)
 		return nil
 	}
-	cmd := exec.Command("ssh", target, remote)
+	cmd := exec.Command("ssh", "-q", target, remote)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("ssh %s: %q: %w", target, remote, err)
