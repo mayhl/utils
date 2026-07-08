@@ -31,6 +31,11 @@ func colorOff() bool {
 // PlainFlag is bound to the root command's --plain: force borderless tables.
 var PlainFlag bool
 
+// Plain reports whether rich rendering (borders, panels, color) should be skipped:
+// piped/--plain (plainMode) or NO_COLOR/dumb (colorOff). Callers outside render use it
+// to choose a plain-text path so pipes and NO_COLOR stay clean.
+func Plain() bool { return plainMode() || colorOff() }
+
 // plainMode reports whether tables render borderless/tab-aligned instead of the
 // house rounded box. Precedence: --plain > MU_RENDER=plain|pretty > auto (plain
 // unless stdout is a TTY, so piped/redirected/CI output stays parseable). Mirrors
