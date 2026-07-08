@@ -85,6 +85,24 @@ func Root() *cobra.Command {
 	for _, c := range root.Commands() {
 		wrapHelp(c)
 	}
+	// Advertise that shell front-doors exist, so they're discoverable from the top level.
+	// mps/mlog are portable; the sshfs h* set is local-only, so only list it off-HPC. A
+	// command's own shortcuts live in its `mu <command> --help`.
+	shortcuts := [][2]string{
+		{"mps", "list local processes (mu ps; -i = picker)"},
+		{"mlog", "view the event log (mu log)"},
+	}
+	if !onHPC() {
+		shortcuts = append(
+			shortcuts,
+			[2]string{"hcd <name>", "mount + cd into an sshfs dir (mu sshfs)"},
+			[2]string{"hmt <name>…", "mount sshfs dirs, no cd (mu sshfs mount)"},
+			[2]string{"hls", "list sshfs mounts (mu sshfs list)"},
+		)
+	}
+	setHelpShortcuts(root, shortcuts...)
+	setHelpShortcutsNote(root, "Many commands have a short shell front-door that saves typing — a few below; "+
+		"a command's own set shows in its `mu <command> --help`.")
 	return root
 }
 

@@ -18,10 +18,11 @@ import (
 // back to plain text under render.Plain() (piped/--plain/NO_COLOR) so pipes stay clean.
 
 const (
-	annHelpLabel     = "render.helpLabel"     // colored badge text on a command
-	annHelpHue       = "render.helpHue"       // palette hue for the badge
-	annHelpTitle     = "render.helpTitle"     // human-readable heading for the synopsis
-	annHelpShortcuts = "render.helpShortcuts" // shell front-doors ("name\twhat it runs" per line)
+	annHelpLabel         = "render.helpLabel"         // colored badge text on a command
+	annHelpHue           = "render.helpHue"           // palette hue for the badge
+	annHelpTitle         = "render.helpTitle"         // human-readable heading for the synopsis
+	annHelpShortcuts     = "render.helpShortcuts"     // shell front-doors ("name\twhat it runs" per line)
+	annHelpShortcutsNote = "render.helpShortcutsNote" // one-line lead above the Shortcuts list
 )
 
 // Help panel color roles. Help is a DELIBERATE exception to the app-wide color policy
@@ -93,6 +94,22 @@ func setHelpShortcuts(c *cobra.Command, pairs ...[2]string) {
 		c.Annotations = map[string]string{}
 	}
 	c.Annotations[annHelpShortcuts] = strings.Join(rows, "\n")
+}
+
+// setHelpShortcutsNote sets a short lead line rendered (dimmed) above the Shortcuts list —
+// e.g. explaining that shell front-doors exist and where a command's own set lives.
+func setHelpShortcutsNote(c *cobra.Command, note string) {
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[annHelpShortcutsNote] = note
+}
+
+func helpShortcutsNote(c *cobra.Command) string {
+	if c.Annotations == nil {
+		return ""
+	}
+	return c.Annotations[annHelpShortcutsNote]
 }
 
 func helpShortcuts(c *cobra.Command) [][2]string {
@@ -205,7 +222,11 @@ func houseHelp(c *cobra.Command, _ []string) {
 		for _, p := range sc {
 			lines = append(lines, wrapItem(p[0], hueRoot, p[1], "", 0, w, textW))
 		}
-		b.WriteString(render.Panel(render.Bold("Shortcuts", hueRoot), strings.Join(lines, "\n"), boxW) + "\n")
+		body := strings.Join(lines, "\n")
+		if note := helpShortcutsNote(c); note != "" {
+			body = render.Fg(flow(note), hueBadge) + "\n\n" + body
+		}
+		b.WriteString(render.Panel(render.Bold("Shortcuts", hueRoot), body, boxW) + "\n")
 	}
 	if c.Example != "" {
 		b.WriteString(render.Panel(render.Bold("Examples", render.HueName), strings.TrimRight(c.Example, "\n"), boxW) + "\n")
@@ -337,6 +358,9 @@ func plainHelp(c *cobra.Command) {
 	}
 	if sc := helpShortcuts(c); len(sc) > 0 {
 		fmt.Fprintln(w, "\nShortcuts:")
+		if note := helpShortcutsNote(c); note != "" {
+			fmt.Fprintf(w, "  %s\n", flow(note))
+		}
 		for _, p := range sc {
 			fmt.Fprintf(w, "  %-12s %s\n", p[0], p[1])
 		}
