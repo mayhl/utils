@@ -44,6 +44,7 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	setHelpTitle(root, "mayhl_utils — HPC toolkit") // for the intercepted house root help
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
 	root.AddCommand(cpCmd(), sshfsCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd())

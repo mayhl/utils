@@ -38,6 +38,32 @@ const (
 // wrapHelp opts a command and its subtree into the house help renderer.
 func wrapHelp(c *cobra.Command) { c.SetHelpFunc(houseHelp) }
 
+// MaybeRootHelp renders house help for the ROOT command when args request bare-root help
+// (`mu`, `mu -h`, `mu --help`, `mu help`), returning true if it handled the request. fang
+// hardcodes root.SetHelpFunc with no override, so main() calls this before fang.Execute to
+// keep the root's help in the house language; subcommand help still flows through fang→
+// cobra to each command's wrapHelp. The obscure `mu <flag> --help` (a flag before --help)
+// falls through to fang.
+func MaybeRootHelp(root *cobra.Command, args []string) bool {
+	if !wantsRootHelp(args) {
+		return false
+	}
+	root.InitDefaultHelpFlag() // so the Flags panel lists -h/--help
+	houseHelp(root, nil)
+	return true
+}
+
+func wantsRootHelp(args []string) bool {
+	switch len(args) {
+	case 0:
+		return true // bare `mu`
+	case 1:
+		return args[0] == "-h" || args[0] == "--help" || args[0] == "help"
+	default:
+		return false
+	}
+}
+
 // setHelpTitle sets a human-readable heading for a command's synopsis panel (e.g.
 // "Git Workflow Previews"); without it the command path is used.
 func setHelpTitle(c *cobra.Command, title string) {
