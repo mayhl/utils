@@ -162,6 +162,48 @@ func TestOnboard(t *testing.T) {
 	}
 }
 
+// TestDoctorSetup checks `mu doctor setup` runs on the box and reports each facet. Only
+// warns (never fails) on a partially-set-up box, so it exits 0.
+func TestDoctorSetup(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	out, err := exec.Command("ssh", "sandbox", "MU_RENDER=plain ~/.local/bin/mu doctor setup").CombinedOutput()
+	if err != nil {
+		t.Fatalf("doctor setup on box: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "shell-init", "toolchain", "build", "repo")
+}
+
+// TestSync checks `mu setup sync`: this machine's config.toml inventory propagates to the
+// box while the box's machine-local [sshfs] seam survives, and a second run is a no-op.
+func TestSync(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	// Give the box a config.toml with a machine-local seam sync must preserve.
+	boxConfig := "hpc_user = \"boxuser\"\n[sshfs]\nroot = \"/box/only/mnt\"\n"
+	w := exec.Command("ssh", "sandbox", "cat > ~/.config/mu/config.toml")
+	w.Stdin = strings.NewReader(boxConfig)
+	if err := w.Run(); err != nil {
+		t.Fatalf("seed box config: %v", err)
+	}
+	// Sync the laptop's test-config.toml inventory over.
+	mu(t, "setup", "sync", "sandbox", "-y")
+	got, err := exec.Command("ssh", "sandbox", "cat ~/.config/mu/config.toml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read box config: %v\n%s", err, got)
+	}
+	s := string(got)
+	if !strings.Contains(s, "sbpbs") {
+		t.Errorf("inventory not synced (no sbpbs cluster):\n%s", s)
+	}
+	if !strings.Contains(s, "/box/only/mnt") {
+		t.Errorf("target [sshfs] seam was clobbered:\n%s", s)
+	}
+	// Idempotent: nothing changed since, so the second run is a no-op.
+	out := mu(t, "setup", "sync", "sandbox", "-y")
+	mustContain(t, out, "already in sync")
+}
+
 // TestOnboardDirtyGuard checks the reset --hard guard: a tracked file edited on the box
 // must survive a plain re-onboard (skipped with a warning), and only --force overwrites it
 // — after backing the work up to branch mu-onboard-backup + a stash.
