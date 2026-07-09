@@ -55,28 +55,18 @@ func queueHistCmd() *cobra.Command {
 	return c
 }
 
-// histSpec returns the finished-job command + parser for a scheduler, applying the WHO
-// axis. PBS reuses the wide `qstat -xa` (ParsePBS handles its columns); SLURM uses a
-// controlled pipe-delimited `sacct` (ParseSacct). sacct has no --me, so "just you" names
-// the configured user explicitly. "" cmd = unknown scheduler.
+// histSpec returns the finished-job command + parser for a scheduler. The command is built
+// by the scheduler Adapter (qstat -xa / sacct …), paired here with the parser its format
+// needs — SLURM's controlled sacct → ParseSacct, PBS's wide qstat -xa → ParsePBS.
+// config.HPCUser() supplies the "just you" default. "" cmd = unknown scheduler.
 func histSpec(scheduler string, who userSel) (string, func(string) []queue.Job) {
-	switch scheduler {
-	case "pbs":
-		return "qstat -xa" + pbsUserSel(who), queue.ParsePBS
-	case "slurm":
-		sel := ""
-		switch {
-		case who.list != "":
-			sel = "-u " + who.list + " "
-		case who.all:
-			sel = "-a "
-		default:
-			if u := config.HPCUser(); u != "" {
-				sel = "-u " + u + " "
-			}
-		}
-		return `sacct -X -n -p ` + sel + `-o JobIDRaw,JobName,User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End`, queue.ParseSacct
-	default:
+	a := queue.For(scheduler)
+	if a == nil {
 		return "", nil
 	}
+	cmd := a.HistCmd(who.all, who.list, config.HPCUser())
+	if scheduler == "slurm" {
+		return cmd, queue.ParseSacct
+	}
+	return cmd, queue.ParsePBS
 }

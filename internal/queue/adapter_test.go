@@ -29,6 +29,14 @@ func TestAdapterCmds(t *testing.T) {
 		{"pbs submit", For("pbs").SubmitCmd("run.pbs", SubmitOpts{Account: "PROJ1", Queue: "standard"}), `qsub -A 'PROJ1' -q 'standard' 'run.pbs'`},
 		{"slurm submit", For("slurm").SubmitCmd("run.slurm", SubmitOpts{Account: "PROJ1"}), `sbatch -A 'PROJ1' 'run.slurm'`},
 		{"pbs submit bare", For("pbs").SubmitCmd("run.pbs", SubmitOpts{}), `qsub 'run.pbs'`},
+		{"pbs list you", For("pbs").ListCmd(false, "", "alice"), "qstat -a -u alice"},
+		{"pbs list all", For("pbs").ListCmd(true, "", "alice"), "qstat -a"},
+		{"pbs list users", For("pbs").ListCmd(false, "bob,carol", "alice"), "qstat -a -u bob,carol"},
+		{"slurm list you", For("slurm").ListCmd(false, "", "alice"), `squeue -h --me -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`},
+		{"slurm list all", For("slurm").ListCmd(true, "", "alice"), `squeue -h -o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`},
+		{"pbs hist you", For("pbs").HistCmd(false, "", "alice"), "qstat -xa -u alice"},
+		{"slurm hist you", For("slurm").HistCmd(false, "", "alice"), `sacct -X -n -p -u alice -o JobIDRaw,JobName,User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End`},
+		{"slurm hist all", For("slurm").HistCmd(true, "", ""), `sacct -X -n -p -a -o JobIDRaw,JobName,User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End`},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
