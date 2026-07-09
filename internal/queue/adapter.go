@@ -1,6 +1,10 @@
 package queue
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mayhl/mayhl_utils/internal/shell"
+)
 
 // Adapter abstracts a batch scheduler (PBS / SLURM) behind one interface, so the queue
 // read-side and `mu job` converge on a common model regardless of which scheduler a
@@ -37,14 +41,10 @@ func For(scheduler string) Adapter {
 	}
 }
 
-// quote single-quotes an id/value for safe remote-exec (PBS array brackets like
-// "1284[7].hpc1" must not glob-expand; a value may hold spaces).
-func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
 func quoteJoin(ids []string, sep string) string {
 	q := make([]string, len(ids))
 	for i, id := range ids {
-		q[i] = quote(id)
+		q[i] = shell.Quote(id)
 	}
 	return strings.Join(q, sep)
 }
@@ -69,12 +69,12 @@ func (pbsAdapter) DetailCmd(ids []string) string { return "qstat -f " + quoteJoi
 func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	cmd := "qsub"
 	if o.Account != "" {
-		cmd += " -A " + quote(o.Account)
+		cmd += " -A " + shell.Quote(o.Account)
 	}
 	if o.Queue != "" {
-		cmd += " -q " + quote(o.Queue)
+		cmd += " -q " + shell.Quote(o.Queue)
 	}
-	return cmd + " " + quote(script)
+	return cmd + " " + shell.Quote(script)
 }
 
 // Directives renders the #PBS header lines for preview/templates (display, not exec —
@@ -110,12 +110,12 @@ func (slurmAdapter) DetailCmd(ids []string) string { return "scontrol show job "
 func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	cmd := "sbatch"
 	if o.Account != "" {
-		cmd += " -A " + quote(o.Account)
+		cmd += " -A " + shell.Quote(o.Account)
 	}
 	if o.Queue != "" {
-		cmd += " -p " + quote(o.Queue)
+		cmd += " -p " + shell.Quote(o.Queue)
 	}
-	return cmd + " " + quote(script)
+	return cmd + " " + shell.Quote(script)
 }
 
 // Directives renders the #SBATCH header lines for preview/templates (display, not exec —

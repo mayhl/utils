@@ -3,13 +3,13 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/queue"
 	"github.com/mayhl/mayhl_utils/internal/render"
+	"github.com/mayhl/mayhl_utils/internal/shell"
 )
 
 // queueInfoCmd is `mu hpc queue info` (front-door `minfo`): show full job detail as the
@@ -117,7 +117,7 @@ func queuePeekCmd() *cobra.Command {
 				render.Warn(fmt.Sprintf("no %s path reported for %s — the job may not have started yet", stream, job.ShortID))
 				os.Exit(1)
 			}
-			out, err := capture(fmt.Sprintf("tail -n %d %s", lines, shellQuote(path)))
+			out, err := capture(fmt.Sprintf("tail -n %d %s", lines, shell.Quote(path)))
 			if err != nil {
 				render.Err(fmt.Sprintf("%s: cannot read %s (%v) — a running PBS job's output may still be in node-local spool", label, path, err))
 				os.Exit(1)
@@ -184,9 +184,4 @@ func detailCmd(scheduler string, ids []string) string {
 		return a.DetailCmd(ids)
 	}
 	return ""
-}
-
-// shellQuote wraps s in single quotes, escaping any embedded single quote.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

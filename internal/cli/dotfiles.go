@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mayhl/mayhl_utils/internal/render"
+	"github.com/mayhl/mayhl_utils/internal/shell"
 )
 
 // The .config repo is the git-transport payload of `mu setup sync --dotfiles`, dispatched
@@ -83,7 +84,7 @@ fi
 git reset --hard -q FETCH_HEAD
 git remote get-url origin >/dev/null 2>&1 || git remote add origin %[4]s
 rm -f %[2]s
-`, shellQuote(branch), bundle, forceFlag, shellQuote(origin))
+`, shell.Quote(branch), bundle, forceFlag, shell.Quote(origin))
 	out, err := exec.Command("ssh", "-q", target, script).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "MU_DIRTY_ABORT") {

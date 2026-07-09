@@ -18,12 +18,3 @@ func TestDetailCmd(t *testing.T) {
 		t.Errorf("unknown scheduler: %q", got)
 	}
 }
-
-func TestShellQuote(t *testing.T) {
-	if got := shellQuote("plain"); got != "'plain'" {
-		t.Errorf("plain: %q", got)
-	}
-	if got := shellQuote("a'b"); got != `'a'\''b'` {
-		t.Errorf("embedded quote: %q", got)
-	}
-}

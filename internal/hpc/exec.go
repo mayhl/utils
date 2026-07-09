@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/shell"
 )
 
 // RemoteExec runs remoteCmd on target's login node over the transport ssh (MU_SSH),
@@ -23,7 +24,7 @@ import (
 // command is single-quoted so its own quotes/pipes reach the remote bash intact.
 func RemoteExec(target, remoteCmd string) (string, error) {
 	ssh := config.SSHCommand()
-	arg := "bash -lc " + singleQuote(remoteCmd)
+	arg := "bash -lc " + shell.Quote(remoteCmd)
 	cmd := exec.Command(ssh, "-q", target, arg)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -48,7 +49,7 @@ func RemoteExecTimeout(target, remoteCmd string, timeout time.Duration) (string,
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ssh := config.SSHCommand()
-	arg := "bash -lc " + singleQuote(remoteCmd)
+	arg := "bash -lc " + shell.Quote(remoteCmd)
 	connTO := int(timeout.Seconds())
 	if connTO < 1 {
 		connTO = 1
@@ -131,11 +132,6 @@ func exitText(err error) string {
 		}
 	}
 	return err.Error()
-}
-
-// singleQuote wraps s for a POSIX shell in single quotes, escaping embedded quotes.
-func singleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // filterStderr drops the cluster's benign login-profile noise (default: the dbus/X11
