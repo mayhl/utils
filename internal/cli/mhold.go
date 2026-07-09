@@ -38,9 +38,21 @@ func holdReleaseCmd(use, title, past string, release bool) *cobra.Command {
 			"Front-doors: `mhold` / `mrls`.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			who := mustUserSel(userList, allUsers)
-			label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
-			matched := resolveJobs(label, snapshot, args, pattern)
+			who, err := mustUserSel(userList, allUsers)
+			if err != nil {
+				return err
+			}
+			label, scheduler, snapshot, run, _, err := queueTargetCtx(node, who)
+			if err != nil {
+				return err
+			}
+			matched, err := resolveJobs(label, snapshot, args, pattern)
+			if err != nil {
+				return err
+			}
+			if len(matched) == 0 {
+				return nil
+			}
 			cmd := holdCmd(scheduler, release, jobIDs(matched))
 			return actOnJobs(label, title, past, cmd, matched, run)
 		},
@@ -55,7 +67,7 @@ func holdReleaseCmd(use, title, past string, release bool) *cobra.Command {
 func actOnJobs(label, title, past, cmd string, matched []queue.Job, run func(string) error) error {
 	render.JobsTable(title+" on "+label, config.User(), toJobRows(matched), render.JobCols{})
 	if cmd == "" {
-		errNoScheduler(label)
+		return errNoScheduler(label)
 	}
 	if err := run(cmd); err != nil {
 		return err

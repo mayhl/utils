@@ -45,10 +45,13 @@ func jobSubCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			script := args[0]
-			label, scheduler, _, run, _ := queueTargetCtx(node, userSel{})
+			label, scheduler, _, run, _, err := queueTargetCtx(node, userSel{})
+			if err != nil {
+				return err
+			}
 			adapter := queue.For(scheduler)
 			if adapter == nil {
-				errNoScheduler(label)
+				return errNoScheduler(label)
 			}
 			if account == "" {
 				account = config.AccountFor(label)

@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
@@ -108,14 +107,12 @@ func allSystemsScope() []queueTarget {
 // "label: reason" notes for any that failed — so a down target degrades to a warning,
 // never a hang or a total failure. The Kerberos ticket is ensured once up front. scope is
 // "fleet" or "all", driving both the label and the empty-set message.
-func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, []string) {
+func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, []string, error) {
 	if len(targets) == 0 {
 		if scope == "fleet" {
-			render.Warn("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
-		} else {
-			render.Warn("no clusters configured — add clusters to config.toml")
+			return "", nil, nil, usageErr("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
 		}
-		os.Exit(2)
+		return "", nil, nil, usageErr("no clusters configured — add clusters to config.toml")
 	}
 	hpc.EnsureTicket()
 	results := make([]clusterResult, len(targets))
@@ -141,7 +138,7 @@ func collateJobs(targets []queueTarget, scope string, who userSel) (string, []qu
 		label = "all systems"
 	}
 	jobs, down := mergeResults(results)
-	return label, jobs, down
+	return label, jobs, down, nil
 }
 
 // fetchTarget runs one target's scheduler over the bounded remote-exec, tagging each job

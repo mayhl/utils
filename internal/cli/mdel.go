@@ -31,12 +31,17 @@ func queueKillCmd() *cobra.Command {
 			"name mask; -p forces a mask, ~ forces one token. Front-door: `mdel`.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			who := mustUserSel(userList, allUsers)
-			label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
+			who, err := mustUserSel(userList, allUsers)
+			if err != nil {
+				return err
+			}
+			label, scheduler, snapshot, run, _, err := queueTargetCtx(node, who)
+			if err != nil {
+				return err
+			}
 			jobs, err := snapshot()
 			if err != nil {
-				render.Err(fmt.Sprintf("%s: queue fetch failed: %v", label, err))
-				os.Exit(1)
+				return runErr("%s: queue fetch failed: %v", label, err)
 			}
 			matched := queue.MatchAll(jobs, args, pattern)
 			if len(matched) == 0 {
@@ -59,7 +64,10 @@ func mstatInteractive(node string, who userSel) error {
 	if !render.Interactive() {
 		return fmt.Errorf("mstat -i needs a terminal (stdin is not a tty)")
 	}
-	label, scheduler, snapshot, run, capture := queueTargetCtx(node, who)
+	label, scheduler, snapshot, run, capture, err := queueTargetCtx(node, who)
+	if err != nil {
+		return err
+	}
 	interval := 2 * time.Second
 	if node != "" { // remote fetch: ssh + Kerberos per tick → don't hammer it
 		interval = 15 * time.Second
@@ -87,8 +95,7 @@ func mstatInteractive(node string, who userSel) error {
 	}
 	jobs, err := snapshot()
 	if err != nil {
-		render.Err(fmt.Sprintf("%s: queue fetch failed: %v", label, err))
-		os.Exit(1)
+		return runErr("%s: queue fetch failed: %v", label, err)
 	}
 	var matched []queue.Job
 	for _, j := range jobs {
@@ -118,7 +125,7 @@ func cancelJobs(label, scheduler string, matched []queue.Job, run func(string) e
 	}
 	cmd := cancelCmd(scheduler, jobIDs(matched))
 	if cmd == "" {
-		errNoScheduler(label)
+		return errNoScheduler(label)
 	}
 	if err := run(cmd); err != nil {
 		return err
@@ -136,12 +143,13 @@ func cancelJobs(label, scheduler string, matched []queue.Job, run func(string) e
 // command's raw stdout (info/peek/hist) — over remote-exec for --node, or a local
 // shell on an HPC login node. It exits only when there's no target at all: off-HPC
 // without --node.
-func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot func() ([]queue.Job, error), run func(string) error, capture func(string) (string, error)) {
+func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot func() ([]queue.Job, error), run func(string) error, capture func(string) (string, error), err error) {
 	if node != "" {
-		target, err := hpc.Resolve(node)
+		var target string
+		target, err = hpc.Resolve(node)
 		if err != nil {
-			render.Err(err.Error())
-			os.Exit(2)
+			err = usageErr("%s", err)
+			return
 		}
 		label, scheduler = node, config.SchedulerFor(node)
 		cmd, parse := fetchSpec(scheduler, who)
@@ -177,8 +185,8 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 	}
 	self, sched := currentCluster()
 	if self == "" {
-		render.Err("needs --node <cluster> off an HPC login node")
-		os.Exit(2)
+		err = usageErr("needs --node <cluster> off an HPC login node")
+		return
 	}
 	label, scheduler = self, sched
 	cmd, parse := fetchSpec(scheduler, who)

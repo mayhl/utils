@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -33,17 +32,28 @@ func queueInfoCmd() *cobra.Command {
 			"mask; -p forces a mask. Front-door: `minfo`.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			who := mustUserSel(userList, allUsers)
-			label, scheduler, snapshot, _, capture := queueTargetCtx(node, who)
-			matched := resolveJobs(label, snapshot, args, pattern)
+			who, err := mustUserSel(userList, allUsers)
+			if err != nil {
+				return err
+			}
+			label, scheduler, snapshot, _, capture, err := queueTargetCtx(node, who)
+			if err != nil {
+				return err
+			}
+			matched, err := resolveJobs(label, snapshot, args, pattern)
+			if err != nil {
+				return err
+			}
+			if len(matched) == 0 {
+				return nil
+			}
 			cmd := detailCmd(scheduler, jobIDs(matched))
 			if cmd == "" {
-				errNoScheduler(label)
+				return errNoScheduler(label)
 			}
 			out, err := capture(cmd)
 			if err != nil {
-				render.Err(fmt.Sprintf("%s: info fetch failed: %v", label, err))
-				os.Exit(1)
+				return runErr("%s: info fetch failed: %v", label, err)
 			}
 			if raw {
 				fmt.Print(out)
@@ -96,17 +106,28 @@ func queuePeekCmd() *cobra.Command {
 			"Single-cluster (--node off HPC). Front-door: `mpeek`.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			who := mustUserSel(userList, allUsers)
-			label, scheduler, snapshot, _, capture := queueTargetCtx(node, who)
-			matched := resolveJobs(label, snapshot, args, false)
+			who, err := mustUserSel(userList, allUsers)
+			if err != nil {
+				return err
+			}
+			label, scheduler, snapshot, _, capture, err := queueTargetCtx(node, who)
+			if err != nil {
+				return err
+			}
+			matched, err := resolveJobs(label, snapshot, args, false)
+			if err != nil {
+				return err
+			}
+			if len(matched) == 0 {
+				return nil
+			}
 			job := matched[0]
 			if len(matched) > 1 {
 				render.Info(fmt.Sprintf("%d jobs matched — peeking %s (%s); narrow the selector for another", len(matched), job.ShortID, job.Name))
 			}
 			detail, err := capture(detailCmd(scheduler, []string{job.ID}))
 			if err != nil {
-				render.Err(fmt.Sprintf("%s: detail fetch failed: %v", label, err))
-				os.Exit(1)
+				return runErr("%s: detail fetch failed: %v", label, err)
 			}
 			stream := "stdout"
 			if stderr {
@@ -114,13 +135,11 @@ func queuePeekCmd() *cobra.Command {
 			}
 			path := queue.OutputPath(scheduler, detail, stderr)
 			if path == "" {
-				render.Warn(fmt.Sprintf("no %s path reported for %s — the job may not have started yet", stream, job.ShortID))
-				os.Exit(1)
+				return runErr("no %s path reported for %s — the job may not have started yet", stream, job.ShortID)
 			}
 			out, err := capture(fmt.Sprintf("tail -n %d %s", lines, shell.Quote(path)))
 			if err != nil {
-				render.Err(fmt.Sprintf("%s: cannot read %s (%v) — a running PBS job's output may still be in node-local spool", label, path, err))
-				os.Exit(1)
+				return runErr("%s: cannot read %s (%v) — a running PBS job's output may still be in node-local spool", label, path, err)
 			}
 			render.Info(fmt.Sprintf("%s  %s  %s (last %d)", job.ShortID, stream, path, lines))
 			fmt.Print(out)
@@ -148,31 +167,30 @@ func addQueueScopeFlags(c *cobra.Command, node, userList *string, allUsers, patt
 	})
 }
 
-// mustUserSel builds the WHO axis from -u/-a, exiting with a house error on a malformed
+// mustUserSel builds the WHO axis from -u/-a, returning a code-2 error on a malformed
 // user list (it's interpolated into the fetch command). Shared by the queue verbs.
-func mustUserSel(userList string, allUsers bool) userSel {
+func mustUserSel(userList string, allUsers bool) (userSel, error) {
 	if userList != "" && !validUserList(userList) {
-		render.Err("--user takes a comma-separated user list (letters/digits/._-), e.g. -u alice,bob")
-		os.Exit(2)
+		return userSel{}, usageErr("--user takes a comma-separated user list (letters/digits/._-), e.g. -u alice,bob")
 	}
-	return userSel{all: allUsers, list: userList}
+	return userSel{all: allUsers, list: userList}, nil
 }
 
 // resolveJobs snapshots the target queue and resolves selector args to matched jobs
-// (short-id → full, ranges, lists, name masks). It exits — cleanly on an empty match,
-// with a house error on a fetch failure — so callers get a non-empty set or nothing.
-func resolveJobs(label string, snapshot func() ([]queue.Job, error), args []string, pattern bool) []queue.Job {
+// (short-id → full, ranges, lists, name masks). A fetch failure is a code-1 error; an
+// empty match prints a house notice and returns an empty slice + nil (a clean no-op the
+// caller returns on), so callers get a non-empty set, a clean stop, or an error.
+func resolveJobs(label string, snapshot func() ([]queue.Job, error), args []string, pattern bool) ([]queue.Job, error) {
 	jobs, err := snapshot()
 	if err != nil {
-		render.Err(fmt.Sprintf("%s: queue fetch failed: %v", label, err))
-		os.Exit(1)
+		return nil, runErr("%s: queue fetch failed: %v", label, err)
 	}
 	matched := queue.MatchAll(jobs, args, pattern)
 	if len(matched) == 0 {
 		render.Info("no matching jobs on " + label)
-		os.Exit(0)
+		return nil, nil
 	}
-	return matched
+	return matched, nil
 }
 
 // detailCmd builds the scheduler's full-detail command for the given full ids. PBS

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -44,46 +43,48 @@ func hpcQueueCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if userList != "" && !validUserList(userList) {
-				render.Err("--user takes a comma-separated user list (letters/digits/._-), e.g. -u alice,bob")
-				os.Exit(2)
+				return usageErr("--user takes a comma-separated user list (letters/digits/._-), e.g. -u alice,bob")
 			}
 			who := userSel{all: allUsers, list: userList}
 			if interactive {
 				if fleet || all {
-					render.Err("mstat -i is single-cluster — drop -f/-e (use --node for another cluster)")
-					os.Exit(2)
+					return usageErr("mstat -i is single-cluster — drop -f/-e (use --node for another cluster)")
 				}
 				return mstatInteractive(node, who)
 			}
 			var jobs []queue.Job
 			var down []string
 			var label string
+			var err error
 			switch {
 			case node != "":
 				label = node
-				jobs = fetchJobs(node, who)
+				jobs, err = fetchJobs(node, who)
 			case all:
-				label, jobs, down = collateJobs(allSystemsScope(), "all", who)
+				label, jobs, down, err = collateJobs(allSystemsScope(), "all", who)
 			case fleet:
-				label, jobs, down = collateJobs(fleetScope(), "fleet", who)
+				label, jobs, down, err = collateJobs(fleetScope(), "fleet", who)
 			case local:
-				// Explicit --local: current cluster, run locally. Off-HPC this warns
-				// and exits (no scheduler here) rather than silently widening.
-				label, jobs = fetchJobsLocal(who)
+				// Explicit --local: current cluster, run locally. Off-HPC this errors
+				// (no scheduler here) rather than silently widening.
+				label, jobs, err = fetchJobsLocal(who)
 			case !term.IsTerminal(os.Stdin.Fd()):
-				data, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return err
+				var data []byte
+				data, err = io.ReadAll(os.Stdin)
+				if err == nil {
+					jobs = queue.Parse(string(data))
 				}
-				jobs = queue.Parse(string(data))
 			default:
 				// Bare mstat, no pipe → resolve by location: on a login node run the
 				// current cluster locally; off HPC (no local scheduler) fall to fleet.
 				if self, _ := currentCluster(); self != "" {
-					label, jobs = fetchJobsLocal(who)
+					label, jobs, err = fetchJobsLocal(who)
 				} else {
-					label, jobs, down = collateJobs(fleetScope(), "fleet", who)
+					label, jobs, down, err = collateJobs(fleetScope(), "fleet", who)
 				}
+			}
+			if err != nil {
+				return err
 			}
 			if jsonOut {
 				if err := writeJSON(jobs); err != nil {
@@ -116,57 +117,52 @@ func hpcQueueCmd() *cobra.Command {
 	return c
 }
 
-// errNoScheduler reports an unconfigured scheduler for a cluster and exits(2) — the shared
-// exit path for the queue verbs when config carries no scheduler = "slurm"|"pbs".
-func errNoScheduler(label string) {
-	render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
-	os.Exit(2)
+// errNoScheduler is the code-2 error for an unconfigured scheduler — the shared no-op
+// for the queue verbs when config carries no scheduler = "slurm"|"pbs". Callers return it.
+func errNoScheduler(label string) error {
+	return usageErr("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label)
 }
 
 // fetchJobs runs the cluster's scheduler command on node over remote-exec and parses
 // it into normalized jobs. The scheduler comes from config (not a probe); an
-// unconfigured scheduler or a remote failure exits with one house error line.
-func fetchJobs(node string, who userSel) []queue.Job {
+// unconfigured scheduler or a remote failure returns one house error line.
+func fetchJobs(node string, who userSel) ([]queue.Job, error) {
 	target, err := hpc.Resolve(node)
 	if err != nil {
-		render.Err(err.Error())
-		os.Exit(2)
+		return nil, usageErr("%s", err)
 	}
 	cmd, parse := fetchSpec(config.SchedulerFor(node), who)
 	if cmd == "" {
-		errNoScheduler(node)
+		return nil, errNoScheduler(node)
 	}
 	hpc.EnsureTicket()
 	out, err := hpc.RemoteExec(target, cmd)
 	if err != nil {
-		render.Err(fmt.Sprintf("%s: remote fetch failed: %v", node, err))
-		os.Exit(1)
+		return nil, runErr("%s: remote fetch failed: %v", node, err)
 	}
-	return parse(out)
+	return parse(out), nil
 }
 
 // fetchJobsLocal runs the current cluster's scheduler command locally (no ssh) for
 // the on-cluster `mstat` path — you're already on the login node, so mu just runs
 // squeue/qstat here. Returns the resolved cluster label + jobs; off-HPC (no current
-// cluster) it warns and exits, steering to `<node> mstat` / --node.
-func fetchJobsLocal(who userSel) (string, []queue.Job) {
+// cluster) it errors, steering to `<node> mstat` / --node.
+func fetchJobsLocal(who userSel) (string, []queue.Job, error) {
 	self, scheduler := currentCluster()
 	if self == "" {
-		render.Warn("not on an HPC cluster — use `<node> mstat` or `mu hpc queue --node <n>`")
-		os.Exit(2)
+		return "", nil, usageErr("not on an HPC cluster — use `<node> mstat` or `mu hpc queue --node <n>`")
 	}
 	cmd, parse := fetchSpec(scheduler, who)
 	if cmd == "" {
-		errNoScheduler(self)
+		return "", nil, errNoScheduler(self)
 	}
 	// Same command as the remote fetch, run in a local shell (bash for the quoted
 	// -o format arg); the login shell already has the scheduler on PATH.
 	out, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {
-		render.Err(fmt.Sprintf("%s: local queue fetch failed: %v", self, err))
-		os.Exit(1)
+		return "", nil, runErr("%s: local queue fetch failed: %v", self, err)
 	}
-	return self, parse(string(out))
+	return self, parse(string(out)), nil
 }
 
 // userSel is the WHO axis of a fetch: whose jobs to show. Exactly one applies, in

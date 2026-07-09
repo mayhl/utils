@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
@@ -31,16 +28,21 @@ func queueHistCmd() *cobra.Command {
 			"now — PBS `qstat -xa` doesn't carry them, so they show `--`. Front-door: `mhist`.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			who := mustUserSel(userList, allUsers)
-			label, scheduler, _, _, capture := queueTargetCtx(node, who)
+			who, err := mustUserSel(userList, allUsers)
+			if err != nil {
+				return err
+			}
+			label, scheduler, _, _, capture, err := queueTargetCtx(node, who)
+			if err != nil {
+				return err
+			}
 			cmd, parse := histSpec(scheduler, who)
 			if cmd == "" {
-				errNoScheduler(label)
+				return errNoScheduler(label)
 			}
 			out, err := capture(cmd)
 			if err != nil {
-				render.Err(fmt.Sprintf("%s: history fetch failed: %v", label, err))
-				os.Exit(1)
+				return runErr("%s: history fetch failed: %v", label, err)
 			}
 			cols := render.JobCols{End: true}
 			if times {
