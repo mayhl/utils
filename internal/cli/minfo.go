@@ -39,8 +39,7 @@ func queueInfoCmd() *cobra.Command {
 			matched := resolveJobs(label, snapshot, args, pattern)
 			cmd := detailCmd(scheduler, jobIDs(matched))
 			if cmd == "" {
-				render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
-				os.Exit(2)
+				errNoScheduler(label)
 			}
 			out, err := capture(cmd)
 			if err != nil {

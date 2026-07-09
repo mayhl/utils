@@ -119,6 +119,13 @@ func hpcQueueCmd() *cobra.Command {
 	return c
 }
 
+// errNoScheduler reports an unconfigured scheduler for a cluster and exits(2) — the shared
+// exit path for the queue verbs when config carries no scheduler = "slurm"|"pbs".
+func errNoScheduler(label string) {
+	render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
+	os.Exit(2)
+}
+
 // fetchJobs runs the cluster's scheduler command on node over remote-exec and parses
 // it into normalized jobs. The scheduler comes from config (not a probe); an
 // unconfigured scheduler or a remote failure exits with one house error line.
@@ -130,8 +137,7 @@ func fetchJobs(node string, who userSel) []queue.Job {
 	}
 	cmd, parse := fetchSpec(config.SchedulerFor(node), who)
 	if cmd == "" {
-		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", node))
-		os.Exit(2)
+		errNoScheduler(node)
 	}
 	hpc.EnsureTicket()
 	out, err := hpc.RemoteExec(target, cmd)
@@ -154,8 +160,7 @@ func fetchJobsLocal(who userSel) (string, []queue.Job) {
 	}
 	cmd, parse := fetchSpec(scheduler, who)
 	if cmd == "" {
-		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` on its cluster in config.toml", self))
-		os.Exit(2)
+		errNoScheduler(self)
 	}
 	// Same command as the remote fetch, run in a local shell (bash for the quoted
 	// -o format arg); the login shell already has the scheduler on PATH.

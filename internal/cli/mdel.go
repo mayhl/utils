@@ -129,8 +129,7 @@ func cancelJobs(label, scheduler string, matched []queue.Job, run func(string) e
 	}
 	cmd := cancelCmd(scheduler, jobIDs(matched))
 	if cmd == "" {
-		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
-		os.Exit(2)
+		errNoScheduler(label)
 	}
 	if err := run(cmd); err != nil {
 		return err

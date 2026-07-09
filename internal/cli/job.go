@@ -48,8 +48,7 @@ func jobSubCmd() *cobra.Command {
 			label, scheduler, _, run, _ := queueTargetCtx(node, userSel{})
 			adapter := queue.For(scheduler)
 			if adapter == nil {
-				render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
-				os.Exit(2)
+				errNoScheduler(label)
 			}
 			if account == "" {
 				account = config.AccountFor(label)

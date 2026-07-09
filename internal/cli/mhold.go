@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -56,8 +55,7 @@ func holdReleaseCmd(use, title, past string, release bool) *cobra.Command {
 func actOnJobs(label, title, past, cmd string, matched []queue.Job, run func(string) error) error {
 	render.JobsTable(title+" on "+label, config.User(), toJobRows(matched), render.JobCols{})
 	if cmd == "" {
-		render.Err(fmt.Sprintf("no scheduler configured for %s — set `scheduler = \"slurm\"|\"pbs\"` in config.toml", label))
-		os.Exit(2)
+		errNoScheduler(label)
 	}
 	if err := run(cmd); err != nil {
 		return err
