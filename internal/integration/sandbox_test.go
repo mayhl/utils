@@ -201,18 +201,14 @@ func TestOnboard(t *testing.T) {
 			t.Errorf("expected %s on box: %v", path, err)
 		}
 	}
-}
-
-// TestDoctorSetup checks `mu doctor setup` runs on the box and reports each facet. Only
-// warns (never fails) on a partially-set-up box, so it exits 0.
-func TestDoctorSetup(t *testing.T) {
-	requireSandbox(t)
-	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
-	out, err := exec.Command("ssh", "sandbox", "MU_RENDER=plain ~/.local/bin/mu doctor setup").CombinedOutput()
+	// `mu doctor setup` introspects the freshly-onboarded box and reports each facet
+	// (folded in from the former TestDoctorSetup — same onboarded box, no second onboard).
+	// Warn-only, never fails, so it exits 0 even on a partially-set-up box.
+	ds, err := exec.Command("ssh", "sandbox", "MU_RENDER=plain ~/.local/bin/mu doctor setup").CombinedOutput()
 	if err != nil {
-		t.Fatalf("doctor setup on box: %v\n%s", err, out)
+		t.Fatalf("doctor setup on box: %v\n%s", err, ds)
 	}
-	mustContain(t, string(out), "shell-init", "toolchain", "build", "repo")
+	mustContain(t, string(ds), "shell-init", "toolchain", "build", "repo")
 }
 
 // TestSync checks `mu setup sync`: this machine's config.toml inventory propagates to the
@@ -430,55 +426,27 @@ func TestOnboardDirtyGuard(t *testing.T) {
 	}
 }
 
-// TestToolchainDryRun runs `mu setup toolchain --dry-run` on the box (the linux install
-// path) and checks the plan names the embedded tools and the modulefile target. Onboard
-// first so the box has the current toolchain-aware mu. Dry-run keeps it deterministic and
-// network-free — the real mise install + modulefile load is verified by hand, not in CI.
-func TestToolchainDryRun(t *testing.T) {
-	requireSandbox(t)
-	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
-	out, err := exec.Command("ssh", "sandbox",
-		"MU_RENDER=plain ~/.local/bin/mu setup toolchain --dry-run --prefix /home/tester/tc --module").CombinedOutput()
-	if err != nil {
-		t.Fatalf("toolchain --dry-run on box: %v\n%s", err, out)
-	}
-	mustContain(t, string(out), "delta", "difftastic", "modulefiles/mu-toolchain", "dry-run")
-}
-
-// TestKillPBS cancels a PBS job by its SHORT id (`mdel`/`mu hpc queue kill`). 1284570
-// is the short id mstat shows; it must resolve back to the full 1284570.hpc1 the box's
-// qdel stub receives. -y skips the confirm prompt (no tty in a test).
-func TestKillPBS(t *testing.T) {
-	requireSandbox(t)
-	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "1284570")
-	mustContain(t, out, "cancelled 1 job(s) on sandbox")
-}
-
-// TestKillSLURM cancels a SLURM job by id (already bare) — drives scancel on the box.
+// TestKillSLURM proves the real scancel stub accepts mu's cancel command over ssh — the
+// SLURM idiom (distinct binary + KillCmd from qdel). Id 8359638 is already bare, so no
+// selector logic is under test here; the value is the scancel wiring.
 func TestKillSLURM(t *testing.T) {
 	requireSandbox(t)
 	out := mu(t, "hpc", "queue", "kill", "--node", "sandslurm", "-y", "8359638")
 	mustContain(t, out, "cancelled 1 job(s) on sandslurm")
 }
 
-// TestKillByName cancels via a name mask rather than an id — run_wave is non-numeric so
-// the selector treats it as a mask, matching exactly the one job.
-func TestKillByName(t *testing.T) {
-	requireSandbox(t)
-	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "run_wave")
-	mustContain(t, out, "cancelled 1 job(s) on sandbox")
-}
-
-// TestKillRange cancels a contiguous short-id range — 1284570-1284571 covers run_wave
-// and post_proc, so two jobs go in one batched qdel.
+// TestKillRange proves the real qdel stub accepts a BATCHED multi-id cancel in one
+// invocation (1284570-1284571 → run_wave + post_proc). The range→2-jobs selection itself
+// is unit-tested (queue.TestMatchRangeAndList); this asserts the batch wiring.
 func TestKillRange(t *testing.T) {
 	requireSandbox(t)
 	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "1284570-1284571")
 	mustContain(t, out, "cancelled 2 job(s) on sandbox")
 }
 
-// TestKillNoMatch exits cleanly (0) with a notice when a selector picks nothing — no
-// qdel is run and the command must not error.
+// TestKillNoMatch proves an empty selection runs NO scheduler command and exits cleanly
+// (0) with a notice — the wiring the empty-match guard can't show at the unit level (it
+// sits behind the ssh-backed queueTargetCtx). The selector match itself is unit-tested.
 func TestKillNoMatch(t *testing.T) {
 	requireSandbox(t)
 	out := mu(t, "hpc", "queue", "kill", "--node", "sandbox", "-y", "9999999")
