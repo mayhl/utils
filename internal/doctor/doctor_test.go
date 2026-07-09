@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,75 @@ func TestPluginsNoDir(t *testing.T) {
 	t.Setenv("MU_CHECKS_DIR", filepath.Join(t.TempDir(), "does-not-exist"))
 	if got := plugins(); got != nil {
 		t.Errorf("missing checks dir should yield nil, got %+v", got)
+	}
+}
+
+func TestParsePluginOutput(t *testing.T) {
+	cases := []struct {
+		name, in                       string
+		wantTitle, wantDetail, wantVer string
+	}{
+		{"title + body", "#TITLE: Providers\nrow one\nrow two\nall good", "Providers", "all good", "row one\nrow two"},
+		{"title only", "#TITLE: Providers\n", "Providers", "", ""},
+		{"multiline no title", "row one\ndetail", "", "detail", "row one"},
+		{"single line", "just detail", "", "just detail", ""},
+		{"trailing newline", "detail\n", "", "detail", ""},
+		{"empty", "", "", "", ""},
+	}
+	for _, c := range cases {
+		title, detail, ver := parsePluginOutput([]byte(c.in))
+		if title != c.wantTitle || detail != c.wantDetail || ver != c.wantVer {
+			t.Errorf("%s: got (%q,%q,%q), want (%q,%q,%q)", c.name, title, detail, ver, c.wantTitle, c.wantDetail, c.wantVer)
+		}
+	}
+}
+
+func TestLastLine(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"one", "one"},
+		{"a\nb", "b"},
+		{"a\nb\n", "b"},
+	}
+	for _, c := range cases {
+		if got := lastLine(c.in); got != c.want {
+			t.Errorf("lastLine(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCheckMise(t *testing.T) {
+	writeExec := func(dir, name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// OK: mise resolvable on PATH.
+	binDir := t.TempDir()
+	misePath := writeExec(binDir, "mise")
+	t.Setenv("PATH", binDir)
+	if r := checkMise(); r.Status != OK || r.Detail != misePath {
+		t.Errorf("on PATH: got %+v, want OK %s", r, misePath)
+	}
+	// Warn: not on PATH but present in ~/.local/bin.
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(localBin, "mise")
+	t.Setenv("PATH", t.TempDir()) // no mise on PATH
+	t.Setenv("HOME", home)
+	if r := checkMise(); r.Status != Warn || !strings.Contains(r.Detail, "not on PATH") {
+		t.Errorf("in ~/.local/bin: got %+v, want Warn not-on-PATH", r)
+	}
+	// Warn: absent entirely.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	if r := checkMise(); r.Status != Warn || !strings.Contains(r.Detail, "not found") {
+		t.Errorf("absent: got %+v, want Warn not-found", r)
 	}
 }
 

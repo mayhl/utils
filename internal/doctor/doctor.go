@@ -178,21 +178,7 @@ func runDir(dir, section string) []Result {
 
 func runPlugin(dir, section, name string) Result {
 	out, err := exec.Command(filepath.Join(dir, name)).Output()
-	full := strings.TrimRight(string(out), "\n")
-	// Optional first line "#TITLE: <label>" sets the -v sub-table title; strip it before
-	// detail/verbose parsing (plugins without it just use their name).
-	title := ""
-	if first, rest, found := strings.Cut(full, "\n"); found || full != "" {
-		if t, ok := strings.CutPrefix(first, "#TITLE:"); ok {
-			title = strings.TrimSpace(t)
-			full = rest // "" when the plugin emitted only the title line
-		}
-	}
-	detail := lastLine(full)
-	verbose := ""
-	if i := strings.LastIndex(full, "\n"); i >= 0 { // lines above the detail line → -v
-		verbose = full[:i]
-	}
+	title, detail, verbose := parsePluginOutput(out)
 	status := OK
 	if err != nil {
 		var ee *exec.ExitError
@@ -206,6 +192,25 @@ func runPlugin(dir, section, name string) Result {
 		}
 	}
 	return Result{Section: section, Name: name, Title: title, Status: status, Detail: detail, Verbose: verbose}
+}
+
+// parsePluginOutput splits a plugin's raw stdout into its optional "#TITLE: <label>" first
+// line, the detail (last line), and the verbose block (lines above the detail). Pure — the
+// exec and exit-code handling stays in runPlugin — so the title-strip, title-only, and
+// verbose-split cases are unit-tested.
+func parsePluginOutput(out []byte) (title, detail, verbose string) {
+	full := strings.TrimRight(string(out), "\n")
+	if first, rest, found := strings.Cut(full, "\n"); found || full != "" {
+		if t, ok := strings.CutPrefix(first, "#TITLE:"); ok {
+			title = strings.TrimSpace(t)
+			full = rest // "" when the plugin emitted only the title line
+		}
+	}
+	detail = lastLine(full)
+	if i := strings.LastIndex(full, "\n"); i >= 0 { // lines above the detail line → -v
+		verbose = full[:i]
+	}
+	return title, detail, verbose
 }
 
 func isExec(p string) bool {
