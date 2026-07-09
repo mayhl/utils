@@ -162,9 +162,9 @@ func fetchQueuesLocal() (string, []queue.QueueInfo) {
 }
 
 // execQueues keeps only submittable (Exe) queues — part of the default `mu hpc queues`
-// view. Non-Exe queues are routing/admin queues a user never targets with `mu job sub`,
-// and they're what the future -q completion cache filters on too. Matches the `Exe` Type
-// code case-insensitively by prefix, tolerating a longer spelling on some systems.
+// view. Non-Exe queues are routing/admin queues a user never targets with `mu job sub`.
+// Matches the `Exe` Type code case-insensitively by prefix, tolerating a longer spelling
+// on some systems.
 func execQueues(qs []queue.QueueInfo) []queue.QueueInfo {
 	out := make([]queue.QueueInfo, 0, len(qs))
 	for _, q := range qs {
