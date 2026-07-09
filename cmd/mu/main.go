@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	defer cli.Recover() // turn an unhandled panic into a house error + logged backtrace
 	root := cli.Root()
 	// fang owns the root's help func with no override (it hardcodes root.SetHelpFunc), so
 	// intercept bare-root help here to render it in the house language. Subcommand help

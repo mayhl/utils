@@ -221,6 +221,24 @@ func (x *Logger) Err(msg string)  { x.l.Log(context.Background(), slog.LevelErro
 // EventLogPath is the curated event-log file that `mu log` reads.
 func EventLogPath() string { return eventLogPath() }
 
+// CrashDump persists a panic backtrace to a crash-<id>.log file beside the event log
+// and drops a breadcrumb event pointing at it, returning the crash id and dump path.
+// Best-effort: if the file can't be written it returns an empty path (the event still
+// lands under that id) so the caller can fall back to an inline backtrace. reason is a
+// one-line summary; stack is the full formatted trace. Reporting a crash must never
+// itself break — write failures are swallowed.
+func CrashDump(reason, stack string) (id, path string) {
+	id = newEventID()
+	dir := filepath.Dir(eventLogPath())
+	path = filepath.Join(dir, "crash-"+id+".log")
+	body := "mu crash " + id + "\n" + reason + "\n\n" + stack + "\n"
+	if os.MkdirAll(dir, 0o755) != nil || os.WriteFile(path, []byte(body), 0o644) != nil {
+		path = "" // couldn't write the file; the event breadcrumb still records the crash
+	}
+	Emit("crash", "error", reason, map[string]any{"id": id, "file": path})
+	return id, path
+}
+
 // emit is the shared structured-event core: it logs the record (and renders unless
 // quiet) with an optional payload, returning the event id ("" when no payload). The id
 // is written into the payload under "id" unless the caller already set one (letting a
