@@ -149,10 +149,24 @@ func hpcNodesCmd() *cobra.Command {
 				}
 				st = hpc.Probe(hosts, probeTimeout)
 			}
-			render.NodesTable(defs, config.User(), st)
+			render.NodesTable(toNodeGroups(defs), config.User(), st)
 			return nil
 		},
 	}
 	c.Flags().BoolVarP(&status, "status", "s", false, "probe ssh (port 22) reachability from here — ● up / ○ down")
 	return c
+}
+
+// toNodeGroups maps config clusters to render's plain NodeGroup view (keeping render
+// domain-free, like toJobRows/toQueueRows). Host = node.domain.
+func toNodeGroups(defs []config.Cluster) []render.NodeGroup {
+	groups := make([]render.NodeGroup, len(defs))
+	for i, cl := range defs {
+		rows := make([]render.NodeRow, len(cl.Nodes))
+		for j, n := range cl.Nodes {
+			rows[j] = render.NodeRow{Name: n, Host: n + "." + cl.Domain}
+		}
+		groups[i] = render.NodeGroup{Cluster: cl.Name, Nodes: rows}
+	}
+	return groups
 }

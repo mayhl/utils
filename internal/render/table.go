@@ -7,8 +7,6 @@ import (
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
-
-	"github.com/mayhl/mayhl_utils/internal/config"
 )
 
 // applyStyle sets the house rounded style, or a borderless tab-aligned style when
@@ -30,12 +28,24 @@ func applyStyle(t table.Writer) {
 	}
 }
 
+// NodeGroup is one cluster's nodes for NodesTable — a render-local view that keeps render
+// domain-free of config. Host is the fully-qualified ssh host for each node.
+type NodeGroup struct {
+	Cluster string
+	Nodes   []NodeRow
+}
+
+// NodeRow is a single node's display fields: its short name and full ssh host.
+type NodeRow struct {
+	Name, Host string
+}
+
 // NodesTable renders `mu hpc nodes`: a framed username line plus a
 // Cluster/Node/Host table (magenta cluster, bold-green node, cyan host, one
 // cluster label per group, dividers between clusters). When status is non-empty
 // (from `-s`), a reachability column is added — ● up (green) / ○ down (red),
 // keyed by node name.
-func NodesTable(defs []config.Cluster, user string, status map[string]string) {
+func NodesTable(groups []NodeGroup, user string, status map[string]string) {
 	withStatus := len(status) > 0
 
 	t := table.NewWriter()
@@ -49,19 +59,19 @@ func NodesTable(defs []config.Cluster, user string, status map[string]string) {
 		header = append(header, "Status")
 	}
 	t.AppendHeader(header)
-	for i, cl := range defs {
-		for j, node := range cl.Nodes {
+	for i, g := range groups {
+		for j, n := range g.Nodes {
 			label := ""
 			if j == 0 {
-				label = cl.Name
+				label = g.Cluster
 			}
-			row := table.Row{label, node, node + "." + cl.Domain}
+			row := table.Row{label, n.Name, n.Host}
 			if withStatus {
-				row = append(row, nodeStatusBadge(status[node]))
+				row = append(row, nodeStatusBadge(status[n.Name]))
 			}
 			t.AppendRow(row)
 		}
-		if i < len(defs)-1 {
+		if i < len(groups)-1 {
 			t.AppendSeparator()
 		}
 	}
