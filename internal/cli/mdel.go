@@ -31,11 +31,7 @@ func queueKillCmd() *cobra.Command {
 			"name mask; -p forces a mask, ~ forces one token. Front-door: `mdel`.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if userList != "" && !validUserList(userList) {
-				render.Err("--user takes a comma-separated user list, e.g. -u alice,bob")
-				os.Exit(2)
-			}
-			who := userSel{all: allUsers, list: userList}
+			who := mustUserSel(userList, allUsers)
 			label, scheduler, snapshot, run, _ := queueTargetCtx(node, who)
 			jobs, err := snapshot()
 			if err != nil {
@@ -50,15 +46,8 @@ func queueKillCmd() *cobra.Command {
 			return cancelJobs(label, scheduler, matched, run, yes)
 		},
 	}
-	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
-	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "target all users' jobs (default: yours)")
-	c.Flags().StringVarP(&userList, "user", "u", "", "target these users' jobs (comma-separated)")
-	c.Flags().BoolVarP(&pattern, "pattern", "p", false, "force every argument to be a name mask")
+	addQueueScopeFlags(c, &node, &userList, &allUsers, &pattern)
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
-	c.MarkFlagsMutuallyExclusive("all-users", "user")
-	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
-		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
-	})
 	return c
 }
 
