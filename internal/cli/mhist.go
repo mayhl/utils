@@ -62,18 +62,7 @@ func queueHistCmd() *cobra.Command {
 func histSpec(scheduler string, who userSel) (string, func(string) []queue.Job) {
 	switch scheduler {
 	case "pbs":
-		sel := ""
-		switch {
-		case who.list != "":
-			sel = " -u " + who.list
-		case who.all:
-			sel = ""
-		default:
-			if u := config.HPCUser(); u != "" {
-				sel = " -u " + u
-			}
-		}
-		return "qstat -xa" + sel, queue.ParsePBS
+		return "qstat -xa" + pbsUserSel(who), queue.ParsePBS
 	case "slurm":
 		sel := ""
 		switch {

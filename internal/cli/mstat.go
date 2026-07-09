@@ -194,6 +194,23 @@ func validUserList(s string) bool {
 	return true
 }
 
+// pbsUserSel builds the qstat WHO selector — " -u <users>" for an explicit list, "" for
+// all users, else the configured user (or "" if unset). Leading-space form so it appends
+// straight onto "qstat -a". Shared by the live (fetchSpec) and history (histSpec) PBS specs.
+func pbsUserSel(who userSel) string {
+	switch {
+	case who.list != "":
+		return " -u " + who.list
+	case who.all:
+		return ""
+	default:
+		if u := config.HPCUser(); u != "" {
+			return " -u " + u
+		}
+		return ""
+	}
+}
+
 // fetchSpec returns the remote command + matching parser for a scheduler. SLURM uses
 // mu's controlled pipe-delimited format (adds walltime, robust parse); PBS uses the
 // wide `qstat -a` (its default already carries Req'd Time). The WHO axis picks the user
@@ -210,18 +227,7 @@ func fetchSpec(scheduler string, who userSel) (string, func(string) []queue.Job)
 		}
 		return `squeue -h ` + sel + `-o "%i|%P|%j|%u|%t|%M|%l|%D|%R|%S"`, queue.ParseSLURMDelim
 	case "pbs":
-		sel := ""
-		switch {
-		case who.list != "":
-			sel = " -u " + who.list
-		case who.all:
-			sel = ""
-		default:
-			if u := config.HPCUser(); u != "" {
-				sel = " -u " + u
-			}
-		}
-		return "qstat -a" + sel, queue.ParsePBS
+		return "qstat -a" + pbsUserSel(who), queue.ParsePBS
 	default:
 		return "", nil
 	}
