@@ -1,0 +1,185 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/hpc"
+	"github.com/mayhl/mayhl_utils/internal/queue"
+	"github.com/mayhl/mayhl_utils/internal/render"
+)
+
+// collateTimeout bounds each cluster's fetch during --all fan-out — long enough for
+// ssh + Kerberos + login-profile + squeue, short enough that a wedged cluster
+// doesn't stall the whole collate.
+const collateTimeout = 20 * time.Second
+
+// clusterResult is one cluster's collate outcome: its jobs, or the error that
+// dropped it (unreachable, timed out, misconfigured).
+type clusterResult struct {
+	cluster string
+	jobs    []queue.Job
+	err     error
+}
+
+// queueTarget is one collate fetch: which node to run the scheduler on and the label
+// each returned job is tagged with. label is the cluster name (cluster scopes) or the
+// node/system name (an explicit `fleet` list), so a DSRC split across separate schedulers
+// stays distinguishable in the merged table.
+type queueTarget struct {
+	label     string
+	scheduler string
+	node      string // node name to resolve + fetch from ("" → no node configured)
+}
+
+// clusterTargets picks one representative node (Nodes[0]) per cluster — the scope used by
+// --all and by --fleet's fallback when no explicit `fleet` list is configured. Clusters
+// with no node/scheduler are kept so fetchTarget reports them as a warning, not a silent drop.
+func clusterTargets(cs []config.Cluster) []queueTarget {
+	t := make([]queueTarget, 0, len(cs))
+	for _, c := range cs {
+		node := ""
+		if len(c.Nodes) > 0 {
+			node = c.Nodes[0]
+		}
+		t = append(t, queueTarget{label: c.Name, scheduler: c.Scheduler, node: node})
+	}
+	return t
+}
+
+// fleetTargets builds one target per node in the explicit `fleet` list, each labeled by
+// its node/system name and carrying that node's cluster-declared scheduler.
+func fleetTargets(nodes []string) []queueTarget {
+	t := make([]queueTarget, 0, len(nodes))
+	for _, n := range nodes {
+		t = append(t, queueTarget{label: n, scheduler: config.SchedulerFor(n), node: n})
+	}
+	return t
+}
+
+// fleetScope resolves the --fleet target set: the explicit `fleet` node list when
+// configured (one fetch per listed system — so a multi-scheduler DSRC like navy isn't
+// collapsed to a single representative node), else a soft fallback to one node per active
+// cluster (never worse than the prior behavior).
+func fleetScope() []queueTarget {
+	if nodes := config.Fleet(); len(nodes) > 0 {
+		return fleetTargets(nodes)
+	}
+	return clusterTargets(config.ActiveClusters())
+}
+
+// allSystemsScope resolves --all-systems: every distinct queue = the fleet list plus one
+// representative node for each configured cluster (incl. inactive) whose nodes are NOT
+// already covered by the fleet. A proper superset of --fleet that reaches unlisted/inactive
+// clusters without re-querying a cluster's shared scheduler. With no `fleet` list it reduces
+// to one node per cluster (the prior --all behavior).
+func allSystemsScope() []queueTarget {
+	fleet := config.Fleet()
+	inFleet := make(map[string]bool, len(fleet))
+	for _, n := range fleet {
+		inFleet[n] = true
+	}
+	targets := fleetTargets(fleet)
+	for _, c := range config.ClusterDefs() {
+		covered := false
+		for _, n := range c.Nodes {
+			if inFleet[n] {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue // a fleet node already fetches this cluster's queue
+		}
+		node := ""
+		if len(c.Nodes) > 0 {
+			node = c.Nodes[0]
+		}
+		targets = append(targets, queueTarget{label: c.Name, scheduler: c.Scheduler, node: node})
+	}
+	return targets
+}
+
+// collateJobs fans out over the given targets concurrently, each fetched with a bounded
+// timeout, and returns the display label plus the merged jobs (tagged by label) and
+// "label: reason" notes for any that failed — so a down target degrades to a warning,
+// never a hang or a total failure. The Kerberos ticket is ensured once up front. scope is
+// "fleet" or "all", driving both the label and the empty-set message.
+func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, []string) {
+	if len(targets) == 0 {
+		if scope == "fleet" {
+			render.Warn("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
+		} else {
+			render.Warn("no clusters configured — add clusters to config.toml")
+		}
+		os.Exit(2)
+	}
+	hpc.EnsureTicket()
+	results := make([]clusterResult, len(targets))
+	// Fan out concurrently; a spinner tracks how many of the N cluster fetches have
+	// returned (order is nondeterministic — a down/slow one just ticks the count
+	// when its bounded remote-exec times out, then surfaces as a warning later).
+	sp := render.NewSpinner(fmt.Sprintf("Collating queues 0/%d", len(targets)))
+	sp.Start()
+	done := make(chan struct{}, len(targets))
+	for i := range targets {
+		go func(i int) {
+			results[i] = fetchTarget(targets[i], who)
+			done <- struct{}{}
+		}(i)
+	}
+	for n := 1; n <= len(targets); n++ {
+		<-done
+		sp.SetMessage(fmt.Sprintf("Collating queues %d/%d", n, len(targets)))
+	}
+	sp.Stop()
+	label := scope
+	if scope == "all" {
+		label = "all systems"
+	}
+	jobs, down := mergeResults(results)
+	return label, jobs, down
+}
+
+// fetchTarget runs one target's scheduler over the bounded remote-exec, tagging each job
+// with the target's label.
+func fetchTarget(t queueTarget, who userSel) clusterResult {
+	if t.node == "" {
+		return clusterResult{t.label, nil, errors.New("no nodes configured")}
+	}
+	cmd, parse := fetchSpec(t.scheduler, who)
+	if cmd == "" {
+		return clusterResult{t.label, nil, errors.New("no scheduler configured")}
+	}
+	target, err := hpc.Resolve(t.node)
+	if err != nil {
+		return clusterResult{t.label, nil, err}
+	}
+	out, err := hpc.RemoteExecTimeout(target, cmd, collateTimeout)
+	if err != nil {
+		return clusterResult{t.label, nil, err}
+	}
+	jobs := parse(out)
+	for i := range jobs {
+		jobs[i].Cluster = t.label
+	}
+	return clusterResult{t.label, jobs, nil}
+}
+
+// mergeResults flattens per-cluster results into one job list (in cluster order) plus
+// "cluster: reason" notes for the failures. Pure — the fan-out's testable core.
+func mergeResults(results []clusterResult) ([]queue.Job, []string) {
+	var jobs []queue.Job
+	var down []string
+	for _, r := range results {
+		if r.err != nil {
+			down = append(down, fmt.Sprintf("%s: %v", r.cluster, r.err))
+			continue
+		}
+		jobs = append(jobs, r.jobs...)
+	}
+	return jobs, down
+}
