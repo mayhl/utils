@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -87,9 +86,7 @@ func hpcQueueCmd() *cobra.Command {
 				}
 			}
 			if jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(jobs); err != nil {
+				if err := writeJSON(jobs); err != nil {
 					return err
 				}
 			} else {

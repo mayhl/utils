@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -94,9 +93,7 @@ func hpcQueuesCmd() *cobra.Command {
 				qs = up
 			}
 			if jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(qs)
+				return writeJSON(qs)
 			}
 			if len(qs) == 0 {
 				// raw>0 means everything was filtered out (routing/admin or all down); a

@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 
@@ -19,6 +20,13 @@ import (
 // MU_SYSTEM override), matching the shell platform seam in init.sh.
 func onHPC() bool {
 	return os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc"
+}
+
+// writeJSON prints v as indented JSON to stdout — the shared `--json` output path.
+func writeJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 // HelpColorScheme themes fang's help/usage in the house language: ANSI colors

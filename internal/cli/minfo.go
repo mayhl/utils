@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -52,9 +51,7 @@ func queueInfoCmd() *cobra.Command {
 			}
 			details := queue.ParseDetails(scheduler, out)
 			if jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(details)
+				return writeJSON(details)
 			}
 			for _, d := range details {
 				render.JobDetailCard(toDetailView(d))
