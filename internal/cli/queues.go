@@ -51,32 +51,33 @@ func hpcQueuesCmd() *cobra.Command {
 			if interactive && !render.Interactive() {
 				return fmt.Errorf("mu hpc queues -i needs a terminal (stdin is not a tty)")
 			}
-			var label string
-			var qs []queue.QueueInfo
+			var (
+				label string
+				qs    []queue.QueueInfo
+				err   error
+			)
 			switch {
 			case node != "":
-				label, qs = fetchQueues(node)
+				label, qs, err = fetchQueues(node)
 			case local:
-				label, qs = fetchQueuesLocal()
+				label, qs, err = fetchQueuesLocal()
 			case !term.IsTerminal(os.Stdin.Fd()):
-				data, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return err
-				}
-				label, qs = "queues", queue.ParseShowQueues(string(data))
-				if len(qs) == 0 {
-					render.Warn("no queues parsed — is this `show_queues` output?")
-					return nil
+				var data []byte
+				data, err = io.ReadAll(os.Stdin)
+				if err == nil {
+					label, qs = "queues", queue.ParseShowQueues(string(data))
+					if len(qs) == 0 {
+						render.Warn("no queues parsed — is this `show_queues` output?")
+						return nil
+					}
 				}
 			default:
-				// Bare `mu hpc queues`, no pipe → resolve by location: on a login node run
-				// locally; off HPC (no local scheduler) steer to --node or a pipe.
-				if self, _ := currentCluster(); self != "" {
-					label, qs = fetchQueuesLocal()
-				} else {
-					render.Warn("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
-					os.Exit(2)
-				}
+				// Bare `mu hpc queues`, no pipe → run locally on a login node;
+				// fetchQueuesLocal returns a usage error off HPC, steering to --node or a pipe.
+				label, qs, err = fetchQueuesLocal()
+			}
+			if err != nil {
+				return err
 			}
 			raw := len(qs)
 			if !all {
@@ -126,36 +127,34 @@ func hpcQueuesCmd() *cobra.Command {
 // fetchQueues runs show_queues on node over remote-exec and parses it (same format on
 // PBS and SLURM — it's a site wrapper). show_queues is broken/absent on some systems, so
 // a run failure degrades to a warning and an empty result, never a crash. Mirrors fetchJobs.
-func fetchQueues(node string) (string, []queue.QueueInfo) {
+func fetchQueues(node string) (string, []queue.QueueInfo, error) {
 	target, err := hpc.Resolve(node)
 	if err != nil {
-		render.Err(err.Error())
-		os.Exit(2)
+		return "", nil, usageErr("%s", err)
 	}
 	hpc.EnsureTicket()
 	out, err := hpc.RemoteExec(target, showQueuesCmd)
 	if err != nil {
 		render.Warn(fmt.Sprintf("%s: show_queues failed (broken or unsupported on this system?): %v", node, err))
-		return node, nil
+		return node, nil, nil
 	}
-	return node, queue.ParseShowQueues(out)
+	return node, queue.ParseShowQueues(out), nil
 }
 
 // fetchQueuesLocal runs show_queues on the current cluster (no ssh) — the on-HPC path.
 // bash -lc so the site profile puts show_queues on PATH; same graceful degradation as
 // fetchQueues when show_queues is broken here.
-func fetchQueuesLocal() (string, []queue.QueueInfo) {
+func fetchQueuesLocal() (string, []queue.QueueInfo, error) {
 	self, _ := currentCluster()
 	if self == "" {
-		render.Warn("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
-		os.Exit(2)
+		return "", nil, usageErr("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
 	}
 	out, err := exec.Command("bash", "-lc", showQueuesCmd).Output()
 	if err != nil {
 		render.Warn(fmt.Sprintf("%s: local show_queues failed (broken or unsupported here?): %v", self, err))
-		return self, nil
+		return self, nil, nil
 	}
-	return self, queue.ParseShowQueues(string(out))
+	return self, queue.ParseShowQueues(string(out)), nil
 }
 
 // execQueues keeps only submittable (Exe) queues — part of the default `mu hpc queues`
