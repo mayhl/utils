@@ -39,6 +39,15 @@ type Signwip struct {
 	Total   int
 }
 
+// signedHash returns the commit hash if line ("hash %G?") is Good-signed (2nd field "G"),
+// else "", false. The per-line predicate of signedBase — pure, so it's unit-tested.
+func signedHash(line string) (string, bool) {
+	if f := strings.Fields(line); len(f) >= 2 && f[1] == "G" {
+		return f[0], true
+	}
+	return "", false
+}
+
 // signedBase returns the newest Good-signed commit hash. It STREAMS git log and stops
 // at the first match, closing the pipe so git (and its per-commit gpg verify) halts at
 // the base instead of walking all of history — mirroring the shell's `... | awk '…exit'`.
@@ -55,8 +64,8 @@ func signedBase() (string, error) {
 	base := ""
 	sc := bufio.NewScanner(stdout)
 	for sc.Scan() {
-		if f := strings.Fields(sc.Text()); len(f) >= 2 && f[1] == "G" {
-			base = f[0]
+		if h, ok := signedHash(sc.Text()); ok {
+			base = h
 			break
 		}
 	}
@@ -85,21 +94,31 @@ func SignwipPreview() (Signwip, error) {
 	if err != nil {
 		return s, err
 	}
-	for _, line := range splitNonEmpty(wip) {
+	var rows []WipRow
+	rows, s.Total, s.Tagged = classifySign(splitNonEmpty(wip))
+	s.Rows = append(s.Rows, rows...)
+	s.ToSign = s.Total - s.Tagged
+	return s, nil
+}
+
+// classifySign marks the signwip WIP lines ("hash\tsubject", oldest→newest): an [unreviewed]
+// commit as skip (signwip signs only untagged), the rest as sign. Returns the rows plus the
+// total and tagged counts. Pure (no git) so the sign/skip split is unit-tested.
+func classifySign(lines []string) (rows []WipRow, total, tagged int) {
+	for _, line := range lines {
 		h, sub, ok := strings.Cut(line, "\t")
 		if !ok {
 			continue
 		}
-		s.Total++
+		total++
 		act := "sign"
 		if strings.HasPrefix(sub, unreviewed) {
 			act = "skip"
-			s.Tagged++
+			tagged++
 		}
-		s.Rows = append(s.Rows, WipRow{Act: act, Hash: h, Subject: sub})
+		rows = append(rows, WipRow{Act: act, Hash: h, Subject: sub})
 	}
-	s.ToSign = s.Total - s.Tagged
-	return s, nil
+	return rows, total, tagged
 }
 
 // ReviewRow is one line of the reviewed preview: a commit in the unsigned WIP stack
@@ -212,23 +231,33 @@ func PushsignedPreview() (Pushsigned, error) {
 	if err != nil {
 		return p, err
 	}
+	p.Rows, p.PushN, p.Held = classifyPush(splitNonEmpty(raw))
+	return p, nil
+}
+
+// classifyPush marks the pushsigned log lines ("hash\t%G?\tsubject", oldest→newest): the
+// contiguous signed (%G?=="G") PREFIX as push, and everything from the first unsigned commit
+// onward as held — even a later-signed commit, since pushing it would carry the unsigned one
+// beneath it. Returns the rows plus the push and held counts. Pure (no git) so the
+// prefix rule is unit-tested.
+func classifyPush(lines []string) (rows []PushRow, pushN, held int) {
 	inPrefix := true
-	for _, line := range splitNonEmpty(raw) {
+	for _, line := range lines {
 		parts := strings.SplitN(line, "\t", 3)
 		if len(parts) < 3 {
 			continue
 		}
 		signed := parts[1] == "G"
 		if inPrefix && signed {
-			p.Rows = append(p.Rows, PushRow{Push: true, Signed: true, Hash: parts[0], Subject: parts[2]})
-			p.PushN++
+			rows = append(rows, PushRow{Push: true, Signed: true, Hash: parts[0], Subject: parts[2]})
+			pushN++
 			continue
 		}
 		inPrefix = false
-		p.Rows = append(p.Rows, PushRow{Push: false, Signed: signed, Hash: parts[0], Subject: parts[2]})
-		p.Held++
+		rows = append(rows, PushRow{Push: false, Signed: signed, Hash: parts[0], Subject: parts[2]})
+		held++
 	}
-	return p, nil
+	return rows, pushN, held
 }
 
 // FileCheck is one existence check for the doctor report.
