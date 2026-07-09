@@ -7,6 +7,7 @@ package render
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -54,14 +55,28 @@ func plainMode() bool {
 }
 
 // logLine prints one house-style status line to stderr: a colored glyph tag
-// followed by the message. Meaning never rides on color alone — the glyph (or
-// ASCII label under MU_ASCII) carries it.
+// followed by the message. A multi-line message tails below the header — each
+// continuation line indented under the message text and dimmed (the Detail idiom) —
+// so a wrapped error or backtrace reads as one block instead of running ragged
+// flush-left. Meaning never rides on color alone — the glyph (or ASCII label under
+// MU_ASCII) carries it.
 func logLine(utf, ascii string, colors text.Colors, msg string) {
 	tag := glyph(utf, ascii)
+	head, tail, multi := strings.Cut(msg, "\n")
 	if !colorOff() {
 		tag = colors.Sprint(tag)
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", tag, msg)
+	fmt.Fprintf(os.Stderr, "%s %s\n", tag, head)
+	if !multi {
+		return
+	}
+	for _, line := range strings.Split(tail, "\n") {
+		line = "  " + line // align under the message, past the 1-col glyph + space
+		if !colorOff() {
+			line = text.Colors{text.FgHiBlack}.Sprint(line)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	}
 }
 
 // Info, OK, Warn, Err (the log tiers) live in log.go — they route through the
