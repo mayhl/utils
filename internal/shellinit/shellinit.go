@@ -270,8 +270,12 @@ func sharedTooling() string {
 // leaves doctor.notice, printed at the NEXT shell start — async output landing over a
 // live prompt is worse than a one-shell delay; a healthy run clears it. mu re-checks
 // the stamp, so racing shells collapse to one run. Paths mirror doctor's Stamp/Notice.
+// INTERACTIVE shells only (case $-): notices are for humans, and a non-interactive
+// eval's stdout is often captured — `ssh host bash -lc …`, $(…) — where the notice
+// would corrupt the captured output.
 func doctorCheckup() string {
-	return fmt.Sprintf(`_mu_dc="${XDG_CACHE_HOME:-$HOME/.cache}/mayhl_utils"
+	return fmt.Sprintf(`case $- in *i*)
+_mu_dc="${XDG_CACHE_HOME:-$HOME/.cache}/mayhl_utils"
 [ -r "$_mu_dc/doctor.notice" ] && cat "$_mu_dc/doctor.notice" || :
 _mu_dt=0
 [ -r "$_mu_dc/doctor.stamp" ] && read -r _mu_dt < "$_mu_dc/doctor.stamp" || :
@@ -280,6 +284,7 @@ if [ $(( $(date +%%s) - _mu_dt )) -ge %d ]; then
   (mu doctor --checkup >/dev/null 2>&1 &)
 fi
 unset _mu_dc _mu_dt
+;; esac
 `, int(doctor.CheckupEvery/time.Second))
 }
 

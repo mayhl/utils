@@ -163,9 +163,11 @@ done
 }
 
 // TestDoctorCheckupExec evaluates the throttled-checkup snippet in real bash AND zsh:
-// a missing/stale stamp backgrounds `mu doctor --checkup` (observed via a stub mu that
-// drops a marker file — the run is a disowned grandchild, so the driver polls for it),
-// a fresh stamp doesn't fire, and a doctor.notice is printed at startup.
+// in an INTERACTIVE shell a missing/stale stamp backgrounds `mu doctor --checkup`
+// (observed via a stub mu that drops a marker file — the run is a disowned grandchild,
+// so the driver polls for it), a fresh stamp doesn't fire, and a doctor.notice is
+// printed at startup; a NON-interactive shell fires nothing and prints nothing (its
+// stdout is often captured — `ssh host bash -lc …`, $(…) — the notice would corrupt it).
 func TestDoctorCheckupExec(t *testing.T) {
 	for _, sh := range []string{"bash", "zsh"} {
 		bin, err := exec.LookPath(sh)
@@ -174,7 +176,7 @@ func TestDoctorCheckupExec(t *testing.T) {
 			continue
 		}
 		t.Run(sh, func(t *testing.T) {
-			run := func(prep string) string {
+			run := func(prep string, interactive bool) string {
 				t.Helper()
 				cache := t.TempDir()
 				driver := `mu() { : > "$XDG_CACHE_HOME/mu-called"; }
@@ -183,7 +185,17 @@ i=0
 while [ ! -f "$XDG_CACHE_HOME/mu-called" ] && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i+1)); done
 [ -f "$XDG_CACHE_HOME/mu-called" ] && echo "FIRED" || echo "SKIPPED"
 `
-				cmd := exec.Command(bin, "-c", driver)
+				// -i without a tty is fine under -c; rc files are suppressed
+				// (--norc / -f) so the user's shell config can't pollute the run.
+				args := []string{"-c", driver}
+				if interactive {
+					if sh == "bash" {
+						args = []string{"--norc", "-i", "-c", driver}
+					} else {
+						args = []string{"-f", "-i", "-c", driver}
+					}
+				}
+				cmd := exec.Command(bin, args...)
 				cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+cache)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
@@ -192,19 +204,26 @@ while [ ! -f "$XDG_CACHE_HOME/mu-called" ] && [ "$i" -lt 20 ]; do sleep 0.05; i=
 				return string(out)
 			}
 
-			if got := run(""); !strings.Contains(got, "FIRED") {
+			if got := run("", true); !strings.Contains(got, "FIRED") {
 				t.Errorf("no stamp: want a checkup fired, got:\n%s", got)
 			}
 			fresh := `mkdir -p "$XDG_CACHE_HOME/mayhl_utils"
 date +%s > "$XDG_CACHE_HOME/mayhl_utils/doctor.stamp"
 echo "NAG-LINE" > "$XDG_CACHE_HOME/mayhl_utils/doctor.notice"
 `
-			got := run(fresh)
+			got := run(fresh, true)
 			if !strings.Contains(got, "SKIPPED") {
 				t.Errorf("fresh stamp: want no checkup, got:\n%s", got)
 			}
 			if !strings.Contains(got, "NAG-LINE") {
 				t.Errorf("notice not printed at startup:\n%s", got)
+			}
+
+			if got := run(fresh, false); strings.Contains(got, "NAG-LINE") {
+				t.Errorf("non-interactive shell printed the notice (captured stdout!):\n%s", got)
+			}
+			if got := run("", false); !strings.Contains(got, "SKIPPED") {
+				t.Errorf("non-interactive shell fired a checkup:\n%s", got)
 			}
 		})
 	}
