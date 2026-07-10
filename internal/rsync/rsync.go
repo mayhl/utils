@@ -166,8 +166,12 @@ func runProgress(args []string, label string) (int, string) {
 			}
 		}
 	}
-	bar.Finish()
 	code := exitCode(cmd.Wait())
+	if code == 0 {
+		bar.Complete()
+	} else {
+		bar.Finish()
+	}
 	var summary string
 	if code == 0 {
 		if parts := statsSummary(stats); len(parts) > 0 {

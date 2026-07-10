@@ -22,6 +22,7 @@ type ProgressBar struct {
 	label string
 	tty   bool
 	drawn bool
+	rate  string
 }
 
 // NewProgressBar creates a bar with the given left-hand label.
@@ -43,6 +44,7 @@ func (p *ProgressBar) Update(pct int, rate, eta string) {
 	case pct > 100:
 		pct = 100
 	}
+	p.rate = rate
 	filled := pct * barWidth / 100
 	fillCh, emptyCh := "█", "░"
 	if asciiMode() {
@@ -72,6 +74,18 @@ func (p *ProgressBar) Update(pct int, rate, eta string) {
 // SetLabel updates the bar's left-hand label (e.g. the current file being
 // transferred). The raw value is stored; Update truncates it to fit the terminal.
 func (p *ProgressBar) SetLabel(s string) { p.label = s }
+
+// Complete snaps the bar to 100% before ending it. rsync's --info=progress2
+// percentage tracks bytes against the whole tree's total, so it settles below
+// 100% when trailing files are skipped as up-to-date; on a clean exit the
+// transfer is done, so redraw full. Only redraws if a bar was already shown, so
+// a no-transfer run stays quiet.
+func (p *ProgressBar) Complete() {
+	if p.tty && p.drawn {
+		p.Update(100, p.rate, "0:00:00")
+	}
+	p.Finish()
+}
 
 // Finish ends the bar's line. A no-op if nothing was ever drawn (non-TTY, or a
 // transfer too small to emit a progress line), so no stray blank line appears.
