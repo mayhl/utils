@@ -913,3 +913,70 @@ func TestJobHooks(t *testing.T) {
 	mustContain(t, string(out), "HOOKS_OK",
 		`"job":"1284570"`, `"hook":"progress"`, `"pct":42`, `"seen":"1284570"`)
 }
+
+// TestProjectClone bootstraps a per-node clone on the box and proves the
+// updateInstead contract: first `mu project clone` inits + pushes + checks the
+// tree out; a follow-up commit and re-run lands the new content in the remote
+// WORKING TREE (not just the ref). Local project sits under the real $HOME
+// (HomeRel + intact ssh config, like TestProjectSubmit).
+func TestProjectClone(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-clone-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	proj := filepath.Join(base, "proj_c")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "README"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, proj, "init", "-q", "-b", "main")
+	commit := func(msg string) {
+		gitOut(t, proj, "add", "-A")
+		gitOut(t, proj, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+			"commit", "-q", "-m", msg)
+	}
+	commit("v1")
+
+	rel, err := filepath.Rel(home, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = exec.Command("ssh", "sandbox", "rm -rf "+rel).Run()
+
+	clone := func() string {
+		cmd := exec.Command(muBin, "project", "clone", "sandbox", proj, "-y")
+		cmd.Env = append(muEnv(), "MU_MODULES=project")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mu project clone: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	mustContain(t, clone(), "clone ready: sandbox:"+rel)
+
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).Output()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v", cmd, err)
+		}
+		return string(out)
+	}
+	mustContain(t, box("cat "+rel+"/README"), "v1")
+	mustContain(t, box("cd "+rel+" && git config receive.denyCurrentBranch"), "updateInstead")
+
+	// second cycle: new commit, idempotent re-run, remote TREE carries v2
+	if err := os.WriteFile(filepath.Join(proj, "README"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commit("v2")
+	mustContain(t, clone(), "clone ready: sandbox:"+rel)
+	mustContain(t, box("cat "+rel+"/README"), "v2")
+}
