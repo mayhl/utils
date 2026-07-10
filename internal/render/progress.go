@@ -45,7 +45,7 @@ func (p *ProgressBar) Update(pct int, rate, eta string) {
 	}
 	filled := pct * barWidth / 100
 	fillCh, emptyCh := "█", "░"
-	if os.Getenv("MU_ASCII") != "" {
+	if asciiMode() {
 		fillCh, emptyCh = "#", "-"
 	}
 	bar := strings.Repeat(fillCh, filled) + strings.Repeat(emptyCh, barWidth-filled)

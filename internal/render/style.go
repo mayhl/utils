@@ -13,14 +13,33 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
-// Level glyphs (UTF-8, with ASCII fallback under MU_ASCII), matching mu_log.
-// Colors mirror the shell/Python framework: INFO cyan, OK green, WARN yellow,
-// ERROR red.
+// glyph returns the UTF-8 form, or the ASCII fallback when asciiMode() is on. One gate
+// for every house glyph — status tags, table cells, progress bars, the picker — so a
+// PuTTY/latin1 session degrades uniformly instead of mojibaking static output while only
+// the picker falls back. Colors mirror the shell/Python framework: INFO cyan, OK green,
+// WARN yellow, ERROR red.
 func glyph(utf, ascii string) string {
-	if os.Getenv("MU_ASCII") != "" {
+	if asciiMode() {
 		return ascii
 	}
 	return utf
+}
+
+// asciiMode reports whether output should fall back to ASCII glyphs/box: MU_ASCII set, or
+// a non-UTF-8 locale (PuTTY often defaults to C/latin1, which mojibakes box-drawing +
+// glyphs). An unset locale is treated as UTF-8-capable. The single ASCII gate for the whole
+// render package — status lines, tables, progress bars, and the picker all route through it.
+func asciiMode() bool {
+	if os.Getenv("MU_ASCII") != "" {
+		return true
+	}
+	for _, v := range []string{os.Getenv("LC_ALL"), os.Getenv("LC_CTYPE"), os.Getenv("LANG")} {
+		if v != "" {
+			u := strings.ToUpper(v)
+			return !strings.Contains(u, "UTF-8") && !strings.Contains(u, "UTF8")
+		}
+	}
+	return false
 }
 
 // colorOff reports whether ANSI styling should be suppressed (NO_COLOR, or a

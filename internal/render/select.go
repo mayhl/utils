@@ -388,10 +388,10 @@ var (
 
 func (m selectModel) View() tea.View {
 	if m.detailLoading {
-		return tea.NewView(selFoot.Render("Loading detail" + aglyph("…", "...")))
+		return tea.NewView(selFoot.Render("Loading detail" + glyph("…", "...")))
 	}
 	if m.detail != "" {
-		back := aglyph("↩", "<") + " press any key to go back"
+		back := glyph("↩", "<") + " press any key to go back"
 		return tea.NewView(m.detail + "\n" + selFoot.Render(back))
 	}
 	w := m.colWidths()
@@ -416,9 +416,9 @@ func (m selectModel) View() tea.View {
 	for i := m.top; i < end; i++ {
 		idx := m.visible[i]
 		r := m.rows[idx]
-		markGlyph := aglyph("○", " ")
+		markGlyph := glyph("○", " ")
 		if m.selected[r.ID] {
-			markGlyph = aglyph("◉", "*")
+			markGlyph = glyph("◉", "*")
 		}
 		if m.spec.ReadOnly {
 			markGlyph = " " // viewer: keep the column width, show no mark
@@ -438,7 +438,7 @@ func (m selectModel) View() tea.View {
 		lines = append(lines, cur+" "+mark+" "+m.renderCells(r.Cells, r.Hues, w, last, lastW, true))
 	}
 
-	dot := aglyph(" · ", " - ")
+	dot := glyph(" · ", " - ")
 	var title string
 	if m.spec.ReadOnly {
 		title = m.spec.Title
@@ -449,7 +449,7 @@ func (m selectModel) View() tea.View {
 		title = "Select to " + m.spec.Verb + dot + fmt.Sprintf("%d selected", m.countSelected())
 	}
 	if len(m.visible) > page {
-		title += dot + fmt.Sprintf("%d%s%d of %d", m.top+1, aglyph("–", "-"), end, len(m.visible))
+		title += dot + fmt.Sprintf("%d%s%d of %d", m.top+1, glyph("–", "-"), end, len(m.visible))
 	}
 	box := selBox
 	if asciiMode() {
@@ -457,7 +457,7 @@ func (m selectModel) View() tea.View {
 	}
 	out := selTitle.Render(title) + "\n" + box.Render(strings.Join(lines, "\n"))
 	if m.filtering {
-		out += "\n" + selFilter.Render("/"+m.filter+aglyph("▏", "|"))
+		out += "\n" + selFilter.Render("/"+m.filter+glyph("▏", "|"))
 	}
 	out += "\n" + selFoot.Render(m.footer(dot))
 	return tea.NewView(out)
@@ -467,7 +467,7 @@ func (m selectModel) View() tea.View {
 // ReadOnly mode, the full select-and-act keys otherwise. dot is the pre-rendered
 // separator (glyph or ASCII). facetHint and the `i` info key are shared by both modes.
 func (m selectModel) footer(dot string) string {
-	move := aglyph("↑↓", "u/d") + " move"
+	move := glyph("↑↓", "u/d") + " move"
 	info := func(s string) string {
 		if m.spec.Detail != nil {
 			return s + dot + "i info"
@@ -540,7 +540,7 @@ func (m selectModel) colWidths() []int {
 
 func cursorGlyph(on bool) string {
 	if on {
-		return aglyph("▸", ">")
+		return glyph("▸", ">")
 	}
 	return " "
 }
@@ -550,30 +550,6 @@ func cursorGlyph(on bool) string {
 var asciiBorder = lipgloss.Border{
 	Top: "-", Bottom: "-", Left: "|", Right: "|",
 	TopLeft: "+", TopRight: "+", BottomLeft: "+", BottomRight: "+",
-}
-
-// asciiMode reports whether the picker should fall back to ASCII glyphs/box:
-// MU_ASCII set, or a non-UTF-8 locale (PuTTY often defaults to C/latin1, which
-// mojibakes box-drawing + glyphs). An unset locale is treated as UTF-8-capable.
-func asciiMode() bool {
-	if os.Getenv("MU_ASCII") != "" {
-		return true
-	}
-	for _, v := range []string{os.Getenv("LC_ALL"), os.Getenv("LC_CTYPE"), os.Getenv("LANG")} {
-		if v != "" {
-			u := strings.ToUpper(v)
-			return !strings.Contains(u, "UTF-8") && !strings.Contains(u, "UTF8")
-		}
-	}
-	return false
-}
-
-// aglyph is glyph() plus the non-UTF-8 locale trigger, for the picker's glyphs.
-func aglyph(utf, ascii string) string {
-	if asciiMode() {
-		return ascii
-	}
-	return utf
 }
 
 func trunc(s string, n int) string {

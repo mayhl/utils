@@ -11,7 +11,10 @@ import (
 
 // applyStyle sets the house rounded style, or a borderless tab-aligned style when
 // plainMode() (MU_RENDER=plain / --plain / piped). Plain implies no color — the
-// status glyph (or MU_ASCII label) still carries meaning.
+// status glyph (or MU_ASCII label) still carries meaning. Under asciiMode() (MU_ASCII
+// or a non-UTF-8 locale) it keeps the framed layout but swaps the rounded box for the
+// ASCII +/-/| box, so a PuTTY/latin1 session gets a clean frame instead of mojibake —
+// the table-side analog of the picker's asciiBorder.
 func applyStyle(t table.Writer) {
 	if plainMode() {
 		s := table.StyleDefault
@@ -22,7 +25,11 @@ func applyStyle(t table.Writer) {
 		text.DisableColors()
 		return
 	}
-	t.SetStyle(table.StyleRounded)
+	s := table.StyleRounded
+	if asciiMode() {
+		s.Box = table.StyleDefault.Box // ASCII +/-/| frame on non-UTF-8 terminals
+	}
+	t.SetStyle(s)
 	if colorOff() {
 		text.DisableColors()
 	}
