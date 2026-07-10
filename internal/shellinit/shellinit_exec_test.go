@@ -162,6 +162,54 @@ done
 	}
 }
 
+// TestDoctorCheckupExec evaluates the throttled-checkup snippet in real bash AND zsh:
+// a missing/stale stamp backgrounds `mu doctor --checkup` (observed via a stub mu that
+// drops a marker file — the run is a disowned grandchild, so the driver polls for it),
+// a fresh stamp doesn't fire, and a doctor.notice is printed at startup.
+func TestDoctorCheckupExec(t *testing.T) {
+	for _, sh := range []string{"bash", "zsh"} {
+		bin, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed — skipped", sh)
+			continue
+		}
+		t.Run(sh, func(t *testing.T) {
+			run := func(prep string) string {
+				t.Helper()
+				cache := t.TempDir()
+				driver := `mu() { : > "$XDG_CACHE_HOME/mu-called"; }
+` + prep + doctorCheckup() + `
+i=0
+while [ ! -f "$XDG_CACHE_HOME/mu-called" ] && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i+1)); done
+[ -f "$XDG_CACHE_HOME/mu-called" ] && echo "FIRED" || echo "SKIPPED"
+`
+				cmd := exec.Command(bin, "-c", driver)
+				cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+cache)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("driver: %v\n%s", err, out)
+				}
+				return string(out)
+			}
+
+			if got := run(""); !strings.Contains(got, "FIRED") {
+				t.Errorf("no stamp: want a checkup fired, got:\n%s", got)
+			}
+			fresh := `mkdir -p "$XDG_CACHE_HOME/mayhl_utils"
+date +%s > "$XDG_CACHE_HOME/mayhl_utils/doctor.stamp"
+echo "NAG-LINE" > "$XDG_CACHE_HOME/mayhl_utils/doctor.notice"
+`
+			got := run(fresh)
+			if !strings.Contains(got, "SKIPPED") {
+				t.Errorf("fresh stamp: want no checkup, got:\n%s", got)
+			}
+			if !strings.Contains(got, "NAG-LINE") {
+				t.Errorf("notice not printed at startup:\n%s", got)
+			}
+		})
+	}
+}
+
 // TestMiseEnvExec evaluates the emitted MISE_ENV composition in real bash AND zsh
 // across the tier combos: hpc composes on an HPC box, is skipped when the mu-toolchain
 // module marker (MU_TOOLCHAIN) is set, fmt rides MU_MODULES, and a pre-set MISE_ENV

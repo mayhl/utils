@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func doctorCmd() *cobra.Command {
-	var verbose bool
+	var verbose, checkup bool
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the environment (tools, config, plugin checks).",
@@ -22,6 +23,9 @@ func doctorCmd() *cobra.Command {
 			"exits non-zero only if a check FAILs (WARN reports but doesn't block).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if checkup {
+				return runCheckup()
+			}
 			results, overall := doctor.Run()
 
 			if verbose {
@@ -84,6 +88,7 @@ func doctorCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
+	c.Flags().BoolVar(&checkup, "checkup", false, "throttled background run for shell-init: event log + notice file, no tables")
 	c.AddCommand(doctorFmtCmd(), doctorSetupCmd())
 	// `mu doctor git` mirrors git's own `mu git doctor` — same leaf, re-verbed. Gated on the
 	// git module like the rest of git (root only wires `mu git` when MU_MODULES lists it).
@@ -91,6 +96,34 @@ func doctorCmd() *cobra.Command {
 		c.AddCommand(withUse(gitDoctorCmd(), "git"))
 	}
 	return c
+}
+
+// runCheckup is the shell-init background arm: no tables, event log only, plus the
+// doctor.notice the next shell start prints. The stamp is re-checked (racing shells
+// each saw it stale) and written before the checks so a slow run can't double-fire.
+// Always exits 0 — nothing reads a background exit code, and a checkup must never
+// break shell startup.
+func runCheckup() error {
+	now := time.Now()
+	if doctor.StampFresh(now) {
+		return nil
+	}
+	if doctor.WriteStamp(now) != nil {
+		return nil // cache dir unwritable — skip quietly
+	}
+	results, _ := doctor.Run()
+	ok, warn, fail := tally(results)
+	summary := fmt.Sprintf("checkup: %d ok, %d warn, %d fail", ok, warn, fail)
+	switch {
+	case fail > 0:
+		render.EventErr("doctor", summary)
+	case warn > 0:
+		render.EventWarn("doctor", summary)
+	default:
+		render.EventOK("doctor", summary)
+	}
+	_ = doctor.UpdateNotice(warn, fail)
+	return nil
 }
 
 // doctorFmtCmd is the `mu doctor fmt` module: the formatter/linter/debug/LSP

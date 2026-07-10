@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	shellassets "github.com/mayhl/mayhl_utils"
 	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/doctor"
 )
 
 // The dispatcher: bare `<node>` connects (interactive ssh), `<node> push|pull`
@@ -88,6 +90,7 @@ func Generate() string {
 	b.WriteString(miseEnv())
 	b.WriteString(platformSeam())
 	b.WriteString(sharedTooling())
+	b.WriteString(doctorCheckup())
 	b.WriteString(helper)
 	// Clear any stale same-named aliases (e.g. a leftover bare-node ssh alias from
 	// the old connect.sh codegen), then define the dispatchers inside a NESTED
@@ -256,6 +259,25 @@ func sharedTooling() string {
 	b.WriteString(shellassets.UtilsSH)
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// doctorCheckup emits the throttled health check: at most one background `mu doctor
+// --checkup` per doctor.CheckupEvery, launched disowned so startup never waits on it.
+// The fast path is builtin-only reads (`date +%s` is the one exec). A WARN/FAIL run
+// leaves doctor.notice, printed at the NEXT shell start — async output landing over a
+// live prompt is worse than a one-shell delay; a healthy run clears it. mu re-checks
+// the stamp, so racing shells collapse to one run. Paths mirror doctor's Stamp/Notice.
+func doctorCheckup() string {
+	return fmt.Sprintf(`_mu_dc="${XDG_CACHE_HOME:-$HOME/.cache}/mayhl_utils"
+[ -r "$_mu_dc/doctor.notice" ] && cat "$_mu_dc/doctor.notice" || :
+_mu_dt=0
+[ -r "$_mu_dc/doctor.stamp" ] && read -r _mu_dt < "$_mu_dc/doctor.stamp" || :
+case $_mu_dt in ''|*[!0-9]*) _mu_dt=0 ;; esac
+if [ $(( $(date +%%s) - _mu_dt )) -ge %d ]; then
+  (mu doctor --checkup >/dev/null 2>&1 &)
+fi
+unset _mu_dc _mu_dt
+`, int(doctor.CheckupEvery/time.Second))
 }
 
 // onHPC reports whether shell-init should emit the HPC seam: an explicit MU_SYSTEM wins,
