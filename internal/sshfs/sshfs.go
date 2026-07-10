@@ -30,8 +30,8 @@ type Mount struct {
 
 const statTimeout = 4 * time.Second // slower listing → treat the mount as hung
 
-// Root is the mount parent dir (config sshfs.root / $MU_SSHFS_ROOT, default
-// ~/hpc_sshfs), with ~ expanded.
+// Root is the mount parent dir (config [sshfs] root, default ~/hpc_sshfs),
+// with ~ expanded.
 func Root() string {
 	return expandHome(config.SSHFSRoot())
 }
