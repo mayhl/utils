@@ -86,7 +86,8 @@ func jobPrepCmd() *cobra.Command {
 // the current cluster. -A overrides the cluster's config default; empty opts fall through
 // to the script's own #PBS/#SBATCH directives.
 func jobSubCmd() *cobra.Command {
-	var node, account string
+	var node, account, walltime, name string
+	var nodes int
 	var sel queueSel
 	var yes, dryRun bool
 	c := &cobra.Command{
@@ -119,7 +120,11 @@ func jobSubCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			opts := queue.SubmitOpts{Account: account, Queue: queueName}
+			opts := queue.SubmitOpts{
+				Account: account, Queue: queueName,
+				Walltime: walltime, Nodes: nodes, Name: name,
+				CoresPerNode: queueCPN(label, queueName),
+			}
 			cmd := adapter.SubmitCmd(script, opts)
 
 			render.Info(fmt.Sprintf("Submit to %s (%s)", label, scheduler))
@@ -156,6 +161,9 @@ func jobSubCmd() *cobra.Command {
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
+	c.Flags().StringVarP(&walltime, "walltime", "t", "", "walltime limit, HH:MM:SS")
+	c.Flags().IntVarP(&nodes, "nodes", "n", 0, "node count (PBS select chunk / SLURM -N)")
+	c.Flags().StringVarP(&name, "name", "J", "", "job name")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print the submit command without submitting")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
@@ -272,6 +280,18 @@ func resolveSubmitQueue(node, label, key string) (string, error) {
 	default:
 		return "", runErr("%d %s queues on %s (%s) — pick one with -q, or set submit_queue = { %s = \"<queue>\" }", len(names), class, label, strings.Join(names, ", "), key)
 	}
+}
+
+// queueCPN is the cores-per-node the PBS select chunk uses for -n: the per-queue
+// config override when the queue is known, else the cluster default; 0 → the adapter
+// emits a bare select count.
+func queueCPN(label, queueName string) int {
+	if queueName != "" {
+		if cpn := config.QueueCoresOverride(label, queueName); cpn > 0 {
+			return cpn
+		}
+	}
+	return config.CoresPerNodeFor(label)
 }
 
 // classQueues is the pure core of the live class-flag fallback: the up, submittable

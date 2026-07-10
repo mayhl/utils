@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mayhl/mayhl_utils/internal/shell"
@@ -24,11 +26,24 @@ type Adapter interface {
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
-// adapter maps each to the scheduler's flag. Empty fields fall through to the script's
-// own directives / the scheduler default. (Grows as submit does: nodes, walltime, name…)
+// adapter maps each to the scheduler's flag. Empty/zero fields fall through to the
+// script's own directives / the scheduler default.
 type SubmitOpts struct {
-	Account string // allocation to charge (-A)
-	Queue   string // queue / partition   (-q / -p)
+	Account      string // allocation to charge (-A)
+	Queue        string // queue / partition   (-q / -p)
+	Walltime     string // HH:MM:SS            (-l walltime= / -t)
+	Nodes        int    // node count          (-l select= / -N); 0 = unset
+	CoresPerNode int    // PBS select-chunk detail (ncpus/mpiprocs per node); 0 = bare select
+	Name         string // job name            (-N / -J)
+}
+
+// pbsSelect renders the PBS select chunk: nodes alone, or nodes:ncpus:mpiprocs when the
+// cores-per-node is known (sites that require a full chunk reject a bare select count).
+func pbsSelect(o SubmitOpts) string {
+	if o.CoresPerNode > 0 {
+		return fmt.Sprintf("%d:ncpus=%d:mpiprocs=%d", o.Nodes, o.CoresPerNode, o.CoresPerNode)
+	}
+	return strconv.Itoa(o.Nodes)
 }
 
 // For returns the adapter for a scheduler name ("pbs" / "slurm"), or nil if unknown —
@@ -95,27 +110,33 @@ func (pbsAdapter) HistCmd(all bool, users, self string) string {
 	return "qstat -xa" + pbsUserSel(all, users, self)
 }
 
-func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
-	cmd := "qsub"
+// pbsOpts renders the shared qsub option string (submit + interactive) — one flag per
+// set SubmitOpts field, leading-space form.
+func pbsOpts(o SubmitOpts) string {
+	s := ""
 	if o.Account != "" {
-		cmd += " -A " + shell.Quote(o.Account)
+		s += " -A " + shell.Quote(o.Account)
 	}
 	if o.Queue != "" {
-		cmd += " -q " + shell.Quote(o.Queue)
+		s += " -q " + shell.Quote(o.Queue)
 	}
-	return cmd + " " + shell.Quote(script)
+	if o.Walltime != "" {
+		s += " -l walltime=" + shell.Quote(o.Walltime)
+	}
+	if o.Nodes > 0 {
+		s += " -l select=" + pbsSelect(o)
+	}
+	if o.Name != "" {
+		s += " -N " + shell.Quote(o.Name)
+	}
+	return s
 }
 
-func (pbsAdapter) InteractiveCmd(o SubmitOpts) string {
-	cmd := "qsub -I"
-	if o.Account != "" {
-		cmd += " -A " + shell.Quote(o.Account)
-	}
-	if o.Queue != "" {
-		cmd += " -q " + shell.Quote(o.Queue)
-	}
-	return cmd
+func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
+	return "qsub" + pbsOpts(o) + " " + shell.Quote(script)
 }
+
+func (pbsAdapter) InteractiveCmd(o SubmitOpts) string { return "qsub -I" + pbsOpts(o) }
 
 // Directives renders the #PBS header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
@@ -126,6 +147,15 @@ func (pbsAdapter) Directives(o SubmitOpts) []string {
 	}
 	if o.Queue != "" {
 		d = append(d, "#PBS -q "+o.Queue)
+	}
+	if o.Walltime != "" {
+		d = append(d, "#PBS -l walltime="+o.Walltime)
+	}
+	if o.Nodes > 0 {
+		d = append(d, "#PBS -l select="+pbsSelect(o))
+	}
+	if o.Name != "" {
+		d = append(d, "#PBS -N "+o.Name)
 	}
 	return d
 }
@@ -173,27 +203,34 @@ func (slurmAdapter) HistCmd(all bool, users, self string) string {
 	return `sacct -X -n -p ` + sel + `-o JobIDRaw,JobName,User,Partition,State,Elapsed,Timelimit,NNodes,Submit,Start,End`
 }
 
-func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
-	cmd := "sbatch"
+// slurmOpts renders the shared sbatch/salloc option string — one flag per set
+// SubmitOpts field, leading-space form. Nodes maps to -N (SLURM's node count; the
+// select-chunk detail is PBS-only).
+func slurmOpts(o SubmitOpts) string {
+	s := ""
 	if o.Account != "" {
-		cmd += " -A " + shell.Quote(o.Account)
+		s += " -A " + shell.Quote(o.Account)
 	}
 	if o.Queue != "" {
-		cmd += " -p " + shell.Quote(o.Queue)
+		s += " -p " + shell.Quote(o.Queue)
 	}
-	return cmd + " " + shell.Quote(script)
+	if o.Walltime != "" {
+		s += " -t " + shell.Quote(o.Walltime)
+	}
+	if o.Nodes > 0 {
+		s += " -N " + strconv.Itoa(o.Nodes)
+	}
+	if o.Name != "" {
+		s += " -J " + shell.Quote(o.Name)
+	}
+	return s
 }
 
-func (slurmAdapter) InteractiveCmd(o SubmitOpts) string {
-	cmd := "salloc"
-	if o.Account != "" {
-		cmd += " -A " + shell.Quote(o.Account)
-	}
-	if o.Queue != "" {
-		cmd += " -p " + shell.Quote(o.Queue)
-	}
-	return cmd
+func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
+	return "sbatch" + slurmOpts(o) + " " + shell.Quote(script)
 }
+
+func (slurmAdapter) InteractiveCmd(o SubmitOpts) string { return "salloc" + slurmOpts(o) }
 
 // Directives renders the #SBATCH header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
@@ -204,6 +241,15 @@ func (slurmAdapter) Directives(o SubmitOpts) []string {
 	}
 	if o.Queue != "" {
 		d = append(d, "#SBATCH -p "+o.Queue)
+	}
+	if o.Walltime != "" {
+		d = append(d, "#SBATCH -t "+o.Walltime)
+	}
+	if o.Nodes > 0 {
+		d = append(d, "#SBATCH -N "+strconv.Itoa(o.Nodes))
+	}
+	if o.Name != "" {
+		d = append(d, "#SBATCH -J "+o.Name)
 	}
 	return d
 }

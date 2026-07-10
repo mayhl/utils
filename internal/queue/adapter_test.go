@@ -29,6 +29,23 @@ func TestAdapterCmds(t *testing.T) {
 		{"pbs submit", For("pbs").SubmitCmd("run.pbs", SubmitOpts{Account: "PROJ1", Queue: "standard"}), `qsub -A 'PROJ1' -q 'standard' 'run.pbs'`},
 		{"slurm submit", For("slurm").SubmitCmd("run.slurm", SubmitOpts{Account: "PROJ1"}), `sbatch -A 'PROJ1' 'run.slurm'`},
 		{"pbs submit bare", For("pbs").SubmitCmd("run.pbs", SubmitOpts{}), `qsub 'run.pbs'`},
+		{
+			"pbs submit full",
+			For("pbs").SubmitCmd("run.pbs", SubmitOpts{Account: "PROJ1", Queue: "standard", Walltime: "12:00:00", Nodes: 2, CoresPerNode: 128, Name: "wave"}),
+			`qsub -A 'PROJ1' -q 'standard' -l walltime='12:00:00' -l select=2:ncpus=128:mpiprocs=128 -N 'wave' 'run.pbs'`,
+		},
+		{
+			"pbs submit bare select", // no cores-per-node config → bare node count
+			For("pbs").SubmitCmd("run.pbs", SubmitOpts{Nodes: 4}),
+			`qsub -l select=4 'run.pbs'`,
+		},
+		{
+			"slurm submit full",
+			For("slurm").SubmitCmd("run.slurm", SubmitOpts{Account: "PROJ1", Queue: "debug", Walltime: "0:30:00", Nodes: 2, CoresPerNode: 128, Name: "wave"}),
+			`sbatch -A 'PROJ1' -p 'debug' -t '0:30:00' -N 2 -J 'wave' 'run.slurm'`,
+		},
+		{"pbs interactive", For("pbs").InteractiveCmd(SubmitOpts{Queue: "debug", Walltime: "1:00:00"}), `qsub -I -q 'debug' -l walltime='1:00:00'`},
+		{"slurm interactive", For("slurm").InteractiveCmd(SubmitOpts{Queue: "debug", Nodes: 1}), `salloc -p 'debug' -N 1`},
 		{"pbs list you", For("pbs").ListCmd(false, "", "alice"), "qstat -a -u alice"},
 		{"pbs list all", For("pbs").ListCmd(true, "", "alice"), "qstat -a"},
 		{"pbs list users", For("pbs").ListCmd(false, "bob,carol", "alice"), "qstat -a -u bob,carol"},
@@ -51,6 +68,16 @@ func TestAdapterDirectives(t *testing.T) {
 		{"slurm both", strings.Join(For("slurm").Directives(SubmitOpts{Account: "PROJ1", Queue: "debug"}), "\n"), "#SBATCH -A PROJ1\n#SBATCH -p debug"},
 		{"pbs bare", strings.Join(For("pbs").Directives(SubmitOpts{}), "\n"), ""},
 		{"slurm account only", strings.Join(For("slurm").Directives(SubmitOpts{Account: "PROJ1"}), "\n"), "#SBATCH -A PROJ1"},
+		{
+			"pbs full",
+			strings.Join(For("pbs").Directives(SubmitOpts{Walltime: "12:00:00", Nodes: 2, CoresPerNode: 64, Name: "wave"}), "\n"),
+			"#PBS -l walltime=12:00:00\n#PBS -l select=2:ncpus=64:mpiprocs=64\n#PBS -N wave",
+		},
+		{
+			"slurm full",
+			strings.Join(For("slurm").Directives(SubmitOpts{Walltime: "0:30:00", Nodes: 2, Name: "wave"}), "\n"),
+			"#SBATCH -t 0:30:00\n#SBATCH -N 2\n#SBATCH -J wave",
+		},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
