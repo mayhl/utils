@@ -38,8 +38,8 @@ func hpcStorageCmd() *cobra.Command {
 			"that no filesystem reports is dropped.\n\n" +
 			"Target, like `mu hpc queues`: --node fetches one cluster over remote-exec,\n" +
 			"--local runs it on the current cluster (no ssh), -f/--fleet collates the fleet\n" +
-			"and -a/--all every configured cluster (adding a System column), and with none\n" +
-			"of those a listing piped on stdin is parsed:\n" +
+			"and -e/--all-systems every configured cluster (adding a System column), and\n" +
+			"with none of those a listing piped on stdin is parsed:\n" +
 			"    mu hpc storage --node hpc1\n" +
 			"    mu hpc storage -f\n" +
 			"    hpc1 show_storage | mu hpc storage",
@@ -106,20 +106,20 @@ func hpcStorageCmd() *cobra.Command {
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch storage from this node (else read stdin)")
 	c.Flags().BoolVarP(&local, "local", "l", false, "run show_storage on the current cluster, locally (no ssh)")
 	c.Flags().BoolVarP(&fleet, "fleet", "f", false, "collate the fleet's storage (adds a System column)")
-	c.Flags().BoolVarP(&all, "all", "a", false, "collate every configured cluster, incl. inactive")
+	c.Flags().BoolVarP(&all, "all-systems", "e", false, "collate every configured cluster, incl. inactive")
 	c.Flags().BoolVar(&raw, "raw", false, "print show_storage's own output verbatim")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit the parsed rows as JSON (raw KB, untruncated) instead of a table")
-	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all")
+	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
 	c.MarkFlagsMutuallyExclusive("json", "raw")
 	c.MarkFlagsMutuallyExclusive("raw", "fleet")
-	c.MarkFlagsMutuallyExclusive("raw", "all")
+	c.MarkFlagsMutuallyExclusive("raw", "all-systems")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
 }
 
-// collateStorage is the -f/--fleet / -a/--all storage view: the shared site-command
+// collateStorage is the -f/--fleet / -e/--all-systems storage view: the shared site-command
 // fan-out with each row's System tagged by cluster label.
 func collateStorage(targets []queueTarget, scope string) (string, []queue.StorageInfo, []string, error) {
 	return collateSite(targets, scope, showStorageCmd, queue.ParseShowStorage,

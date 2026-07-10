@@ -37,9 +37,9 @@ func hpcUsageCmd() *cobra.Command {
 			"negative means the allocation is burning faster than the year passes — overuse.\n" +
 			"--raw prints the site command's own output verbatim.\n\n" +
 			"Target, like `mu hpc storage`: --node fetches one cluster over remote-exec,\n" +
-			"--local runs it on the current cluster (no ssh), -f/--fleet and -a/--all\n" +
-			"collate (adding a System column), and with none of those a listing piped on\n" +
-			"stdin is parsed:\n" +
+			"--local runs it on the current cluster (no ssh), -f/--fleet and\n" +
+			"-e/--all-systems collate (adding a System column), and with none of those a\n" +
+			"listing piped on stdin is parsed:\n" +
 			"    mu hpc usage --node hpc1\n" +
 			"    mu hpc usage -f\n" +
 			"    hpc1 show_usage | mu hpc usage",
@@ -115,13 +115,13 @@ func hpcUsageCmd() *cobra.Command {
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch usage from this node (else read stdin)")
 	c.Flags().BoolVarP(&local, "local", "l", false, "run show_usage on the current cluster, locally (no ssh)")
 	c.Flags().BoolVarP(&fleet, "fleet", "f", false, "collate the fleet's usage (adds a System column)")
-	c.Flags().BoolVarP(&all, "all", "a", false, "collate every configured cluster, incl. inactive")
+	c.Flags().BoolVarP(&all, "all-systems", "e", false, "collate every configured cluster, incl. inactive")
 	c.Flags().BoolVar(&raw, "raw", false, "print show_usage's own output verbatim")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit the parsed rows as JSON (verbatim fields + fy_left) instead of a table")
-	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all")
+	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
 	c.MarkFlagsMutuallyExclusive("json", "raw")
 	c.MarkFlagsMutuallyExclusive("raw", "fleet")
-	c.MarkFlagsMutuallyExclusive("raw", "all")
+	c.MarkFlagsMutuallyExclusive("raw", "all-systems")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
