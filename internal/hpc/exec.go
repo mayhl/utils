@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/render"
 	"github.com/mayhl/mayhl_utils/internal/shell"
 )
 
@@ -22,13 +25,17 @@ import (
 // cluster's benign dbus/X11 login-profile noise is dropped from stderr
 // (MU_SSH_STDERR_FILTER), the rest passed through so real errors still surface. The
 // command is single-quoted so its own quotes/pipes reach the remote bash intact.
+// A bounded ConnectTimeout fails a dead host fast rather than hanging, and a latency
+// spinner reassures once the call outlasts spinnerDelay.
 func RemoteExec(target, remoteCmd string) (string, error) {
 	ssh := config.SSHCommand()
 	arg := "bash -lc " + shell.Quote(remoteCmd)
-	cmd := exec.Command(ssh, "-q", target, arg)
+	cmd := exec.Command(ssh, "-q", "-o", fmt.Sprintf("ConnectTimeout=%d", connectSeconds()), target, arg)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	stop := armSpinner(hostOf(target))
 	err := cmd.Run()
+	stop()
 	if s := filterStderr(stderr.String()); s != "" {
 		fmt.Fprint(os.Stderr, s)
 	}
@@ -36,6 +43,57 @@ func RemoteExec(target, remoteCmd string) (string, error) {
 		return stdout.String(), errors.New(classify(target, err))
 	}
 	return stdout.String(), nil
+}
+
+// connectTimeout (seconds) bounds ssh's connect phase for the interactive
+// single-host path, so a dead login node fails fast (via classify → "unreachable")
+// instead of hanging on TCP defaults. Overridable via MU_SSH_CONNECT_TIMEOUT. It
+// bounds only connection setup, not auth or the remote command's runtime, so a long
+// qstat is never cut off. The fan-out path (RemoteExecTimeout) sets its own.
+const connectTimeout = 10
+
+func connectSeconds() int {
+	if v := os.Getenv("MU_SSH_CONNECT_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return connectTimeout
+}
+
+// spinnerDelay is how long a remote call must run before the latency spinner
+// appears — long enough that a fast LAN/cached call never flickers one, short
+// enough to reassure on a slow login that mu isn't wedged.
+const spinnerDelay = 400 * time.Millisecond
+
+// armSpinner shows a "querying <host>" spinner if the caller hasn't stopped it
+// within spinnerDelay, and returns a stop func that cancels the pending spinner
+// (never shown) or clears it (shown). Single-host only — the concurrent fan-out
+// would interleave frames. TTY-gating lives in render.Spinner (a no-op off-TTY).
+func armSpinner(host string) func() {
+	var (
+		mu   sync.Mutex
+		sp   *render.Spinner
+		done bool
+	)
+	timer := time.AfterFunc(spinnerDelay, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if done {
+			return
+		}
+		sp = render.NewSpinner("querying " + host + "…")
+		sp.Start()
+	})
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		done = true
+		timer.Stop()
+		if sp != nil {
+			sp.Stop()
+		}
+	}
 }
 
 // LocalExec is the on-cluster counterpart to RemoteExec: it runs remoteCmd on the

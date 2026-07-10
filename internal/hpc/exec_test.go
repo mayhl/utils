@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestFirstLine: the terse error summary folded into a bounded remote-exec failure
@@ -60,6 +61,31 @@ func TestLocalExec(t *testing.T) {
 	if _, err := LocalExec("exit 127"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("LocalExec(exit 127) err = %v, want it to contain %q", err, "not found")
 	}
+}
+
+// TestConnectSeconds: the default holds, a valid MU_SSH_CONNECT_TIMEOUT overrides,
+// and a non-positive or unparseable value falls back to the default.
+func TestConnectSeconds(t *testing.T) {
+	if got := connectSeconds(); got != connectTimeout {
+		t.Errorf("connectSeconds() default = %d, want %d", got, connectTimeout)
+	}
+	cases := map[string]int{"5": 5, "0": connectTimeout, "-3": connectTimeout, "nope": connectTimeout}
+	for env, want := range cases {
+		t.Setenv("MU_SSH_CONNECT_TIMEOUT", env)
+		if got := connectSeconds(); got != want {
+			t.Errorf("connectSeconds() with %q = %d, want %d", env, got, want)
+		}
+	}
+}
+
+// TestArmSpinner: the stop func is safe and prompt whether the delay-timer already
+// fired (slept past spinnerDelay) or not (stopped immediately) — off-TTY here, so
+// render.Spinner is a no-op and this exercises the timer/mutex arm-cancel path.
+func TestArmSpinner(t *testing.T) {
+	armSpinner("host")() // immediate stop cancels the pending timer
+	stop := armSpinner("host")
+	time.Sleep(spinnerDelay + 50*time.Millisecond) // let the timer fire
+	stop()                                         // clears a shown (here no-op) spinner without hanging
 }
 
 func TestHostOf(t *testing.T) {
