@@ -156,6 +156,14 @@ func parseQstatF(raw string) JobDetail {
 		}
 		d.User = o
 	}
+	// PBS has no first-class workdir attribute — the submit dir rides in the
+	// comma-separated Variable_List as PBS_O_WORKDIR.
+	for _, kv := range strings.Split(pbsAttr(raw, "Variable_List"), ",") {
+		if v, ok := strings.CutPrefix(kv, "PBS_O_WORKDIR="); ok {
+			d.WorkDir = v
+			break
+		}
+	}
 	d.State = pbsState(d.RawState).String()
 	d.ShortID = shortID(d.ID)
 	return d

@@ -55,6 +55,8 @@ const qstatFSample = `Job Id: 1284570.hpc1
     Output_Path = hpc1:/home/alice/very/long/path/that/qstat/wrapped/run.o12
 	84570
     Error_Path = hpc1:/home/alice/run.e1284570
+    Variable_List = PBS_O_HOME=/home/alice,PBS_O_WORKDIR=/p/work1/alice/simulat
+	ions/funwave,PBS_O_PATH=/usr/bin
     exit_status = 0
 `
 
@@ -79,6 +81,10 @@ func TestParseDetailPBS(t *testing.T) {
 	}
 	if d.ExitStatus != "0" {
 		t.Errorf("exit: %q", d.ExitStatus)
+	}
+	// PBS submit dir comes from Variable_List's PBS_O_WORKDIR (line-unwrapped).
+	if d.WorkDir != "/p/work1/alice/simulations/funwave" {
+		t.Errorf("workdir: %q", d.WorkDir)
 	}
 }
 
