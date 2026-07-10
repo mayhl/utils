@@ -66,6 +66,7 @@ type file struct {
 		DataDir            string `toml:"data_dir"`             // shared-data rel path in a project; default "simulations/data"
 		TarParentThreshold string `toml:"tar_parent_threshold"` // batch-put cutoff, human size; default "1GB"
 		TarHookThreshold   string `toml:"tar_hook_threshold"`   // per-leaf tar size warranting a pack hook; default "100GB"
+		JobHooks           *bool  `toml:"job_hooks"`            // read-time model hooks in queue views; nil (omitted) → on
 	} `toml:"project"`
 	MirrorSets []MirrorSet `toml:"mirror_set"`
 	Clusters   []struct {
@@ -316,6 +317,16 @@ func ProjectDataDir() string {
 		return f.Project.DataDir
 	}
 	return "simulations/data"
+}
+
+// JobHooks reports whether queue views fetch read-time model-hook data
+// (config.toml [project] job_hooks) — default ON when the project module is
+// enabled; the off-switch exists because the fetch adds a remote exec.
+func JobHooks() bool {
+	if f := cfg(); f != nil && f.Project.JobHooks != nil {
+		return *f.Project.JobHooks
+	}
+	return true
 }
 
 // TarParentThreshold is the batch-put cutoff (config.toml [project]

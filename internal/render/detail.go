@@ -17,6 +17,7 @@ type JobDetailView struct {
 	Nodes, Tasks, Elapsed, ReqWall                  string
 	Submit, Start, End, WorkDir, StdOut, StdErr     string
 	ExitStatus, Reason, Cluster                     string
+	Model                                           [][2]string // ordered model-hook key/values → a separated card section
 }
 
 // JobDetailCard renders one job's full detail as the house card: a titled rounded box
@@ -74,6 +75,15 @@ func newDetailTable(d JobDetailView) table.Writer {
 	add("StdErr", d.StdErr, tc(HueLoc))
 	add("Exit", d.ExitStatus, exitColors(d.ExitStatus)) // status: green ok / red fail
 	add("Reason", d.Reason, tc(HueWarn))                // pending-reason caution
+
+	// Model-hook section: freeform metrics rendered verbatim under a divider —
+	// simple dicts in, simple cards out.
+	if len(d.Model) > 0 {
+		t.AppendSeparator()
+		for _, kv := range d.Model {
+			add(kv[0], kv[1], nil)
+		}
+	}
 
 	cols := []table.ColumnConfig{{Number: 1, Colors: tc(HueDim)}} // labels dim
 	// Wrap the value column to the terminal so a long path (StdOut/StdErr/WorkDir)

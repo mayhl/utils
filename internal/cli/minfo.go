@@ -51,6 +51,10 @@ func queueInfoCmd() *cobra.Command {
 			if cmd == "" {
 				return errNoScheduler(label)
 			}
+			var modelCh <-chan map[string][][2]string
+			if !raw && !jsonOut {
+				modelCh = fetchHookModel(capture, jobIDs(matched)) // concurrent with the detail fetch
+			}
 			out, err := capture(cmd)
 			if err != nil {
 				return runErr("%s: info fetch failed: %v", label, err)
@@ -63,8 +67,11 @@ func queueInfoCmd() *cobra.Command {
 			if jsonOut {
 				return writeJSON(details)
 			}
+			model := awaitHookModel(modelCh)
 			for _, d := range details {
-				render.JobDetailCard(toDetailView(d))
+				v := toDetailView(d)
+				v.Model = model[d.ShortID]
+				render.JobDetailCard(v)
 			}
 			return nil
 		},

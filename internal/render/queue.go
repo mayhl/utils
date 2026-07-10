@@ -18,6 +18,7 @@ type JobRow struct {
 	ID, Name, User, Queue, Nodes, State, Elapsed, ReqWall, Reason string
 	Submit, Start, End                                            string // scheduler timestamps; shown as optional time columns per JobCols
 	Cluster                                                       string // collate source tag (cluster or fleet node) → the leftmost System column
+	Prog                                                          string // model progress-hook value ("38%") → an auto-shown Prog column
 }
 
 // JobCols selects which optional time columns JobsTable shows. Start is the live
@@ -35,7 +36,8 @@ type JobCols struct {
 func JobsTable(cluster, user string, rows []JobRow, cols JobCols) {
 	showUser := multipleUsers(rows)
 	showCluster := anyCluster(rows)
-	nameMax, showReason, showWall := planFit(rows, showUser, showCluster, cols)
+	showProg := anyProg(rows)
+	nameMax, showReason, showWall := planFit(rows, showUser, showCluster, showProg, cols)
 	wallHdr := "Elap / Wall"
 	if !showWall {
 		wallHdr = "Elap"
@@ -54,7 +56,11 @@ func JobsTable(cluster, user string, rows []JobRow, cols JobCols) {
 	if showUser {
 		header = append(header, "User")
 	}
-	header = append(header, "Queue", "NDS", "State", wallHdr)
+	header = append(header, "Queue", "NDS", "State")
+	if showProg {
+		header = append(header, "Prog")
+	}
+	header = append(header, wallHdr)
 	if cols.Submit {
 		header = append(header, "Submit")
 	}
@@ -79,7 +85,11 @@ func JobsTable(cluster, user string, rows []JobRow, cols JobCols) {
 		if lvl := walltimeLevel(r.State, r.Elapsed, r.ReqWall); lvl != "" {
 			cell = levelColors(lvl).Sprint(cell) // Sprint no-ops under DisableColors (plain/NO_COLOR)
 		}
-		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason), cell)
+		row = append(row, r.Queue, dash(r.Nodes), stateCell(r, showReason))
+		if showProg {
+			row = append(row, dash(r.Prog))
+		}
+		row = append(row, cell)
 		if cols.Submit {
 			row = append(row, timeCell(r.Submit))
 		}
@@ -145,6 +155,17 @@ func anyCluster(rows []JobRow) bool {
 	return false
 }
 
+// anyProg reports whether any row carries a progress-hook value — the cue to add
+// the Prog column. Hooks past the fetch cap simply leave it absent everywhere.
+func anyProg(rows []JobRow) bool {
+	for _, r := range rows {
+		if strings.TrimSpace(r.Prog) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // stateCell is the State column value: the state badge, plus a pending job's reason
 // (SLURM — why it waits) when showReason survives the terminal fit.
 func stateCell(r JobRow, showReason bool) string {
@@ -162,7 +183,7 @@ func stateCell(r JobRow, showReason bool) string {
 // even a narrow terminal renders one clean, unwrapped table. It runs for both pretty and
 // --plain (both are human views that fit the terminal), no-opping only when the width
 // is unknown (piped/redirected), where full values flow — use --json for complete data.
-func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax int, showReason, showWall bool) {
+func planFit(rows []JobRow, showUser, showCluster, showProg bool, cols JobCols) (nameMax int, showReason, showWall bool) {
 	showReason, showWall = true, true
 	tw := termWidth()
 	if tw <= 0 {
@@ -170,7 +191,7 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 	}
 	const nameFloor = 6
 	const nameCap = 20 // hard ceiling on Name regardless of terminal room; longer names truncate
-	w := measureCols(rows, showUser, showCluster, cols)
+	w := measureCols(rows, showUser, showCluster, showProg, cols)
 	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
 	nCols := 6
 	if showUser {
@@ -179,9 +200,12 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 	if showCluster {
 		nCols++
 	}
+	if showProg {
+		nCols++
+	}
 	nCols += boolN(cols.Submit) + boolN(cols.Start) + boolN(cols.End)
 	// Time columns are opt-in, so they're fixed (never shed) — they just consume budget.
-	room := tw - (w.id + w.user + w.cluster + w.queue + w.nds + w.badge + w.elap + w.submit + w.start + w.end + 3*nCols + 1) // for Name + reason + wall
+	room := tw - (w.id + w.user + w.cluster + w.queue + w.nds + w.badge + w.prog + w.elap + w.submit + w.start + w.end + 3*nCols + 1) // for Name + reason + wall
 	nameMax = min(w.name, nameCap)
 	for {
 		need := nameMax + boolW(showReason, w.reason) + boolW(showWall, w.wall)
@@ -211,14 +235,14 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 type colWidths struct {
 	id, queue, nds, badge, elap, name int
 	user, cluster, reason, wall       int
-	submit, start, end                int
+	submit, start, end, prog          int
 }
 
 // measureCols measures every column's display width across rows in one pass, seeding each
 // from its header and widening to the widest cell (reason/wall include their " · "/" / "
 // lead-in; time columns use the formatted cell). Split out of planFit so the fit-shedding
 // logic there reads as pure arithmetic over the measured widths.
-func measureCols(rows []JobRow, showUser, showCluster bool, cols JobCols) colWidths {
+func measureCols(rows []JobRow, showUser, showCluster, showProg bool, cols JobCols) colWidths {
 	w := colWidths{
 		id: len("ID"), queue: len("Queue"), nds: len("NDS"),
 		badge: len("State"), elap: len("Elap"), name: len("Name"),
@@ -229,6 +253,9 @@ func measureCols(rows []JobRow, showUser, showCluster bool, cols JobCols) colWid
 	}
 	if showCluster {
 		w.cluster = len("System")
+	}
+	if showProg {
+		w.prog = len("Prog") // cells are at most "100%" — the header width holds
 	}
 	for _, r := range rows {
 		w.id = max(w.id, text.StringWidth(r.ID))

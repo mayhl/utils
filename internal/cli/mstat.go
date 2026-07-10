@@ -55,9 +55,11 @@ func hpcQueueCmd() *cobra.Command {
 			var down []string
 			var label string
 			var err error
+			var hooksCh <-chan map[string]string // launched BEFORE the snapshot, concurrent with it
 			switch {
 			case node != "":
 				label = node
+				hooksCh = fetchHookProgress(node, false)
 				jobs, err = fetchJobs(node, who)
 			case all:
 				label, jobs, down, err = collateJobs(allSystemsScope(), "all", who)
@@ -66,6 +68,7 @@ func hpcQueueCmd() *cobra.Command {
 			case local:
 				// Explicit --local: current cluster, run locally. Off-HPC this errors
 				// (no scheduler here) rather than silently widening.
+				hooksCh = fetchHookProgress("", true)
 				label, jobs, err = fetchJobsLocal(who)
 			case !term.IsTerminal(os.Stdin.Fd()):
 				var data []byte
@@ -77,6 +80,7 @@ func hpcQueueCmd() *cobra.Command {
 				// Bare mstat, no pipe → resolve by location: on a login node run the
 				// current cluster locally; off HPC (no local scheduler) fall to fleet.
 				if self, _ := currentCluster(); self != "" {
+					hooksCh = fetchHookProgress("", true)
 					label, jobs, err = fetchJobsLocal(who)
 				} else {
 					label, jobs, down, err = collateJobs(fleetScope(), "fleet", who)
@@ -90,7 +94,9 @@ func hpcQueueCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				render.JobsTable(label, config.User(), toJobRows(jobs), render.JobCols{Start: start})
+				rows := toJobRows(jobs)
+				applyHookProgress(rows, hooksCh)
+				render.JobsTable(label, config.User(), rows, render.JobCols{Start: start})
 			}
 			for _, d := range down { // unreachable clusters degrade to warnings, never a hang
 				render.Warn(d)
