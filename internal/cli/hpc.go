@@ -24,7 +24,7 @@ func hpcCmd() *cobra.Command {
 			"workstation to reach every cluster; on a login node you'll only see what's\n" +
 			"reachable from there.",
 	}
-	c.AddCommand(hpcNodesCmd(), hpcQueueCmd(), hpcQueuesCmd(), hpcTicketCmd())
+	c.AddCommand(hpcNodesCmd(), hpcQueueCmd(), hpcQueuesCmd(), hpcStorageCmd(), hpcTicketCmd())
 	return c
 }
 
