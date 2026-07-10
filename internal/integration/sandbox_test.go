@@ -980,3 +980,84 @@ func TestProjectClone(t *testing.T) {
 	mustContain(t, clone(), "clone ready: sandbox:"+rel)
 	mustContain(t, box("cat "+rel+"/README"), "v2")
 }
+
+// TestProjectSubmitClean drives study-mode submit end-to-end: clone the project
+// to the box, then `submit --clean` must push the branch, stage $HOME→$WORK
+// node-side, drop a dirty=false stamp, and qsub from staging. A dirty tree must
+// refuse before touching anything.
+func TestProjectSubmitClean(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-clean-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	proj := filepath.Join(base, "proj_d")
+	caseDir := filepath.Join(proj, "simulations", "funwave", "case_a")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, body := range map[string]string{"input.nml": "dt=0.1\n", "run.sh": "#!/bin/bash\n"} {
+		if err := os.WriteFile(filepath.Join(caseDir, f), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitOut(t, proj, "init", "-q", "-b", "main")
+	gitOut(t, proj, "add", "-A")
+	gitOut(t, proj, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "-m", "case")
+
+	rel, err := filepath.Rel(home, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = exec.Command("ssh", "sandbox", "rm -rf "+rel+" workdir/"+rel+" qsub.log").Run()
+
+	muProj := func(args ...string) (string, error) {
+		cmd := exec.Command(muBin, args...)
+		cmd.Env = append(muEnv(), "MU_MODULES=project")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := muProj("project", "clone", "sandbox", proj, "-y")
+	if err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
+	}
+
+	// dirty tree → refuse before any remote action
+	if err := os.WriteFile(filepath.Join(caseDir, "input.nml"), []byte("dt=0.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = muProj("project", "submit", caseDir, "-N", "sandbox", "-y", "--clean")
+	if err == nil {
+		t.Fatalf("dirty --clean should refuse:\n%s", out)
+	}
+	mustContain(t, out, "refuses a dirty tree")
+
+	gitOut(t, proj, "add", "-A")
+	gitOut(t, proj, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "-m", "dt bump")
+	sha := gitOut(t, proj, "rev-parse", "HEAD")
+	out, err = muProj("project", "submit", caseDir, "-N", "sandbox", "-y", "--clean")
+	if err != nil {
+		t.Fatalf("clean submit: %v\n%s", err, out)
+	}
+	mustContain(t, out, "clean", "1284575.sdb", "submitted")
+
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).Output()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v", cmd, err)
+		}
+		return string(out)
+	}
+	caseRel, _ := filepath.Rel(home, caseDir)
+	stage := "workdir/" + caseRel
+	mustContain(t, box("cat "+stage+"/input.nml"), "dt=0.2")
+	mustContain(t, box("cat "+stage+"/.mu-origin.toml"), "commit = '"+sha+"'", "dirty = false")
+	mustContain(t, box("cat qsub.log"), stage+" run.sh")
+}
