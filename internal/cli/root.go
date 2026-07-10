@@ -85,6 +85,9 @@ func Root() *cobra.Command {
 	if modules.Enabled("git") {
 		root.AddCommand(gitCmd())
 	}
+	if modules.Enabled("project") {
+		root.AddCommand(projectCmd())
+	}
 	// shell-init and completion moved under `setup`; keep them reachable at the root
 	// as HIDDEN aliases so existing rc lines (`eval "$(mu shell-init)"`, `mu completion
 	// zsh`) don't break. Cobra's default completion command stays functional, just
