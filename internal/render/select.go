@@ -459,24 +459,26 @@ func (m selectModel) View() tea.View {
 	if m.filtering {
 		out += "\n" + selFilter.Render("/"+m.filter+aglyph("▏", "|"))
 	}
-	var foot string
-	if m.spec.ReadOnly {
-		foot = aglyph("↑↓", "u/d") + " move" + dot + "/ filter"
-		foot += m.facetHint(dot)
-		if m.spec.Detail != nil {
-			foot += dot + "i info"
-		}
-		foot += dot + "q quit"
-	} else {
-		foot = aglyph("↑↓", "u/d") + " move" + dot + "space select" + dot + "a all" + dot + "/ filter"
-		foot += m.facetHint(dot)
-		if m.spec.Detail != nil {
-			foot += dot + "i info"
-		}
-		foot += dot + "enter " + m.spec.Verb + dot + "q cancel"
-	}
-	out += "\n" + selFoot.Render(foot)
+	out += "\n" + selFoot.Render(m.footer(dot))
 	return tea.NewView(out)
+}
+
+// footer builds the dim keybind hint line: viewer keys (move/filter/[info]/quit) in
+// ReadOnly mode, the full select-and-act keys otherwise. dot is the pre-rendered
+// separator (glyph or ASCII). facetHint and the `i` info key are shared by both modes.
+func (m selectModel) footer(dot string) string {
+	move := aglyph("↑↓", "u/d") + " move"
+	info := func(s string) string {
+		if m.spec.Detail != nil {
+			return s + dot + "i info"
+		}
+		return s
+	}
+	if m.spec.ReadOnly {
+		return info(move+dot+"/ filter"+m.facetHint(dot)) + dot + "q quit"
+	}
+	foot := move + dot + "space select" + dot + "a all" + dot + "/ filter" + m.facetHint(dot)
+	return info(foot) + dot + "enter " + m.spec.Verb + dot + "q cancel"
 }
 
 // renderCells pads each cell to its column width and colors it by its hue (unless
