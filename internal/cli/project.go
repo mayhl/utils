@@ -24,7 +24,7 @@ func projectCmd() *cobra.Command {
 		Use:   "project",
 		Short: "Project-layer verbs: push-and-run cases, data-tier sync.",
 	}
-	c.AddCommand(projectSubmitCmd())
+	c.AddCommand(projectSubmitCmd(), projectCloneCmd())
 	return c
 }
 
