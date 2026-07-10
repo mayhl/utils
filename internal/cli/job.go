@@ -1,15 +1,21 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/job"
+	"github.com/mayhl/mayhl_utils/internal/modules"
 	"github.com/mayhl/mayhl_utils/internal/queue"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
@@ -23,7 +29,7 @@ func jobCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobTunnelCmd(), jobShellCmd())
+	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobWatchCmd(), jobTunnelCmd(), jobShellCmd())
 	return c
 }
 
@@ -42,7 +48,8 @@ func jobPrepCmd() *cobra.Command {
 			"and print shell that exports MU_RUN_DIR and cds there — a failed prep prints\n" +
 			"`exit 1` so the job aborts rather than running in the case dir. Preamble idiom:\n\n" +
 			"    eval \"$(mu job env)\"\n" +
-			"    eval \"$(mu job prep)\"\n\n" +
+			"    eval \"$(mu job prep)\"\n" +
+			"    mu job watch & trap 'kill $! 2>/dev/null' EXIT   # optional sidecar\n\n" +
 			"A requeue (run dir already present) reuses it without re-copying, so partial\n" +
 			"outputs survive. --path prints the run dir path and changes nothing.",
 		Args: cobra.NoArgs,
@@ -336,6 +343,44 @@ func classQueues(label, class string, qs []queue.QueueInfo) []string {
 		}
 	}
 	return names
+}
+
+// jobWatchCmd is `mu job watch`: the sidecar invocation mode of the model hooks —
+// the preamble backgrounds it inside the allocation and it appends a progress-hook
+// snapshot to <rundir>/.mu/progress every tick. Every switched-off / hook-less path
+// exits 0 silently: the preamble line must never fail a job.
+func jobWatchCmd() *cobra.Command {
+	var interval time.Duration
+	c := &cobra.Command{
+		Use:   "watch",
+		Short: "Tick the progress hook into .mu/progress — background inside a job.",
+		Long: "Run the model's progress hook every tick and append one JSON line per run to\n" +
+			".mu/progress in the run dir — progress history, stall markers (pct unchanged\n" +
+			"for " + strconv.Itoa(job.StallTicks) + " ticks → a `stall` event line, `resumed` on movement), and the\n" +
+			"tick stream future notifications consume. Preamble idiom:\n\n" +
+			"    eval \"$(mu job env)\"\n" +
+			"    eval \"$(mu job prep)\"\n" +
+			"    mu job watch & trap 'kill $! 2>/dev/null' EXIT\n\n" +
+			"No progress hook, or [project] job_hooks off → silent no-op, never a job\n" +
+			"failure. Interval: --interval, else [project] watch_interval, else 60s.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if !modules.Enabled("project") || !config.JobHooks() {
+				return nil
+			}
+			if interval <= 0 {
+				interval = config.WatchInterval()
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+			defer stop()
+			if _, err := job.Watch(ctx, interval); err != nil {
+				return runErr("%s", err)
+			}
+			return nil
+		},
+	}
+	c.Flags().DurationVar(&interval, "interval", 0, "tick interval (default: [project] watch_interval, else 60s)")
+	return c
 }
 
 // jobEnvCmd is `mu job env`: the runtime shim — normalize the active scheduler's in-job

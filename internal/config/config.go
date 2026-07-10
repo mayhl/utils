@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -68,6 +69,7 @@ type file struct {
 		TarParentThreshold string `toml:"tar_parent_threshold"` // batch-put cutoff, human size; default "1GB"
 		TarHookThreshold   string `toml:"tar_hook_threshold"`   // per-leaf tar size warranting a pack hook; default "100GB"
 		JobHooks           *bool  `toml:"job_hooks"`            // read-time model hooks in queue views; nil (omitted) → on
+		WatchInterval      string `toml:"watch_interval"`       // sidecar tick period, Go duration; default "60s"
 	} `toml:"project"`
 	MirrorSets []MirrorSet `toml:"mirror_set"`
 	Clusters   []struct {
@@ -351,6 +353,18 @@ func JobHooks() bool {
 		return *f.Project.JobHooks
 	}
 	return true
+}
+
+// WatchInterval is the sidecar tick period (config.toml [project]
+// watch_interval, a Go duration like "90s") — how often `mu job watch` runs
+// the progress hook inside the allocation.
+func WatchInterval() time.Duration {
+	if f := cfg(); f != nil {
+		if d, err := time.ParseDuration(f.Project.WatchInterval); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Minute
 }
 
 // TarParentThreshold is the batch-put cutoff (config.toml [project]
