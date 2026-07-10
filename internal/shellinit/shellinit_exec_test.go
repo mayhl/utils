@@ -161,3 +161,42 @@ done
 		})
 	}
 }
+
+// TestMiseEnvExec evaluates the emitted MISE_ENV composition in real bash AND zsh
+// across the tier combos: hpc composes on an HPC box, is skipped when the mu-toolchain
+// module marker (MU_TOOLCHAIN) is set, fmt rides MU_MODULES, and a pre-set MISE_ENV
+// survives. Bash parity is the point — this logic used to live zsh-only in .config.
+func TestMiseEnvExec(t *testing.T) {
+	script := miseEnv() + `printf '%s' "${MISE_ENV:-none}"`
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"local", nil, "none"},
+		{"hpc via BC_HOST", []string{"BC_HOST=x"}, "hpc"},
+		{"hpc via MU_SYSTEM", []string{"MU_SYSTEM=hpc"}, "hpc"},
+		{"module provides toolchain", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc"}, "none"},
+		{"fmt only under module", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc", "MU_MODULES=git,fmt"}, "fmt"},
+		{"hpc+fmt compose", []string{"BC_HOST=x", "MU_MODULES=fmt"}, "hpc,fmt"},
+		{"pre-set survives", []string{"MISE_ENV=pre", "BC_HOST=x"}, "pre,hpc"},
+	}
+	for _, sh := range []string{"bash", "zsh"} {
+		p, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed — skipped", sh)
+			continue
+		}
+		for _, c := range cases {
+			cmd := exec.Command(p, "-c", script)
+			cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, c.env...) // clean env: no inherited MU_*/BC_HOST
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s/%s: %v\n%s", sh, c.name, err, out)
+			}
+			if got := string(out); got != c.want {
+				t.Errorf("%s/%s: MISE_ENV = %q, want %q", sh, c.name, got, c.want)
+			}
+		}
+	}
+}
