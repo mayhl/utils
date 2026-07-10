@@ -16,11 +16,13 @@ import (
 // doesn't stall the whole collate.
 const collateTimeout = 20 * time.Second
 
-// clusterResult is one cluster's collate outcome: its jobs, or the error that
-// dropped it (unreachable, timed out, misconfigured).
+// clusterResult is one cluster's collate outcome: its jobs (plus any model-hook
+// progress, keyed by short id), or the error that dropped it (unreachable,
+// timed out, misconfigured).
 type clusterResult struct {
 	cluster string
 	jobs    []queue.Job
+	prog    map[string]string
 	err     error
 }
 
@@ -103,19 +105,20 @@ func allSystemsScope() []queueTarget {
 }
 
 // collateJobs fans out over the given targets concurrently, each fetched with a bounded
-// timeout, and returns the display label plus the merged jobs (tagged by label) and
-// "label: reason" notes for any that failed — so a down target degrades to a warning,
-// never a hang or a total failure. The Kerberos ticket is ensured once up front. scope is
-// "fleet" or "all", driving both the label and the empty-set message.
-func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, []string, error) {
+// timeout, and returns the display label plus the merged jobs (tagged by label), their
+// model-hook progress ("label/id" keys), and "label: reason" notes for any that failed —
+// so a down target degrades to a warning, never a hang or a total failure. The Kerberos
+// ticket is ensured once up front. scope is "fleet" or "all", driving both the label and
+// the empty-set message.
+func collateJobs(targets []queueTarget, scope string, who userSel) (string, []queue.Job, map[string]string, []string, error) {
 	if len(targets) == 0 {
 		if scope == "fleet" {
-			return "", nil, nil, usageErr("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
+			return "", nil, nil, nil, usageErr("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all-systems")
 		}
-		return "", nil, nil, usageErr("no clusters configured — add clusters to config.toml")
+		return "", nil, nil, nil, usageErr("no clusters configured — add clusters to config.toml")
 	}
 	if err := hpc.EnsureTicket(); err != nil {
-		return "", nil, nil, runErr("%s", err)
+		return "", nil, nil, nil, runErr("%s", err)
 	}
 	results := make([]clusterResult, len(targets))
 	// Fan out concurrently; a spinner tracks how many of the N cluster fetches have
@@ -139,46 +142,53 @@ func collateJobs(targets []queueTarget, scope string, who userSel) (string, []qu
 	if scope == "all" {
 		label = "all systems"
 	}
-	jobs, down := mergeResults(results)
-	return label, jobs, down, nil
+	jobs, prog, down := mergeResults(results)
+	return label, jobs, prog, down, nil
 }
 
 // fetchTarget runs one target's scheduler over the bounded remote-exec, tagging each job
-// with the target's label.
+// with the target's label. The model-hooks fetch launches first so it runs concurrent
+// with the snapshot on the same system; its failures lose the progress, never the target.
 func fetchTarget(t queueTarget, who userSel) clusterResult {
 	if t.node == "" {
-		return clusterResult{t.label, nil, errors.New("no nodes configured")}
+		return clusterResult{cluster: t.label, err: errors.New("no nodes configured")}
 	}
 	cmd, parse := fetchSpec(t.scheduler, who)
 	if cmd == "" {
-		return clusterResult{t.label, nil, errors.New("no scheduler configured")}
+		return clusterResult{cluster: t.label, err: errors.New("no scheduler configured")}
 	}
 	target, err := hpc.Resolve(t.node)
 	if err != nil {
-		return clusterResult{t.label, nil, err}
+		return clusterResult{cluster: t.label, err: err}
 	}
+	hooksCh := fetchHookProgress(t.node, false)
 	out, err := hpc.RemoteExecTimeout(target, cmd, collateTimeout)
 	if err != nil {
-		return clusterResult{t.label, nil, err}
+		return clusterResult{cluster: t.label, err: err}
 	}
 	jobs := parse(out)
 	for i := range jobs {
 		jobs[i].Cluster = t.label
 	}
-	return clusterResult{t.label, jobs, nil}
+	return clusterResult{cluster: t.label, jobs: jobs, prog: awaitHookProgress(hooksCh)}
 }
 
 // mergeResults flattens per-cluster results into one job list (in cluster order) plus
+// the "label/id"-keyed hook progress (short ids can collide across systems) and
 // "cluster: reason" notes for the failures. Pure — the fan-out's testable core.
-func mergeResults(results []clusterResult) ([]queue.Job, []string) {
+func mergeResults(results []clusterResult) ([]queue.Job, map[string]string, []string) {
 	var jobs []queue.Job
 	var down []string
+	prog := map[string]string{}
 	for _, r := range results {
 		if r.err != nil {
 			down = append(down, fmt.Sprintf("%s: %v", r.cluster, r.err))
 			continue
 		}
 		jobs = append(jobs, r.jobs...)
+		for id, p := range r.prog {
+			prog[r.cluster+"/"+id] = p
+		}
 	}
-	return jobs, down
+	return jobs, prog, down
 }

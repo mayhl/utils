@@ -192,6 +192,25 @@ func TestQueuesSLURM(t *testing.T) {
 	}
 }
 
+// TestQueueFleet drives `mu hpc queue -f` with the project module on: both clusters'
+// jobs merge under their config labels, and the per-target hooks fetch — which fails
+// on the box (`mu job hooks` errs box-side: no BC_HOST in the login profile) — must
+// degrade to no Prog column, without a warning and without stalling the collate.
+func TestQueueFleet(t *testing.T) {
+	requireSandbox(t)
+	cmd := exec.Command(muBin, "hpc", "queue", "-f")
+	cmd.Env = append(muEnv(), "MU_MODULES=project")
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mu hpc queue -f: %v\n%s", err, raw)
+	}
+	out := string(raw)
+	mustContain(t, out, "SYSTEM", "sbpbs", "sbslurm", "1284570", "8359638", "run_wave")
+	if strings.Contains(out, "PROG") {
+		t.Errorf("Prog column shown despite the hooks fetch failing box-side:\n%s", out)
+	}
+}
+
 // TestStorage drives `mu hpc storage --node sandbox` through the box's show_storage
 // stub: rows parse past the banner's own `=` divider, KB figures land as human sizes,
 // and the derived Use% columns appear (50% home, 90% near-quota cwfs).

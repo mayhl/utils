@@ -168,11 +168,11 @@ func hookProgress(results []hooks.Result) string {
 const hookWait = 3 * time.Second
 
 // fetchHookProgress launches the read-time hooks fetch concurrent with a queue
-// snapshot: call before the fetch, hand the channel to applyHookProgress after.
-// Returns nil (→ no model column) when the project module or the [project]
-// job_hooks switch is off. Every failure path degrades to no data — a missing
-// remote mu, a dead host, an expired-ticket ssh refusal all just lose the
-// column for this listing. FUTURE: the fleet collate paths.
+// snapshot: call before the fetch, hand the channel to applyHookProgress /
+// awaitHookProgress after. Returns nil (→ no model column) when the project
+// module or the [project] job_hooks switch is off. Every failure path degrades
+// to no data — a missing remote mu, a dead host, an expired-ticket ssh refusal
+// all just lose the column for this listing.
 func fetchHookProgress(node string, local bool) <-chan map[string]string {
 	if !modules.Enabled("project") || !config.JobHooks() {
 		return nil
@@ -206,18 +206,39 @@ func fetchHookProgress(node string, local bool) <-chan map[string]string {
 	return ch
 }
 
-// applyHookProgress folds the fetched progress into the rows by job id, waiting
-// at most hookWait past the snapshot.
-func applyHookProgress(rows []render.JobRow, ch <-chan map[string]string) {
+// awaitHookProgress collects the fetched progress, waiting at most hookWait
+// past the snapshot (nil channel or late data → nil).
+func awaitHookProgress(ch <-chan map[string]string) map[string]string {
 	if ch == nil {
-		return
+		return nil
 	}
 	select {
 	case m := <-ch:
-		for i := range rows {
-			rows[i].Prog = m[rows[i].ID]
-		}
+		return m
 	case <-time.After(hookWait):
+		return nil
+	}
+}
+
+// applyHookProgress folds the fetched progress into single-cluster rows by job id.
+func applyHookProgress(rows []render.JobRow, ch <-chan map[string]string) {
+	m := awaitHookProgress(ch)
+	if m == nil {
+		return
+	}
+	for i := range rows {
+		rows[i].Prog = m[rows[i].ID]
+	}
+}
+
+// applyFleetHookProgress folds collated progress into merged rows via the
+// "label/id" keys — each row's Cluster carries its target label.
+func applyFleetHookProgress(rows []render.JobRow, prog map[string]string) {
+	if len(prog) == 0 {
+		return
+	}
+	for i := range rows {
+		rows[i].Prog = prog[rows[i].Cluster+"/"+rows[i].ID]
 	}
 }
 
