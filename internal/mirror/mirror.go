@@ -122,6 +122,13 @@ func classify(comp string, re *regexp.Regexp) (base, id string, ok bool) {
 	return "", "", false
 }
 
+// ClassifyCase splits a dir basename per the configured case glob: a run dir
+// yields (base, jobid), a bare case dir (base, ""), anything else ok=false. The
+// exported seam for the archive put wrapper's leaf detection.
+func ClassifyCase(comp string) (base, id string, ok bool) {
+	return classify(comp, caseRe())
+}
+
 // pivot finds the case component in rel (pattern-anchored: any depth, first match).
 func pivot(comps []string, re *regexp.Regexp) (idx int, base, id string, ok bool) {
 	for i, c := range comps {
