@@ -48,7 +48,7 @@ func doctorSetupCmd() *cobra.Command {
 				render.EventOK("doctor", summary)
 			}
 			if fail > 0 {
-				os.Exit(1)
+				return codeErr(1)
 			}
 			return nil
 		},

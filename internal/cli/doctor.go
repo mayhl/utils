@@ -78,7 +78,7 @@ func doctorCmd() *cobra.Command {
 			}
 
 			if overall == doctor.Fail {
-				os.Exit(1)
+				return codeErr(1)
 			}
 			return nil
 		},
@@ -162,7 +162,7 @@ func doctorFmtCmd() *cobra.Command {
 				render.EventOK("doctor", summary)
 			}
 			if rep.Status == doctor.Fail {
-				os.Exit(1)
+				return codeErr(1)
 			}
 			return nil
 		},
