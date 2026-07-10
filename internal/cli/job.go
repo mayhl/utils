@@ -89,9 +89,9 @@ func jobSubCmd() *cobra.Command {
 	var node, account, walltime, name string
 	var nodes int
 	var sel queueSel
-	var yes, dryRun bool
+	var yes, dryRun, interactive bool
 	c := &cobra.Command{
-		Use:   "sub <script>",
+		Use:   "sub [script]",
 		Short: "Submit a batch script to one cluster (qsub/sbatch) — preview + confirm.",
 		Long: "Submit a job script to one cluster, mapping -A/-q to the scheduler's flags\n" +
 			"(PBS qsub / SLURM sbatch). Target: -N <cluster> off an HPC login node, else the\n" +
@@ -101,10 +101,17 @@ func jobSubCmd() *cobra.Command {
 			"--bigmem/--xfer use the cluster's config `submit_queue` entry, else resolve it\n" +
 			"from the live queue list (exactly one queue of that class); --debug/--background\n" +
 			"fall back to the standard queue of that name. With no -q and no class flag,\n" +
-			"`submit_queue.default` applies when set.",
-		Args: cobra.ExactArgs(1),
+			"`submit_queue.default` applies when set.\n\n" +
+			"-i opens the submit form instead: every knob as an editable field, pre-seeded\n" +
+			"from the flags and config, the queue enum backed by the live queue list, and\n" +
+			"walltime/nodes checked against the selected queue's limits as you type. The\n" +
+			"usual preview + confirm still follows.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			script := args[0]
+			script := ""
+			if len(args) == 1 {
+				script = args[0]
+			}
 			label, scheduler, _, run, _, err := queueTargetCtx(node, userSel{})
 			if err != nil {
 				return err
@@ -116,14 +123,36 @@ func jobSubCmd() *cobra.Command {
 			if account == "" {
 				account = config.AccountFor(label)
 			}
-			queueName, err := sel.resolve(node, label, true)
-			if err != nil {
-				return err
-			}
-			opts := queue.SubmitOpts{
-				Account: account, Queue: queueName,
-				Walltime: walltime, Nodes: nodes, Name: name,
-				CoresPerNode: queueCPN(label, queueName),
+			var opts queue.SubmitOpts
+			if interactive {
+				if !render.Interactive() {
+					return fmt.Errorf("mu job sub -i needs a terminal (stdin is not a tty)")
+				}
+				if node != "" { // the form's queue fetch is remote — get the ticket BEFORE the TUI owns the terminal
+					if err := hpc.EnsureTicket(); err != nil {
+						return runErr("%s", err)
+					}
+				}
+				var ok bool
+				if script, opts, ok, err = subForm(node, label, script, account, &sel, walltime, nodes, name); err != nil {
+					return err
+				} else if !ok {
+					render.Info("aborted")
+					return nil
+				}
+			} else {
+				if script == "" {
+					return usageErr("sub needs a <script> (or -i for the form)")
+				}
+				queueName, err := sel.resolve(node, label, true)
+				if err != nil {
+					return err
+				}
+				opts = queue.SubmitOpts{
+					Account: account, Queue: queueName,
+					Walltime: walltime, Nodes: nodes, Name: name,
+					CoresPerNode: queueCPN(label, queueName),
+				}
 			}
 			cmd := adapter.SubmitCmd(script, opts)
 
@@ -157,13 +186,14 @@ func jobSubCmd() *cobra.Command {
 			return nil
 		},
 	}
-	setHelpArgs(c, [2]string{"<script>", "job script path, resolved ON the target cluster"})
+	setHelpArgs(c, [2]string{"[script]", "job script path, resolved ON the target cluster (optional with -i)"})
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
 	c.Flags().StringVarP(&walltime, "walltime", "t", "", "walltime limit, HH:MM:SS")
 	c.Flags().IntVarP(&nodes, "nodes", "n", 0, "node count (PBS select chunk / SLURM -N)")
 	c.Flags().StringVarP(&name, "name", "J", "", "job name")
+	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "edit the submission in a form (fields pre-seeded from flags + config, live queue list)")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print the submit command without submitting")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
