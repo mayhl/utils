@@ -124,6 +124,9 @@ func frontDoors() string {
 		{"mps", `mu ps "$@"`},
 		{"mkill", `mu ps kill "$@"`},
 		{"mlog", `mu log "$@"`},
+		// The one mirror verb that must be shell (it cds). Capture-then-cd so a failed
+		// resolve leaves the shell where it is — the error is already on stderr.
+		{"swap", `local d; d=$(mu path swap "$@") && cd "$d"`},
 	}
 	if len(config.NodeNames()) > 0 {
 		stat := door{"mstat", `mu hpc queue "$@"`}

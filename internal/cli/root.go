@@ -73,7 +73,7 @@ func Root() *cobra.Command {
 	setHelpTitle(root, "mayhl_utils — HPC toolkit") // for the intercepted house root help
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
-	root.AddCommand(cpCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd(), jobCmd())
+	root.AddCommand(cpCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd(), jobCmd(), pathCmd())
 	// sshfs mounts a remote dir onto the LOCAL workstation via fuse — inapplicable on an
 	// HPC login node (already on the box, no fuse-t), so register it local-only. Mirrors
 	// the shell seam, where the hcd/hmt front-doors live in platform/local.sh.

@@ -31,6 +31,17 @@ type Cluster struct {
 	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
 }
 
+// MirrorSet is one mirror-set: roots sharing a relative-path namespace, mapped
+// under $ARCHIVE_HOME/<archive_rel> by the archive projection. Root ARITY encodes
+// swap-ability: 2 roots = a [permanent, scratch] swap pair (that order), 1 root =
+// archive-only. Sets may nest under the default $HOME/$WORKDIR pair (e.g. a group
+// share at ~/projects/shared) — longest-prefix match picks the winner.
+type MirrorSet struct {
+	Name       string   `toml:"name"`
+	Roots      []string `toml:"roots"`
+	ArchiveRel string   `toml:"archive_rel"`
+}
+
 // file is the config.toml schema. Clusters use an array-of-tables so their order
 // is preserved as authored (a map would iterate randomly).
 type file struct {
@@ -49,7 +60,12 @@ type file struct {
 	Shell struct {
 		QueueAliases string `toml:"queue_aliases"` // idiom for the queue front-door names: "pbs"|"slurm"|"both"
 	} `toml:"shell"`
-	Clusters []struct {
+	Project struct {
+		CaseGlob string `toml:"case_glob"` // case-dir basename glob; default "case_*"
+		DataDir  string `toml:"data_dir"`  // shared-data rel path in a project; default "simulations/data"
+	} `toml:"project"`
+	MirrorSets []MirrorSet `toml:"mirror_set"`
+	Clusters   []struct {
 		Name         string            `toml:"name"`
 		Domain       string            `toml:"domain"`
 		Nodes        []string          `toml:"nodes"`
@@ -279,6 +295,33 @@ func SSHFSRoot() string {
 		return f.SSHFS.Root
 	}
 	return "~/hpc_sshfs"
+}
+
+// CaseGlob is the case-dir basename glob the resolvers classify by (config.toml
+// [project] case_glob). The blessed layout's convention is the default.
+func CaseGlob() string {
+	if f := cfg(); f != nil && f.Project.CaseGlob != "" {
+		return f.Project.CaseGlob
+	}
+	return "case_*"
+}
+
+// ProjectDataDir is the shared-data rel path inside a project tree (config.toml
+// [project] data_dir) — the tier that archives from $WORK and is add-only.
+func ProjectDataDir() string {
+	if f := cfg(); f != nil && f.Project.DataDir != "" {
+		return f.Project.DataDir
+	}
+	return "simulations/data"
+}
+
+// MirrorSets are the extra configured mirror sets ([[mirror_set]]); the default
+// $HOME/$WORKDIR/$ARCHIVE_HOME set is env-derived by the mirror package, not config.
+func MirrorSets() []MirrorSet {
+	if f := cfg(); f != nil {
+		return f.MirrorSets
+	}
+	return nil
 }
 
 // OSSHPath is the path to the Kerberos `ossh` build (config.toml [ssh] ossh), or
