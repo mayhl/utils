@@ -125,8 +125,9 @@ func checkTicket() Result {
 	}
 }
 
-// checksDir is where plugin checks live (mu's data dir); MU_CHECKS_DIR overrides.
-func checksDir() string {
+// ChecksDir is where plugin checks live (mu's data dir); MU_CHECKS_DIR overrides.
+// Exported so `mu setup checks` links the same path doctor scans.
+func ChecksDir() string {
 	if d := os.Getenv("MU_CHECKS_DIR"); d != "" {
 		return d
 	}
@@ -138,7 +139,7 @@ func checksDir() string {
 // level of subdirs (section = dir name), so .config can group checks into module
 // tables. exit 0 = OK, 2 = WARN, anything else = FAIL; last stdout line = detail.
 func plugins() []Result {
-	root := checksDir()
+	root := ChecksDir()
 	out := runDir(root, "checks")
 	entries, err := os.ReadDir(root)
 	if err != nil {
