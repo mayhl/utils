@@ -30,6 +30,7 @@ type Cluster struct {
 	CoresPerNode int               // cores per compute node → MaxNodes = ceil(MaxCores / this); 0 = unset
 	QueueClass   map[string]string // queue name → forced node class, overriding the name heuristic
 	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
+	SubmitQueue  map[string]string // submit key → queue name: "default" for bare sub, class/purpose keys (gpu/vis/bigmem/xfer/debug/background) for the selector flags
 }
 
 // MirrorSet is one mirror-set: roots sharing a relative-path namespace, mapped
@@ -79,6 +80,7 @@ type file struct {
 		CoresPerNode int               `toml:"cores_per_node"` // cores per node → MaxNodes; optional
 		QueueClass   map[string]string `toml:"queue_class"`    // queue → forced node class; optional
 		QueueCores   map[string]int    `toml:"queue_cores"`    // queue → cores/node override; optional
+		SubmitQueue  map[string]string `toml:"submit_queue"`   // submit key → queue (default + class flags); optional
 	} `toml:"cluster"`
 }
 
@@ -160,7 +162,21 @@ func ClusterDefs() []Cluster {
 			CoresPerNode: c.CoresPerNode,
 			QueueClass:   c.QueueClass,
 			QueueCores:   c.QueueCores,
+			SubmitQueue:  lowerKeys(c.SubmitQueue),
 		})
+	}
+	return out
+}
+
+// lowerKeys normalizes a map's keys to lowercase (nil in → nil out), so config
+// submit_queue keys match however they were cased.
+func lowerKeys(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[strings.ToLower(k)] = v
 	}
 	return out
 }
@@ -194,6 +210,14 @@ func AccountFor(node string) string {
 		}
 	}
 	return ""
+}
+
+// SubmitQueueFor returns the configured submit queue for a key on the cluster owning
+// node — "default" for a bare `mu job sub`, a class/purpose key (gpu/vis/bigmem/xfer/
+// debug/background) for the selector flags — or "" when unset (callers fall back per key).
+func SubmitQueueFor(node, key string) string {
+	c, _ := clusterFor(node)
+	return c.SubmitQueue[strings.ToLower(key)]
 }
 
 // clusterFor returns the cluster owning node n — matched by cluster name (the `mu hpc

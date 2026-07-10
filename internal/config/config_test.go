@@ -130,6 +130,36 @@ active = false
 	}
 }
 
+func TestSubmitQueueFor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[[cluster]]
+name = "alpha"
+domain = "a.example.mil"
+nodes = ["hpc1"]
+submit_queue = { default = "standard", GPU = "gpu_short" }
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	reset()
+
+	if got := SubmitQueueFor("hpc1", "default"); got != "standard" {
+		t.Errorf("SubmitQueueFor(default) = %q", got)
+	}
+	if got := SubmitQueueFor("alpha", "gpu"); got != "gpu_short" { // by cluster name; key case-normalized both sides
+		t.Errorf("SubmitQueueFor(gpu) = %q", got)
+	}
+	if got := SubmitQueueFor("hpc1", "vis"); got != "" {
+		t.Errorf("SubmitQueueFor(unset key) = %q", got)
+	}
+	if got := SubmitQueueFor("ghost", "default"); got != "" {
+		t.Errorf("SubmitQueueFor(unknown node) = %q", got)
+	}
+}
+
 func TestSSHCommandIsEnvSeam(t *testing.T) {
 	t.Setenv("MU_SSH", "ossh")
 	if SSHCommand() != "ossh" {

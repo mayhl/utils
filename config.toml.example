@@ -53,6 +53,12 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #                                  wrong (CPU/GPU/VIS/BigMem/Transfer/Archive).
 #   queue_cores = { q = 64 }     — per-queue cores/node override (GPU/specialty nodes whose
 #                                  core count differs from cores_per_node; feeds MaxNodes).
+#   submit_queue = { default = "standard", gpu = "gpu_short" }
+#                                — queues `mu job sub` targets: `default` applies when no
+#                                  -q / selector flag is given; gpu/vis/bigmem/xfer/debug/
+#                                  background back the selector flags (--gpu, --vis, …). A
+#                                  missing class entry is resolved from the live queue list;
+#                                  --debug/--background fall back to those standard names.
 [[cluster]]
 name      = "dsrc1"
 domain    = "dsrc1.example.hpc.mil"
@@ -62,6 +68,7 @@ account   = "ALLOC-1234"
 cores_per_node = 128
 # queue_class = { "gpu-debug" = "GPU" }
 # queue_cores = { "gpu-debug" = 64 }
+# submit_queue = { default = "standard", gpu = "gpu-debug" }
 
 [[cluster]]
 name      = "dsrc2"
