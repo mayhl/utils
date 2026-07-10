@@ -28,6 +28,7 @@ type JobDetail struct {
 	StdErr     string `json:"stderr,omitempty"`
 	ExitStatus string `json:"exit_status,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+	ExecHost   string `json:"exec_host,omitempty"` // first allocated node; "" until running
 }
 
 // ParseDetail turns raw scheduler detail into a JobDetail, dispatching on the configured
@@ -109,6 +110,7 @@ func parseScontrol(raw string) JobDetail {
 		StdErr:     slurmField(raw, "StdErr"),
 		ExitStatus: skipNone(slurmField(raw, "ExitCode")),
 		Reason:     skipNone(slurmField(raw, "Reason")),
+		ExecHost:   skipNone(slurmField(raw, "BatchHost")), // the batch script's node
 	}
 	// UserId=alice(30015) → alice
 	if u := slurmField(raw, "UserId"); u != "" {
@@ -164,9 +166,33 @@ func parseQstatF(raw string) JobDetail {
 			break
 		}
 	}
+	// exec_host = "nid001/0*128+nid002/0*128" → the first node carries the
+	// tunnel-able services (rank 0 / the batch script's host).
+	if h := pbsAttr(raw, "exec_host"); h != "" {
+		d.ExecHost = strings.SplitN(h, "/", 2)[0]
+	}
 	d.State = pbsState(d.RawState).String()
 	d.ShortID = shortID(d.ID)
 	return d
+}
+
+// ParseSubmitID extracts the new job id from a submit command's stdout — PBS
+// qsub prints the bare full id ("1284575.sdb"), SLURM sbatch a sentence
+// ("Submitted batch job 8359640"). "" when nothing id-shaped came back.
+func ParseSubmitID(scheduler, out string) string {
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(ln, "Submitted batch job "); ok && scheduler == "slurm" {
+			return strings.TrimSpace(rest)
+		}
+		if scheduler == "pbs" && ln[0] >= '0' && ln[0] <= '9' {
+			return ln
+		}
+	}
+	return ""
 }
 
 // OutputPath returns a job's stdout (or stderr with wantErr) path from raw detail, for

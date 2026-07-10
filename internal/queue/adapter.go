@@ -19,7 +19,8 @@ type Adapter interface {
 	ListCmd(all bool, users, self string) string // live queue    (qstat -a / squeue -o …)
 	HistCmd(all bool, users, self string) string // finished jobs (qstat -xa / sacct …)
 	SubmitCmd(script string, o SubmitOpts) string
-	Directives(o SubmitOpts) []string // header lines (#PBS / #SBATCH) for preview + templates
+	InteractiveCmd(o SubmitOpts) string // interactive allocation (qsub -I / salloc) — run under a tty
+	Directives(o SubmitOpts) []string   // header lines (#PBS / #SBATCH) for preview + templates
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
@@ -105,6 +106,17 @@ func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	return cmd + " " + shell.Quote(script)
 }
 
+func (pbsAdapter) InteractiveCmd(o SubmitOpts) string {
+	cmd := "qsub -I"
+	if o.Account != "" {
+		cmd += " -A " + shell.Quote(o.Account)
+	}
+	if o.Queue != "" {
+		cmd += " -q " + shell.Quote(o.Queue)
+	}
+	return cmd
+}
+
 // Directives renders the #PBS header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
 func (pbsAdapter) Directives(o SubmitOpts) []string {
@@ -170,6 +182,17 @@ func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 		cmd += " -p " + shell.Quote(o.Queue)
 	}
 	return cmd + " " + shell.Quote(script)
+}
+
+func (slurmAdapter) InteractiveCmd(o SubmitOpts) string {
+	cmd := "salloc"
+	if o.Account != "" {
+		cmd += " -A " + shell.Quote(o.Account)
+	}
+	if o.Queue != "" {
+		cmd += " -p " + shell.Quote(o.Queue)
+	}
+	return cmd
 }
 
 // Directives renders the #SBATCH header lines for preview/templates (display, not exec —

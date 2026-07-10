@@ -9,6 +9,7 @@ const scontrolSample = `JobId=8359638 JobName=run_wave
    NumNodes=4 NumCPUs=96 NumTasks=96
    RunTime=06:14:52 TimeLimit=1-00:00:00
    SubmitTime=2026-07-05T17:40:00 StartTime=2026-07-06T00:00:00 EndTime=Unknown
+   BatchHost=nid00045
    WorkDir=/p/work1/alice/run
    StdOut=/p/work1/alice/run/run.8359638.out
    StdErr=/p/work1/alice/run/run.8359638.err
@@ -57,6 +58,7 @@ const qstatFSample = `Job Id: 1284570.hpc1
     Error_Path = hpc1:/home/alice/run.e1284570
     Variable_List = PBS_O_HOME=/home/alice,PBS_O_WORKDIR=/p/work1/alice/simulat
 	ions/funwave,PBS_O_PATH=/usr/bin
+    exec_host = nid001/0*128+nid002/0*128
     exit_status = 0
 `
 
@@ -85,6 +87,31 @@ func TestParseDetailPBS(t *testing.T) {
 	// PBS submit dir comes from Variable_List's PBS_O_WORKDIR (line-unwrapped).
 	if d.WorkDir != "/p/work1/alice/simulations/funwave" {
 		t.Errorf("workdir: %q", d.WorkDir)
+	}
+	// exec_host collapses to the first node — the tunnel target.
+	if d.ExecHost != "nid001" {
+		t.Errorf("exec_host: %q", d.ExecHost)
+	}
+}
+
+func TestExecHostSLURM(t *testing.T) {
+	if d := ParseDetail("slurm", scontrolSample); d.ExecHost != "nid00045" {
+		t.Errorf("batchhost: %q", d.ExecHost)
+	}
+}
+
+func TestParseSubmitID(t *testing.T) {
+	cases := []struct{ scheduler, out, want string }{
+		{"pbs", "1284575.sdb\n", "1284575.sdb"},
+		{"pbs", "\nsome banner\n1284575.sdb\n", "1284575.sdb"},
+		{"slurm", "Submitted batch job 8359640\n", "8359640"},
+		{"slurm", "sbatch: error: invalid partition\n", ""},
+		{"pbs", "qsub: script not found\n", ""},
+	}
+	for _, c := range cases {
+		if got := ParseSubmitID(c.scheduler, c.out); got != c.want {
+			t.Errorf("ParseSubmitID(%s, %q) = %q want %q", c.scheduler, c.out, got, c.want)
+		}
 	}
 }
 
