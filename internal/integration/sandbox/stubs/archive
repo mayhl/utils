@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake PST/TUSC archive — record the invocation (cwd, probe, args) plus whether
+# each file arg exists locally at call time, for the put-wrapper assertions.
+line="$PWD PROBE=${ARCHIVE_PROBE:-no} $*"
+for a in "$@"; do
+  [ -f "$a" ] && line="$line [have:$a]"
+done
+echo "$line" >> "$HOME/archive.log"

@@ -843,3 +843,36 @@ func TestProjectSubmit(t *testing.T) {
 	// qsub must have run from staging, on the script by name.
 	mustContain(t, box("cat qsub.log"), stage+" run.sh")
 }
+
+// TestArchiveWrapper drives `mu archive` on the box against the archive stub: a
+// run leaf on $WORKDIR packs a rooted staging tar, puts it with -D at the
+// container projection under ARCHIVE_PROBE, and cleans the staging either way;
+// a generic sub gets -C injected from $PWD's projection; the shell-init
+// front-door appears under the project module. Onboard (idempotent) puts the
+// current mu on the box first.
+func TestArchiveWrapper(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	pushFile(t, "/home/tester/arch_driver.sh",
+		"#!/bin/bash\n"+
+			"export PATH=\"$HOME/.local/bin:$PATH\"\n"+
+			"export ARCHIVE_HOME=$HOME/tape\n"+
+			"export MU_MODULES=project\n"+
+			"rm -f \"$HOME/archive.log\"; rm -rf \"$WORKDIR/proj\"\n"+
+			"mkdir -p \"$WORKDIR/proj/case_t_77\"\n"+
+			"echo x > \"$WORKDIR/proj/case_t_77/out.nc\"\n"+
+			"cd \"$WORKDIR/proj\"\n"+
+			"mu archive put case_t_77 && echo PUT_OK\n"+
+			"[ ! -e 77.tar ] && echo STAGING_GONE\n"+
+			"cd case_t_77\n"+
+			"mu archive ls && echo LS_OK\n"+
+			"echo \"FRONTDOOR=$(bash -c 'eval \"$(mu shell-init)\"; type -t archive')\"\n"+
+			"cat \"$HOME/archive.log\"\n")
+	out, err := exec.Command("ssh", "-q", "sandbox", "bash -l /home/tester/arch_driver.sh").CombinedOutput()
+	if err != nil {
+		t.Fatalf("driver: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "PUT_OK", "STAGING_GONE", "LS_OK", "FRONTDOOR=function",
+		"PROBE=yes put -C /home/tester/tape/proj/case_t -D 77.tar [have:77.tar]",
+		"PROBE=yes ls -C /home/tester/tape/proj/case_t/77")
+}
