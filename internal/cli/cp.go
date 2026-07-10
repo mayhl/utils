@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -56,14 +55,14 @@ func cpPullCmd() *cobra.Command {
 
 // runTransfer resolves the node, ensures a Kerberos ticket, and runs rsync. For
 // push the local src goes to node:dst; for pull node:src comes to local dst. It
-// exits the process directly so rsync's exit code propagates (fang would
-// otherwise return 0), and so an unknown-node error prints one house-style line
-// without fang's ERROR block.
+// returns an exit-coded error so rsync's exit code propagates to the process
+// (main maps it via ExitCode; fang would otherwise return 0), and an unknown-node
+// error is a code-2 usage line without fang's ERROR block. The rsync line is
+// code-only (progress bar + summary already printed), so nothing renders twice.
 func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error {
 	target, err := hpc.Resolve(node)
 	if err != nil {
-		render.Err(err.Error())
-		os.Exit(2)
+		return usageErr("%s", err)
 	}
 	hpc.EnsureTicket()
 
@@ -85,8 +84,7 @@ func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error
 			render.EventErr("cp", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
 		}
 	}
-	os.Exit(code)
-	return nil
+	return codeErr(code)
 }
 
 func addTransferFlags(cmd *cobra.Command, o *rsync.Opts, verbose *bool) {
