@@ -117,8 +117,7 @@ func jobEnvCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			out, err := job.Env()
 			if err != nil {
-				render.Err(err.Error())
-				os.Exit(1)
+				return runErr("%s", err)
 			}
 			fmt.Print(out)
 			return nil
