@@ -136,8 +136,9 @@ func hpcNodesCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			defs := config.ClusterDefs()
 			if len(defs) == 0 {
+				// warn (yellow), but still exit non-zero without a second red line
 				render.Warn("no nodes — is the cluster config set?")
-				os.Exit(1)
+				return codeErr(1)
 			}
 			var st map[string]string
 			if status {
