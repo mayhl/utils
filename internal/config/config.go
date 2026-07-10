@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -61,8 +62,10 @@ type file struct {
 		QueueAliases string `toml:"queue_aliases"` // idiom for the queue front-door names: "pbs"|"slurm"|"both"
 	} `toml:"shell"`
 	Project struct {
-		CaseGlob string `toml:"case_glob"` // case-dir basename glob; default "case_*"
-		DataDir  string `toml:"data_dir"`  // shared-data rel path in a project; default "simulations/data"
+		CaseGlob           string `toml:"case_glob"`            // case-dir basename glob; default "case_*"
+		DataDir            string `toml:"data_dir"`             // shared-data rel path in a project; default "simulations/data"
+		TarParentThreshold string `toml:"tar_parent_threshold"` // batch-put cutoff, human size; default "1GB"
+		TarHookThreshold   string `toml:"tar_hook_threshold"`   // per-leaf tar size warranting a pack hook; default "100GB"
 	} `toml:"project"`
 	MirrorSets []MirrorSet `toml:"mirror_set"`
 	Clusters   []struct {
@@ -313,6 +316,53 @@ func ProjectDataDir() string {
 		return f.Project.DataDir
 	}
 	return "simulations/data"
+}
+
+// TarParentThreshold is the batch-put cutoff (config.toml [project]
+// tar_parent_threshold, e.g. "500MB"): `archive put <parent>` packs ONE
+// parent-level tar when every case leaf is under it, per-leaf tars otherwise.
+func TarParentThreshold() int64 {
+	if f := cfg(); f != nil {
+		if n, ok := parseSize(f.Project.TarParentThreshold); ok {
+			return n
+		}
+	}
+	return 1 << 30
+}
+
+// TarHookThreshold flags a case leaf too big for one tar (config.toml [project]
+// tar_hook_threshold): past it `archive put` still packs a single per-leaf tar
+// but warns that a model pack hook should split it. FUTURE: run the hook.
+func TarHookThreshold() int64 {
+	if f := cfg(); f != nil {
+		if n, ok := parseSize(f.Project.TarHookThreshold); ok {
+			return n
+		}
+	}
+	return 100 << 30
+}
+
+// parseSize reads a human size in the house units (B/KB/MB/GB/TB — HumanBytes's
+// names, binary multiples): "500MB", "1.5GB". ok=false on empty or garbage, so
+// the accessors fall back to their defaults.
+func parseSize(s string) (int64, bool) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	mult := int64(1)
+	for i, u := range []string{"KB", "MB", "GB", "TB"} {
+		if strings.HasSuffix(s, u) {
+			mult = 1 << (10 * (i + 1))
+			s = strings.TrimSuffix(s, u)
+			break
+		}
+	}
+	if mult == 1 {
+		s = strings.TrimSuffix(s, "B")
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || f <= 0 {
+		return 0, false
+	}
+	return int64(f * float64(mult)), true
 }
 
 // MirrorSets are the extra configured mirror sets ([[mirror_set]]); the default

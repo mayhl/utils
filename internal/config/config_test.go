@@ -140,3 +140,26 @@ func TestSSHCommandIsEnvSeam(t *testing.T) {
 		t.Errorf("SSHCommand default = %q", SSHCommand())
 	}
 }
+
+func TestParseSize(t *testing.T) {
+	good := map[string]int64{
+		"1B":     1,
+		"500KB":  500 << 10,
+		"1.5MB":  3 << 19, // 1.5 * 1024^2
+		"2GB":    2 << 30,
+		"1TB":    1 << 40,
+		" 1 GB ": 1 << 30,
+		"2gb":    2 << 30,
+		"1024":   1024, // bare bytes
+	}
+	for in, want := range good {
+		if got, ok := parseSize(in); !ok || got != want {
+			t.Errorf("parseSize(%q) = %d,%v want %d", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "GB", "-1GB", "0", "1XB", "fast"} {
+		if _, ok := parseSize(in); ok {
+			t.Errorf("parseSize(%q) ok, want reject", in)
+		}
+	}
+}
