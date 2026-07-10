@@ -21,6 +21,7 @@ Job Id: 1284570.hpc1
     Output_Path = hpc1:/home/tester/run/run.o1284570
     Error_Path = hpc1:/home/tester/run/run.e1284570
     init_work_dir = /home/tester/run
+    Variable_List = PBS_O_HOME=/home/tester,PBS_O_WORKDIR=/home/tester/workdir/hproj/simulations/funwave/case_h,PBS_O_PATH=/usr/bin
     Exit_status = 0
 EOF
     ;;

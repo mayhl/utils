@@ -876,3 +876,40 @@ func TestArchiveWrapper(t *testing.T) {
 		"PROBE=yes put -C /home/tester/tape/proj/case_t -D 77.tar [have:77.tar]",
 		"PROBE=yes ls -C /home/tester/tape/proj/case_t/77")
 }
+
+// TestJobHooks drives the read-time model-hooks runner on the box: the qstat
+// stubs give a running job whose PBS_O_WORKDIR points at a $WORKDIR staging
+// (no checkout), the project checkout on $HOME carries the progress hook, and
+// `mu job hooks` must chain through the swap mirror, exec the hook with
+// MU_JOBID in the run dir, and emit the JSON line. Onboard (idempotent) puts
+// the current mu on the box first.
+func TestJobHooks(t *testing.T) {
+	requireSandbox(t)
+	mu(t, "setup", "onboard", "sandbox", "--repo", repoRoot(t))
+	pushFile(t, "/home/tester/hooks_driver.sh",
+		"#!/bin/bash\n"+
+			"export PATH=\"$HOME/.local/bin:$PATH\"\n"+
+			"export BC_HOST=hpc1\n"+
+			"cat > \"$HOME/hooks-config.toml\" <<'C'\n"+
+			"[[cluster]]\n"+
+			"name = \"hpc1\"\n"+
+			"domain = \"box\"\n"+
+			"nodes = [\"hpc1\"]\n"+
+			"scheduler = \"pbs\"\n"+
+			"C\n"+
+			"export MU_CONFIG_FILE=$HOME/hooks-config.toml\n"+
+			"rm -rf \"$HOME/hproj\" \"$WORKDIR/hproj\"\n"+
+			"mkdir -p \"$HOME/hproj/.git\" \"$HOME/hproj/simulations/funwave/case_h\" \\\n"+
+			"         \"$HOME/hproj/scripts/funwave/hooks\" \\\n"+
+			"         \"$WORKDIR/hproj/simulations/funwave/case_h_1284570\"\n"+
+			"printf '#!/bin/sh\\necho \"{\\\\\"pct\\\\\": 42, \\\\\"seen\\\\\": \\\\\"$MU_JOBID\\\\\"}\"\\n' \\\n"+
+			"  > \"$HOME/hproj/scripts/funwave/hooks/progress\"\n"+
+			"chmod +x \"$HOME/hproj/scripts/funwave/hooks/progress\"\n"+
+			"mu job hooks && echo HOOKS_OK\n")
+	out, err := exec.Command("ssh", "-q", "sandbox", "bash -l /home/tester/hooks_driver.sh").CombinedOutput()
+	if err != nil {
+		t.Fatalf("driver: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "HOOKS_OK",
+		`"job":"1284570"`, `"hook":"progress"`, `"pct":42`, `"seen":"1284570"`)
+}
