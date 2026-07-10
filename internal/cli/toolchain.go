@@ -37,8 +37,7 @@ func toolchainCmd() *cobra.Command {
 				return nil
 			}
 			if t.module && t.prefix == "" {
-				render.Err("--module needs --prefix <path> (the shared install root)")
-				os.Exit(2)
+				return usageErr("--module needs --prefix <path> (the shared install root)")
 			}
 			specs, err := setup.Specs()
 			if err != nil {
