@@ -191,6 +191,39 @@ func TestQueuesSLURM(t *testing.T) {
 	}
 }
 
+// TestInfoPBS drives `mu hpc queue info` (minfo) end-to-end on the PBS idiom: snapshot
+// the queue (qstat -a), resolve the selector, fetch detail (qstat -f), render the house
+// card. WorkDir proves the -f detail parsed, not just the snapshot row.
+func TestInfoPBS(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "info", "--node", "sandbox", "1284570")
+	mustContain(t, out, "1284570", "run_wave", "/home/tester/run")
+}
+
+// TestInfoSLURM drives minfo on the SLURM idiom (squeue snapshot → scontrol show job).
+// Account is SLURM-detail-only, so it proves the scontrol output parsed.
+func TestInfoSLURM(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "info", "--node", "sandslurm", "8359638")
+	mustContain(t, out, "8359638", "run_wave", "proj123")
+}
+
+// TestHistPBS drives `mu hpc queue hist` (mhist) on the PBS idiom — the qstat -x stub's
+// finished jobs render in the history table.
+func TestHistPBS(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "hist", "--node", "sandbox")
+	mustContain(t, out, "history", "done_run", "quick_test")
+}
+
+// TestHistSLURM drives mhist on the SLURM idiom — the sacct stub's pipe-delimited rows,
+// including the FAILED one, render in the history table.
+func TestHistSLURM(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queue", "hist", "--node", "sandslurm")
+	mustContain(t, out, "history", "done_run", "failed_run")
+}
+
 // repoRoot is the mayhl_utils checkout root, from the package dir (internal/integration).
 func repoRoot(t *testing.T) string {
 	t.Helper()
