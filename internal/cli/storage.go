@@ -161,8 +161,8 @@ func kbHuman(kb string) string {
 	return render.HumanBytes(n * 1024)
 }
 
-// countHuman thins a big file count (1234567 → "1.2M", 41250 → "41.3k"); small counts
-// stay exact. "" for blank/non-numeric.
+// countHuman thins a big count — files here, allocation hours in usage — (1234567 →
+// "1.2M", 41250 → "41.2k"); small counts stay exact. "" for blank/non-numeric.
 func countHuman(s string) string {
 	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 	if err != nil {

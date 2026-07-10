@@ -75,7 +75,7 @@ func planStorageCols(rows []StorageRow) []storageCol {
 		storageCol{"Location", func(r StorageRow) string { return r.Location }},
 		storageCol{"Used", func(r StorageRow) string { return dash(r.DiskUsed) }},
 	)
-	if anyQuota(rows, func(r StorageRow) string { return r.DiskQuota }) {
+	if anyReported(rows, func(r StorageRow) string { return r.DiskQuota }) {
 		cols = append(
 			cols,
 			storageCol{"Quota", func(r StorageRow) string { return dash(r.DiskQuota) }},
@@ -83,7 +83,7 @@ func planStorageCols(rows []StorageRow) []storageCol {
 		)
 	}
 	cols = append(cols, storageCol{"Files", func(r StorageRow) string { return dash(r.FilesUsed) }})
-	if anyQuota(rows, func(r StorageRow) string { return r.FilesQuota }) {
+	if anyReported(rows, func(r StorageRow) string { return r.FilesQuota }) {
 		cols = append(
 			cols,
 			storageCol{"FileQuota", func(r StorageRow) string { return dash(r.FilesQuota) }},
@@ -91,19 +91,6 @@ func planStorageCols(rows []StorageRow) []storageCol {
 		)
 	}
 	return cols
-}
-
-// anyQuota reports whether any row carries a real (non-blank, non-zero) quota in the
-// given field. Values arrive preformatted, so zero is "0" (counts) or "0B" (sizes).
-func anyQuota(rows []StorageRow, get func(StorageRow) string) bool {
-	for _, r := range rows {
-		switch strings.TrimSpace(get(r)) {
-		case "", "0", "0B":
-		default:
-			return true
-		}
-	}
-	return false
 }
 
 // StoragePct grades a fullness percent into a display label + house hue — quota headroom
