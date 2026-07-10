@@ -111,8 +111,7 @@ func pullDotfiles(target, configDir string, yes bool) error {
 		return strings.TrimSpace(string(out)), err
 	}
 	if _, err := git("rev-parse", "--git-dir"); err != nil {
-		render.Err(configDir + " is not a git repo — .config reconcile needs a checkout")
-		os.Exit(1)
+		return runErr("%s is not a git repo — .config reconcile needs a checkout", configDir)
 	}
 	fetchURL := target + ":.config" // git scp-syntax; path is relative to the box's home
 	render.Info("Fetching .config ← " + target + " …")
@@ -157,9 +156,10 @@ func pullDotfiles(target, configDir string, yes bool) error {
 		if stashed {
 			_, _ = git("stash", "pop", "-q") // tree is back at HEAD, so this restores cleanly
 		}
-		render.Err("auto-merge hit conflicts — .config left unchanged (pre-merge state at branch mu-sync-backup)")
-		render.Info("reconcile by hand: cd " + configDir + " && git merge FETCH_HEAD\n" + strings.TrimSpace(out))
-		os.Exit(4)
+		// Exit 4 is a distinct "reconcile hit conflicts" signal (vs the 1/2 tiers in exit.go);
+		// the by-hand steps + conflict output tail dim below the headline via logLine's indent.
+		return &exitErr{code: 4, msg: "auto-merge hit conflicts — .config left unchanged (pre-merge state at branch mu-sync-backup)\n" +
+			"reconcile by hand: cd " + configDir + " && git merge FETCH_HEAD\n" + strings.TrimSpace(out)}
 	}
 	kind := "merged"
 	if ff {

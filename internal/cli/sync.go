@@ -105,8 +105,7 @@ func noFileComp(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCo
 func runSync(nodeOrTarget string, o syncOpts) error {
 	target, err := hpc.Resolve(nodeOrTarget)
 	if err != nil {
-		render.Err(err.Error())
-		os.Exit(2)
+		return usageErr("%s", err)
 	}
 	if err := syncConfigTOML(target, o); err != nil {
 		return err
@@ -128,8 +127,7 @@ func runSync(nodeOrTarget string, o syncOpts) error {
 func syncConfigTOML(target string, o syncOpts) error {
 	localPath := config.Path()
 	if localPath == "" {
-		render.Err("no local config.toml (set MU_CONFIG_FILE or MU_ROOT)")
-		os.Exit(1)
+		return runErr("no local config.toml (set MU_CONFIG_FILE or MU_ROOT)")
 	}
 	localBytes, rerr := os.ReadFile(localPath)
 	if rerr != nil && (!o.pull || !os.IsNotExist(rerr)) { // pull tolerates a missing local (fresh)
@@ -149,8 +147,7 @@ func syncConfigTOML(target string, o syncOpts) error {
 		if o.pull {
 			src = target + "'s config.toml (check --mu-root)"
 		}
-		render.Err("nothing to sync — " + src + " is empty or missing")
-		os.Exit(1)
+		return runErr("nothing to sync — %s is empty or missing", src)
 	}
 	rest, _ := splitTOMLSections(srcText, "ssh", "sshfs")
 	_, seams := splitTOMLSections(dstText, "ssh", "sshfs")

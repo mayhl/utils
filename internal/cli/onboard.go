@@ -73,26 +73,21 @@ type onboard struct {
 func (o *onboard) run(nodeOrTarget string) error {
 	target, err := hpc.Resolve(nodeOrTarget)
 	if err != nil {
-		render.Err(err.Error())
-		os.Exit(2)
+		return usageErr("%s", err)
 	}
 	// Preflight (local): a real ssh target, a toolchain to cross-build with, and a
 	// .config git repo whose whitelist keeps secrets out of the push.
 	if strings.Contains(target, " ") {
-		render.Err("target has a space — pass a node name or a real user@host")
-		os.Exit(2)
+		return usageErr("target has a space — pass a node name or a real user@host")
 	}
 	if _, err := exec.LookPath("go"); err != nil {
-		render.Err("go not on PATH (needed to cross-build mu)")
-		os.Exit(1)
+		return runErr("go not on PATH (needed to cross-build mu)")
 	}
 	if !isDir(filepath.Join(o.repo, "cmd", "mu")) {
-		render.Err(fmt.Sprintf("no cmd/mu under --repo %s", o.repo))
-		os.Exit(1)
+		return runErr("no cmd/mu under --repo %s", o.repo)
 	}
 	if err := exec.Command("git", "-C", o.configDir, "rev-parse", "--git-dir").Run(); err != nil {
-		render.Err(fmt.Sprintf("--config-dir %s is not a git repo", o.configDir))
-		os.Exit(1)
+		return runErr("--config-dir %s is not a git repo", o.configDir)
 	}
 
 	tag := ""
@@ -104,8 +99,7 @@ func (o *onboard) run(nodeOrTarget string) error {
 	// Connectivity (real ssh; skipped under --dry-run).
 	if !o.dryRun {
 		if err := exec.Command("ssh", "-q", "-o", "ConnectTimeout=15", target, "true").Run(); err != nil {
-			render.Err(fmt.Sprintf("cannot ssh to %s (auth/PKI? host? must be a real ssh target)", target))
-			os.Exit(1)
+			return runErr("cannot ssh to %s (auth/PKI? host? must be a real ssh target)", target)
 		}
 		render.OK("ssh ok")
 	}

@@ -9,7 +9,9 @@ import (
 // helpers and RunE funcs return it instead of calling os.Exit, so the single exit lives
 // in main (via ExitCode) and the message renders once through HouseError. Codes: 2 =
 // usage/config (bad flags, an unconfigured cluster, off-HPC with no --node), 1 = runtime
-// (a remote/local command failed). A clean no-op is a nil error, not an exitErr.
+// (a remote/local command failed). A command may set another code via the struct directly for a
+// distinct signal (dotfiles uses 4 for a .config reconcile conflict). A clean no-op is a nil
+// error, not an exitErr.
 type exitErr struct {
 	code int
 	msg  string
