@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,15 +72,15 @@ func hpcStorageCmd() *cobra.Command {
 			)
 			switch {
 			case node != "":
-				label, out, err = fetchStorage(node)
+				label, out, err = fetchSite(node, showStorageCmd)
 			case local:
-				label, out, err = fetchStorageLocal()
+				label, out, err = fetchSiteLocal(showStorageCmd)
 			case !term.IsTerminal(os.Stdin.Fd()):
 				var data []byte
 				data, err = io.ReadAll(os.Stdin)
 				label, out = "storage", string(data)
 			default:
-				label, out, err = fetchStorageLocal()
+				label, out, err = fetchSiteLocal(showStorageCmd)
 			}
 			if err != nil {
 				return err
@@ -120,107 +119,11 @@ func hpcStorageCmd() *cobra.Command {
 	return c
 }
 
-// collateStorage fans out show_storage over the given targets concurrently (bounded per
-// fetch, like collateJobs), tagging each parsed row's System with the target label — the
-// config cluster name, the user's vocabulary, over whatever name the site tool prints.
-// Down targets degrade to "label: reason" notes, never a hang or total failure.
+// collateStorage is the -f/--fleet / -a/--all storage view: the shared site-command
+// fan-out with each row's System tagged by cluster label.
 func collateStorage(targets []queueTarget, scope string) (string, []queue.StorageInfo, []string, error) {
-	if len(targets) == 0 {
-		if scope == "fleet" {
-			return "", nil, nil, usageErr("nothing in the fleet — set a `fleet = [...]` node list or `active = true` on a cluster, or use --all")
-		}
-		return "", nil, nil, usageErr("no clusters configured — add clusters to config.toml")
-	}
-	if err := hpc.EnsureTicket(); err != nil {
-		return "", nil, nil, runErr("%s", err)
-	}
-	type result struct {
-		label string
-		rows  []queue.StorageInfo
-		err   error
-	}
-	results := make([]result, len(targets))
-	sp := render.NewSpinner(fmt.Sprintf("Collating storage 0/%d", len(targets)))
-	sp.Start()
-	done := make(chan struct{}, len(targets))
-	for i := range targets {
-		go func(i int) {
-			defer func() { done <- struct{}{} }()
-			t := targets[i]
-			results[i] = result{label: t.label}
-			if t.node == "" {
-				results[i].err = errors.New("no nodes configured")
-				return
-			}
-			target, err := hpc.Resolve(t.node)
-			if err != nil {
-				results[i].err = err
-				return
-			}
-			out, err := hpc.RemoteExecTimeout(target, showStorageCmd, collateTimeout)
-			if err != nil {
-				results[i].err = err
-				return
-			}
-			rows := queue.ParseShowStorage(out)
-			for j := range rows {
-				rows[j].System = t.label
-			}
-			results[i].rows = rows
-		}(i)
-	}
-	for n := 1; n <= len(targets); n++ {
-		<-done
-		sp.SetMessage(fmt.Sprintf("Collating storage %d/%d", n, len(targets)))
-	}
-	sp.Stop()
-	label := scope
-	if scope == "all" {
-		label = "all systems"
-	}
-	var infos []queue.StorageInfo
-	var down []string
-	for _, r := range results {
-		if r.err != nil {
-			down = append(down, fmt.Sprintf("%s: %v", r.label, r.err))
-			continue
-		}
-		infos = append(infos, r.rows...)
-	}
-	return label, infos, down, nil
-}
-
-// fetchStorage runs show_storage on node over remote-exec and returns its raw output.
-// Like fetchQueues, a broken/absent site command degrades to a warning and empty output,
-// never a crash; a dead ticket aborts.
-func fetchStorage(node string) (string, string, error) {
-	target, err := hpc.Resolve(node)
-	if err != nil {
-		return "", "", usageErr("%s", err)
-	}
-	if err := hpc.EnsureTicket(); err != nil {
-		return "", "", runErr("%s", err)
-	}
-	out, err := hpc.RemoteExec(target, showStorageCmd)
-	if err != nil {
-		render.Warn(fmt.Sprintf("%s: show_storage failed (broken or unsupported on this system?): %v", node, err))
-		return node, "", nil
-	}
-	return node, out, nil
-}
-
-// fetchStorageLocal runs show_storage on the current cluster (no ssh) — the on-HPC path.
-func fetchStorageLocal() (string, string, error) {
-	self, _ := currentCluster()
-	if self == "" {
-		return "", "", usageErr("not on an HPC cluster — use `mu hpc storage --node <n>` or pipe `show_storage`")
-	}
-	out, err := hpc.LocalExec(showStorageCmd)
-	if err != nil {
-		render.Warn(fmt.Sprintf("%s: local show_storage failed (broken or unsupported here?): %v", self, err))
-		return self, "", nil
-	}
-	return self, out, nil
+	return collateSite(targets, scope, showStorageCmd, queue.ParseShowStorage,
+		func(r *queue.StorageInfo, label string) { r.System = label })
 }
 
 // toStorageRows maps parsed StorageInfo to render's plain StorageRow: KB → human sizes,
