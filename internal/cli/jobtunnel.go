@@ -26,29 +26,33 @@ import (
 // workstation; the login node relays). -I instead allocates an interactive
 // shell (qsub -I / salloc) under a real tty.
 func jobTunnelCmd() *cobra.Command {
-	var node, script, jobID, account, queue_ string
+	var node, jobID, account, queue_ string
 	var port, localPort int
-	var interactive, yes bool
+	var yes bool
 	var wait, poll time.Duration
 	c := &cobra.Command{
-		Use:   "tunnel",
-		Short: "Submit a job and tunnel a port to its compute node (or -I for a shell).",
-		Long: "The compute-node access flow: submit -s <script> (a service — jupyter, a\n" +
-			"dashboard) on the target cluster, wait until the scheduler reports it running\n" +
-			"and names its node, then open localhost:<-l> → <node>:<-p> through the login\n" +
-			"node and hold it until Ctrl-C. --job <id> adopts an already-submitted job\n" +
-			"instead of submitting. -I skips the tunnel entirely and opens an interactive\n" +
-			"allocation (qsub -I / salloc) on a real tty.\n\n" +
-			"    mu job tunnel -N hpc1 -s ~/serve.sh -p 8888\n" +
-			"    mu job tunnel -N hpc1 --job 4501 -p 8888 -l 9999\n" +
-			"    mu job tunnel -N hpc1 -I -q debug",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			if interactive {
-				return jobInteractive(node, account, queue_)
+		Use:   "tunnel [script]",
+		Short: "Submit a job and tunnel a port to its compute node.",
+		Long: "The service-tunnel flow: submit <script> (something that serves a port —\n" +
+			"jupyter, a dashboard) on the target cluster, wait until the scheduler reports\n" +
+			"it running and names its node, then open localhost:<-l> → <node>:<-p> through\n" +
+			"the login node and hold it until Ctrl-C — the job keeps running; reattach\n" +
+			"with --job <id>, which also adopts any already-submitted job instead of\n" +
+			"submitting. One held connection carries the whole flow. For an interactive\n" +
+			"shell on a compute node see `mu job shell`. Front-door: `mtunnel`.\n\n" +
+			"    mu job tunnel ~/serve.sh -N hpc1 -p 8888\n" +
+			"    mu job tunnel --job 4501 -N hpc1 -p 8888 -l 9999",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			script := ""
+			if len(args) == 1 {
+				script = args[0]
 			}
 			if script == "" && jobID == "" {
-				return usageErr("script-mode tunnel needs -s <script> or --job <id> (or -I for a shell)")
+				return usageErr("tunnel needs a <script> to submit or --job <id>")
+			}
+			if script != "" && jobID != "" {
+				return usageErr("<script> and --job are exclusive — submit or adopt, not both")
 			}
 			if port == 0 {
 				return usageErr("needs -p <port> — the service port on the compute node")
@@ -59,22 +63,46 @@ func jobTunnelCmd() *cobra.Command {
 			return jobTunnel(node, script, jobID, account, queue_, port, localPort, yes, wait, poll)
 		},
 	}
+	setHelpArgs(c, [2]string{"[script]", "service script to submit, path resolved ON the target"})
 	f := c.Flags()
 	f.StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
-	f.StringVarP(&script, "script", "s", "", "service script to submit, path resolved ON the target")
 	f.StringVar(&jobID, "job", "", "adopt this already-submitted job instead of submitting")
 	f.IntVarP(&port, "port", "p", 0, "service port on the compute node")
 	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: same as --port)")
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	f.StringVarP(&queue_, "queue", "q", "", "queue / partition")
-	f.BoolVarP(&interactive, "interactive", "I", false, "interactive allocation (qsub -I / salloc) instead of a tunnel")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.DurationVar(&wait, "wait", 15*time.Minute, "give up if the job isn't running by then")
 	f.DurationVar(&poll, "poll", 5*time.Second, "scheduler poll interval while waiting")
-	c.MarkFlagsMutuallyExclusive("script", "job")
-	c.MarkFlagsMutuallyExclusive("interactive", "script")
-	c.MarkFlagsMutuallyExclusive("interactive", "job")
-	c.MarkFlagsMutuallyExclusive("interactive", "port")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
+	return c
+}
+
+// jobShellCmd is `mu job shell`: an interactive allocation on a compute node —
+// the scheduler's own qsub -I / salloc under a real tty (RemoteExec is tty-less
+// by design, so this path builds its own `ssh -t`). The tunnel's sibling: shell
+// = you on the node, tunnel = a service's port. FUTURE: -p adds a tunnel to the
+// allocated node once the scheduler names it (the mux makes that composable).
+func jobShellCmd() *cobra.Command {
+	var node, account, queue_ string
+	c := &cobra.Command{
+		Use:   "shell",
+		Short: "Open an interactive allocation on a compute node (qsub -I / salloc).",
+		Long: "Request an interactive allocation through the target's scheduler and hand you\n" +
+			"the shell on the compute node, tty and all. Exiting the shell releases the\n" +
+			"allocation. For tunnelling a service's port instead, see `mu job tunnel`.\n" +
+			"Front-door: `mshell`.\n\n" +
+			"    mu job shell -N hpc1 -q debug",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return jobInteractive(node, account, queue_)
+		},
+	}
+	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
+	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
+	c.Flags().StringVarP(&queue_, "queue", "q", "", "queue / partition")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})

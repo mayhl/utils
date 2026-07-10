@@ -1082,7 +1082,7 @@ func TestJobTunnel(t *testing.T) {
 
 	var out strings.Builder
 	mu := exec.Command(muBin, "job", "tunnel", "-N", "sandbox",
-		"-s", "/home/tester/serve.sh", "-p", "18452", "-l", "18453", "-y",
+		"/home/tester/serve.sh", "-p", "18452", "-l", "18453", "-y",
 		"--poll", "1s", "--wait", "30s")
 	mu.Env = muEnv()
 	mu.Stdout, mu.Stderr = &out, &out
