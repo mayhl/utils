@@ -6,14 +6,19 @@
 # one box so both scheduler idioms are exercised: sandbox=PBS, sandslurm=SLURM.
 hpc_user = "tester"
 
+# cores_per_node / queue_class differ between the two so the queues tests can tell the
+# clusters apart (one box, one show_queues stub): sbpbs derives MaxNodes (4096/128=32),
+# sbslurm forces a distinctive class label instead.
 [[cluster]]
-name      = "sbpbs"
-domain    = "local"
-nodes     = ["sandbox"]
-scheduler = "pbs"
+name           = "sbpbs"
+domain         = "local"
+nodes          = ["sandbox"]
+scheduler      = "pbs"
+cores_per_node = 128
 
 [[cluster]]
-name      = "sbslurm"
-domain    = "local"
-nodes     = ["sandslurm"]
-scheduler = "slurm"
+name        = "sbslurm"
+domain      = "local"
+nodes       = ["sandslurm"]
+scheduler   = "slurm"
+queue_class = { standard = "bigmem" }

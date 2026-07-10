@@ -45,12 +45,14 @@ RUN for u in tester tester-bash; do \
 RUN sh -c 'for p in /usr/share/modules/init/zsh /usr/share/Modules/init/zsh; do \
              [ -f "$p" ] && echo ". $p" >> /etc/zprofile; done; true'
 
-# Tier-1 fake schedulers (PBS qstat/qdel + SLURM squeue/sacct/scontrol/scancel) on
-# PATH — emit realistic output so mu's queue read-side (mstat/minfo/mhist) parses +
-# renders without real daemons. Swap for real slurmctld/pbs_server for write-side later.
+# Tier-1 fake schedulers (PBS qstat/qdel + SLURM squeue/sacct/scontrol/scancel) plus the
+# show_queues site wrapper on PATH — emit realistic output so mu's queue read-side
+# (mstat/minfo/mhist/queues) parses + renders without real daemons. Swap for real
+# slurmctld/pbs_server for write-side later.
 COPY stubs/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/qstat /usr/local/bin/qdel /usr/local/bin/squeue \
-             /usr/local/bin/sacct /usr/local/bin/scontrol /usr/local/bin/scancel
+             /usr/local/bin/sacct /usr/local/bin/scontrol /usr/local/bin/scancel \
+             /usr/local/bin/show_queues
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd","-D","-e"]

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake show_queues for the sandbox (same wide format on PBS and SLURM — one stub serves
+# both cluster aliases). Header/ruler verbatim from a real system; rows exercise the
+# default-view filters: up Exe (standard), stopped (debug, Y N), routing (route, Rou),
+# unreported flags kept (bare, - -), disabled (frozen, N N). Counts are box-distinct
+# (17/6/2176/640) so tests prove the output crossed ssh, not a local fixture.
+cat <<'EOF'
+
+QUEUE INFORMATION:
+                |---------- Limits ---------| |-------- Counts --------|
+                   Maximum   Max   Min    Max  Jobs  Jobs  Cores   Cores  Queue
+Queue Name        Walltime  Jobs Cores  Cores   Run  Pend    Run    Pend Typ E R
+=============== ========== ===== ===== ====== ===== ===== ====== ======= =======
+standard        168:00:00     50     1   4096    17     6   2176     640 Exe Y Y
+debug            01:00:00     10     1    512     2     0    128       0 Exe Y N
+route           168:00:00     50     1   4096     0     0      0       0 Rou Y Y
+bare            168:00:00     50     1   4096     4     1    512     128 Exe - -
+frozen          168:00:00     50     1   4096     0     0      0       0 Exe N N
+
+NODE INFORMATION:
+                     Nodes       Cores         Cores        Cores         Cores
+Node Type          Available *  Per Node  =  Available -   Running  =      Free
+===============   ==========   ==========   ==========   ==========   ==========
+compute                  100          128        12800         6400         6400
+EOF

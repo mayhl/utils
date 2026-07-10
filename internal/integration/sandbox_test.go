@@ -164,6 +164,33 @@ func TestQueueSLURM(t *testing.T) {
 	mustContain(t, out, "8359638", "run_wave", "mesh_gen", "nest_grid")
 }
 
+// TestQueuesPBS drives `mu hpc queues --node sandbox` through the box's show_queues stub.
+// Default view: up Exe queues survive (standard, with the box-distinct run count 17 and
+// MaxNodes 32 from sbpbs cores_per_node=128), routing/down queues are filtered with the
+// not-up warning; -a brings them back.
+func TestQueuesPBS(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queues", "--node", "sandbox")
+	mustContain(t, out, "standard", "168:00:00", "17", "32", "not up")
+	if strings.Contains(out, "route") || strings.Contains(out, "frozen") {
+		t.Errorf("routing/down queue leaked into the default view:\n%s", out)
+	}
+	all := mu(t, "hpc", "queues", "--node", "sandbox", "-a")
+	mustContain(t, all, "route", "frozen", "debug")
+}
+
+// TestQueuesSLURM drives `mu hpc queues --node sandslurm` — same stub, other cluster:
+// the sbslurm queue_class override must relabel standard's class, and with no
+// cores_per_node there the MaxNodes column is dropped entirely (no stray "32").
+func TestQueuesSLURM(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queues", "--node", "sandslurm")
+	mustContain(t, out, "standard", "bigmem", "17")
+	if strings.Contains(out, "32") {
+		t.Errorf("MaxNodes rendered without cores_per_node configured:\n%s", out)
+	}
+}
+
 // repoRoot is the mayhl_utils checkout root, from the package dir (internal/integration).
 func repoRoot(t *testing.T) string {
 	t.Helper()
