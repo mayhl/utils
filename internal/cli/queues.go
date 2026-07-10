@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -149,12 +148,12 @@ func fetchQueuesLocal() (string, []queue.QueueInfo, error) {
 	if self == "" {
 		return "", nil, usageErr("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
 	}
-	out, err := exec.Command("bash", "-lc", showQueuesCmd).Output()
+	out, err := hpc.LocalExec(showQueuesCmd)
 	if err != nil {
 		render.Warn(fmt.Sprintf("%s: local show_queues failed (broken or unsupported here?): %v", self, err))
 		return self, nil, nil
 	}
-	return self, queue.ParseShowQueues(string(out)), nil
+	return self, queue.ParseShowQueues(out), nil
 }
 
 // execQueues keeps only submittable (Exe) queues — part of the default `mu hpc queues`

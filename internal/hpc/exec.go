@@ -38,6 +38,32 @@ func RemoteExec(target, remoteCmd string) (string, error) {
 	return stdout.String(), nil
 }
 
+// LocalExec is the on-cluster counterpart to RemoteExec: it runs remoteCmd on the
+// current login node with no ssh (mu is already on the box). Same login bash (`bash -lc`)
+// as the remote arm so the scheduler command resolves identically — whether it's a PATH
+// binary or a profile-defined wrapper — and the same benign login-profile noise is
+// filtered from stderr. Two guarantees are inherited from RemoteExec by construction, not
+// a shell pipe: only the interactive shell shows the login banner (a non-interactive
+// `bash -lc` triggers no MOTD, the local mirror of the dispatcher's `ssh -q`), and stdout
+// and stderr stay in SEPARATE buffers so login noise never contaminates the parsed stdout
+// and the command's real exit code survives (a `2>&1 | grep` would lose both — the
+// dispatcher avoids it with `2> >(grep …)` process substitution; here Go buffers do it).
+// No reachability probe on the error path: there's no host to dial, so a failure is just
+// its exit-code text.
+func LocalExec(remoteCmd string) (string, error) {
+	cmd := exec.Command("bash", "-lc", remoteCmd)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if s := filterStderr(stderr.String()); s != "" {
+		fmt.Fprint(os.Stderr, s)
+	}
+	if err != nil {
+		return stdout.String(), errors.New(exitText(err))
+	}
+	return stdout.String(), nil
+}
+
 // RemoteExecTimeout is RemoteExec bounded by a deadline — for concurrent
 // cross-cluster fan-out where a wedged or unreachable host must never hang the
 // whole collate. ssh ConnectTimeout fails an unreachable host fast; the context

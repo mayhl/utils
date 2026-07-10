@@ -3,7 +3,6 @@ package cli
 import (
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -156,13 +155,13 @@ func fetchJobsLocal(who userSel) (string, []queue.Job, error) {
 	if cmd == "" {
 		return "", nil, errNoScheduler(self)
 	}
-	// Same command as the remote fetch, run in a local shell (bash for the quoted
-	// -o format arg); the login shell already has the scheduler on PATH.
-	out, err := exec.Command("bash", "-c", cmd).Output()
+	// Same command as the remote fetch, run through the local exec seam (bash -lc,
+	// stderr filtered) — the on-cluster mirror of hpc.RemoteExec.
+	out, err := hpc.LocalExec(cmd)
 	if err != nil {
 		return "", nil, runErr("%s: local queue fetch failed: %v", self, err)
 	}
-	return self, parse(string(out)), nil
+	return self, parse(out), nil
 }
 
 // userSel is the WHO axis of a fetch: whose jobs to show. Exactly one applies, in

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -194,25 +193,24 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 		if cmd == "" {
 			return nil, fmt.Errorf("no scheduler configured for %s", self)
 		}
-		out, err := exec.Command("bash", "-c", cmd).Output()
+		out, err := hpc.LocalExec(cmd)
 		if err != nil {
 			return nil, err
 		}
-		return parse(string(out)), nil
+		return parse(out), nil
 	}
 	run = func(c string) error {
-		out, err := exec.Command("bash", "-c", c).CombinedOutput()
+		out, err := hpc.LocalExec(c)
 		if err != nil {
-			return fmt.Errorf("%s: command failed: %w: %s", self, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("%s: command failed: %w", self, err)
 		}
-		if s := strings.TrimSpace(string(out)); s != "" {
+		if s := strings.TrimSpace(out); s != "" {
 			render.Detail(s)
 		}
 		return nil
 	}
 	capture = func(c string) (string, error) {
-		out, err := exec.Command("bash", "-c", c).Output()
-		return string(out), err
+		return hpc.LocalExec(c)
 	}
 	return
 }

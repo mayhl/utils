@@ -45,6 +45,23 @@ func TestExitText(t *testing.T) {
 	}
 }
 
+// TestLocalExec: the on-cluster exec seam returns a command's stdout on success and a
+// terse exit-code reason on failure — separate buffers keep stdout clean and preserve
+// the real exit code (no shell pipe).
+func TestLocalExec(t *testing.T) {
+	out, err := LocalExec("echo hi")
+	if err != nil {
+		t.Fatalf("LocalExec(echo) err = %v", err)
+	}
+	if strings.TrimSpace(out) != "hi" {
+		t.Errorf("LocalExec(echo) out = %q, want %q", out, "hi")
+	}
+	// a 127 exit maps through exitText to the not-found reason, not a raw wait-status
+	if _, err := LocalExec("exit 127"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("LocalExec(exit 127) err = %v, want it to contain %q", err, "not found")
+	}
+}
+
 func TestHostOf(t *testing.T) {
 	cases := map[string]string{
 		"user@login.example": "login.example",
