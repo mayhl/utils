@@ -6,7 +6,6 @@
 package git
 
 import (
-	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,7 +39,7 @@ type Signwip struct {
 }
 
 // signedHash returns the commit hash if line ("hash %G?") is Good-signed (2nd field "G"),
-// else "", false. The per-line predicate of signedBase — pure, so it's unit-tested.
+// else "", false. The per-line predicate of prefixBase — pure, so it's unit-tested.
 func signedHash(line string) (string, bool) {
 	if f := strings.Fields(line); len(f) >= 2 && f[1] == "G" {
 		return f[0], true
@@ -48,54 +47,38 @@ func signedHash(line string) (string, bool) {
 	return "", false
 }
 
-// signedBase returns the newest Good-signed commit hash. It STREAMS git log and stops
-// at the first match, closing the pipe so git (and its per-commit gpg verify) halts at
-// the base instead of walking all of history — mirroring the shell's `... | awk '…exit'`.
-// Reading the whole output instead would gpg-verify every commit (seconds on real repos).
-func signedBase() (string, error) {
-	cmd := exec.Command("git", "log", "--format=%H %G?")
-	stdout, err := cmd.StdoutPipe()
+// wipBase resolves the boundary the signwip workflow stacks on: the top of the
+// CONTIGUOUS signed prefix above the pushed floor (the upstream merge-base; no upstream
+// → "" = the root, so a fresh repo bootstraps). Not simply the newest signed commit — a
+// signed commit can sit above unsigned work (a [unreviewed] skipped mid-stack and
+// reviewed later, or a pinentry-failed sign), and those buried commits must stay in
+// range. Pushed history is never treated as WIP, signed or not. gpg verification is
+// floor-bounded (unpushed commits only). Mirrors the shell scripts' base block.
+func wipBase() (string, error) {
+	floor, ferr := out("merge-base", "HEAD", "@{u}")
+	if ferr != nil {
+		floor = "" // no upstream — the prefix walk starts at the root
+	}
+	raw, err := out("log", "--reverse", "--format=%H %G?", wipRange(floor))
 	if err != nil {
 		return "", err
 	}
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-	base := ""
-	sc := bufio.NewScanner(stdout)
-	for sc.Scan() {
-		if h, ok := signedHash(sc.Text()); ok {
-			base = h
-			break
-		}
-	}
-	_ = stdout.Close() // stop git early (SIGPIPE); ignore the resulting wait error
-	_ = cmd.Wait()
-	return base, nil
+	return prefixBase(splitNonEmpty(raw), floor), nil
 }
 
-// wipBase resolves the boundary the signwip workflow stacks on: the newest signed
-// commit, floored at the upstream merge-base — pushed history is never treated as WIP,
-// signed or not (a repo adopted mid-history can carry pushed unsigned commits). A repo
-// with neither (all-local, never signed) returns "" and the WIP range is all of history,
-// so the workflow bootstraps in a fresh repo. Mirrors the shell scripts' base block.
-func wipBase() (string, error) {
-	base, err := signedBase()
-	if err != nil {
-		return "", err
+// prefixBase walks the "hash %G?" lines (oldest→newest) and returns the last hash of
+// the leading all-signed run, or floor when the very first commit is unsigned. The pure
+// core of wipBase — the sandwich case (unsigned under signed) is unit-tested here.
+func prefixBase(lines []string, floor string) string {
+	base := floor
+	for _, ln := range lines {
+		h, ok := signedHash(ln)
+		if !ok {
+			break
+		}
+		base = h
 	}
-	floor, ferr := out("merge-base", "HEAD", "@{u}")
-	if ferr != nil || floor == "" {
-		return base, nil // no upstream — the signed base (possibly none) stands
-	}
-	if base == "" {
-		return floor, nil
-	}
-	// The floor wins when the signed base sits at or below the pushed boundary.
-	if exec.Command("git", "merge-base", "--is-ancestor", base, floor).Run() == nil {
-		return floor, nil
-	}
-	return base, nil
+	return base
 }
 
 // wipRange is the log range covering the WIP above base — all of history when there is

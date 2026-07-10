@@ -139,3 +139,27 @@ func TestClassifySign(t *testing.T) {
 		}
 	}
 }
+
+// TestPrefixBase pins the contiguous-signed-prefix walk — notably the SANDWICH case
+// (unsigned under signed, from a pinentry-failed sign or a mid-stack [unreviewed]):
+// the base must stop BELOW the unsigned commit so it stays in the WIP range.
+func TestPrefixBase(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		floor string
+		want  string
+	}{
+		{"all signed", []string{"a G", "b G", "c G"}, "f", "c"},
+		{"all unsigned", []string{"a N", "b N"}, "f", "f"},
+		{"prefix then wip", []string{"a G", "b G", "c N", "d N"}, "f", "b"},
+		{"sandwich stops below", []string{"a G", "b N", "c G", "d G"}, "f", "a"},
+		{"no floor, unsigned first", []string{"a N"}, "", ""},
+		{"empty range", nil, "f", "f"},
+	}
+	for _, c := range cases {
+		if got := prefixBase(c.lines, c.floor); got != c.want {
+			t.Errorf("%s: prefixBase = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
