@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mayhl/mayhl_utils/internal/project"
 )
 
 // caseDir builds a submit dir shaped like a case: inputs, a subdir, an executable
@@ -194,5 +196,23 @@ func TestRunTOMLGit(t *testing.T) {
 	}
 	if !strings.Contains(runTOML("12345", src), "dirty = true") {
 		t.Error("uncommitted case edit not flagged dirty")
+	}
+}
+
+// TestRunTOMLStamp covers iterate-mode staging: no checkout, so the git fields
+// come from the submit-origin stamp `mu project submit` dropped.
+func TestRunTOMLStamp(t *testing.T) {
+	src := caseDir(t)
+	pbsEnv(t, src)
+	stamp := "# submit-origin provenance\n" +
+		"case = \"simulations/funwave/case_a\"\ncommit = \"" + strings.Repeat("a", 40) + "\"\ndirty = true\n"
+	if err := os.WriteFile(filepath.Join(src, project.StampFile), []byte(stamp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	toml := runTOML("12345", src)
+	for _, w := range []string{`case = "simulations/funwave/case_a"`, `commit = "` + strings.Repeat("a", 40) + `"`, "dirty = true"} {
+		if !strings.Contains(toml, w) {
+			t.Errorf("run.toml missing %q:\n%s", w, toml)
+		}
 	}
 }

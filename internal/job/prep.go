@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/mayhl/mayhl_utils/internal/project"
 )
 
 // Prep gives each job its own throwaway copy of the case dir to run in: sibling
@@ -172,11 +174,20 @@ func runTOML(id, submitDir string) string {
 	}
 	if rel, ok := gitOut(submitDir, "rev-parse", "--show-prefix"); ok {
 		fmt.Fprintf(&b, "case = %q\n", strings.TrimSuffix(rel, "/"))
-	}
-	if commit, ok := gitOut(submitDir, "rev-parse", "HEAD"); ok {
-		fmt.Fprintf(&b, "commit = %q\n", commit)
-		status, _ := gitOut(submitDir, "status", "--porcelain", "--", ".")
-		fmt.Fprintf(&b, "dirty = %v\n", status != "")
+		if commit, ok := gitOut(submitDir, "rev-parse", "HEAD"); ok {
+			fmt.Fprintf(&b, "commit = %q\n", commit)
+			status, _ := gitOut(submitDir, "status", "--porcelain", "--", ".")
+			fmt.Fprintf(&b, "dirty = %v\n", status != "")
+		}
+	} else if st, ok := project.ReadStamp(submitDir); ok {
+		// iterate-mode staging is not a checkout — the submit-origin stamp is the carrier
+		if st.Case != "" {
+			fmt.Fprintf(&b, "case = %q\n", st.Case)
+		}
+		if st.Commit != "" {
+			fmt.Fprintf(&b, "commit = %q\n", st.Commit)
+		}
+		fmt.Fprintf(&b, "dirty = %v\n", st.Dirty)
 	}
 	return b.String()
 }
