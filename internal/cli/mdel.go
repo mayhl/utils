@@ -156,7 +156,9 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 			if cmd == "" {
 				return nil, fmt.Errorf("no scheduler configured for %s", node)
 			}
-			hpc.EnsureTicket()
+			if err := hpc.EnsureTicket(); err != nil {
+				return nil, err
+			}
 			out, err := hpc.RemoteExec(target, cmd)
 			if err != nil {
 				return nil, err
@@ -164,7 +166,9 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 			return parse(out), nil
 		}
 		run = func(c string) error {
-			hpc.EnsureTicket()
+			if err := hpc.EnsureTicket(); err != nil {
+				return err
+			}
 			out, err := hpc.RemoteExec(target, c)
 			if err != nil {
 				return fmt.Errorf("%s: command failed: %w", node, err)
@@ -177,7 +181,9 @@ func queueTargetCtx(node string, who userSel) (label, scheduler string, snapshot
 		// capture runs an arbitrary read command over remote-exec and returns its raw
 		// stdout — the read verbs (minfo/mpeek/mhist) print/parse it themselves.
 		capture = func(c string) (string, error) {
-			hpc.EnsureTicket()
+			if err := hpc.EnsureTicket(); err != nil {
+				return "", err
+			}
 			return hpc.RemoteExec(target, c)
 		}
 		return

@@ -131,7 +131,9 @@ func fetchQueues(node string) (string, []queue.QueueInfo, error) {
 	if err != nil {
 		return "", nil, usageErr("%s", err)
 	}
-	hpc.EnsureTicket()
+	if err := hpc.EnsureTicket(); err != nil {
+		return "", nil, runErr("%s", err)
+	}
 	out, err := hpc.RemoteExec(target, showQueuesCmd)
 	if err != nil {
 		render.Warn(fmt.Sprintf("%s: show_queues failed (broken or unsupported on this system?): %v", node, err))

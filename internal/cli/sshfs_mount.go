@@ -170,7 +170,12 @@ func runMount(name string, verbose bool, spinLabel string, quiet bool) int {
 		render.Err(err.Error())
 		return 1
 	}
-	hpc.EnsureTicket()
+	// A dead ticket fails here, not 30s later under the sshfs spinner with a
+	// misleading "server unreachable" — the offline/expired-CAC case.
+	if err := hpc.EnsureTicket(); err != nil {
+		render.Err(err.Error())
+		return 1
+	}
 
 	roTag := ""
 	if m.RO {

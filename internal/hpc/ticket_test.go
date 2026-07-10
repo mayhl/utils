@@ -32,3 +32,28 @@ func TestParseKlistNoTGT(t *testing.T) {
 		t.Errorf("expires should be zero when no TGT line, got %v", info.Expires)
 	}
 }
+
+func TestTicketUsable(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.Local)
+	live := TicketInfo{Present: true, Principal: "alice@REALM", Expires: now.Add(8 * time.Hour)}
+	cases := []struct {
+		name string
+		info TicketInfo
+		want bool
+	}{
+		{"live", live, true},
+		{"absent", TicketInfo{}, false},
+		// The bug that bit: an expired ticket still lists its principal, so
+		// presence alone must not pass.
+		{"expired", TicketInfo{Present: true, Principal: "alice@REALM", Expires: now.Add(-time.Hour)}, false},
+		{"expiring within margin", TicketInfo{Present: true, Principal: "alice@REALM", Expires: now.Add(ticketMargin / 2)}, false},
+		{"unparsed expiry trusted", TicketInfo{Present: true, Principal: "alice@REALM"}, true},
+		{"someone else's ticket", TicketInfo{Present: true, Principal: "mallory@REALM", Expires: now.Add(8 * time.Hour)}, false},
+		{"prefix is not a match", TicketInfo{Present: true, Principal: "alicelong@REALM", Expires: now.Add(8 * time.Hour)}, false},
+	}
+	for _, c := range cases {
+		if got := ticketUsable(c.info, "alice", now); got != c.want {
+			t.Errorf("%s: ticketUsable = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

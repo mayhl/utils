@@ -64,7 +64,9 @@ func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	hpc.EnsureTicket()
+	if err := hpc.EnsureTicket(); err != nil {
+		return runErr("%s", err)
+	}
 
 	src, dst, label := a, target+":"+b, "push "+node
 	if !push {

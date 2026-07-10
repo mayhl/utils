@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/render"
@@ -55,30 +56,32 @@ func NodesHint() string {
 	return "Known nodes: " + strings.Join(names, ", ") + "  ·  see 'mu hpc nodes' for targets."
 }
 
-// EnsureTicket obtains a Kerberos ticket if none is present. Called in the
-// command body (not at construction) so --help and completion never trigger
-// pkinit. It's a no-op on an HPC login/compute node ($BC_HOST set): the ticket is
-// already there from login, so we never touch Kerberos there — mirroring the
-// shell auth seam (mu_auth is `:` on hpc, pkinit on local). Also a no-op when
-// MU_HPC_UNAME is unset or klist is absent.
-func EnsureTicket() {
+// EnsureTicket obtains a Kerberos ticket if the cache lacks a usable one —
+// present, matching, and not expired or about to (an expired ticket still lists
+// its principal, so mere presence isn't enough). Called in the command body (not
+// at construction) so --help and completion never trigger pkinit. It's a no-op on
+// an HPC login/compute node ($BC_HOST set): the ticket is already there from
+// login, so we never touch Kerberos there — mirroring the shell auth seam
+// (mu_auth is `:` on hpc, pkinit on local). Also a no-op when MU_HPC_UNAME is
+// unset or klist is absent. A failed pkinit (offline, CAC/PIN) is an error the
+// caller must abort on — proceeding just buries the cause under an ssh timeout.
+func EnsureTicket() error {
 	if os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc" {
-		return
+		return nil
 	}
 	user := config.HPCUser()
 	if user == "" {
-		return
+		return nil
 	}
-	klist, err := exec.LookPath("klist")
-	if err != nil {
-		return
+	info, hasKlist := Ticket()
+	if !hasKlist || ticketUsable(info, user, time.Now()) {
+		return nil
 	}
-	out, _ := exec.Command(klist).CombinedOutput()
-	if strings.Contains(string(out), user) {
-		return
-	}
-	render.Info(fmt.Sprintf("No Kerberos ticket for %s; running pkinit…", user))
+	render.Info(fmt.Sprintf("No valid Kerberos ticket for %s; running pkinit…", user))
 	cmd := exec.Command("pkinit", user)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pkinit failed — no valid Kerberos ticket for %s (offline, or a CAC/PIN problem?)", user)
+	}
+	return nil
 }

@@ -114,7 +114,9 @@ func collateJobs(targets []queueTarget, scope string, who userSel) (string, []qu
 		}
 		return "", nil, nil, usageErr("no clusters configured — add clusters to config.toml")
 	}
-	hpc.EnsureTicket()
+	if err := hpc.EnsureTicket(); err != nil {
+		return "", nil, nil, runErr("%s", err)
+	}
 	results := make([]clusterResult, len(targets))
 	// Fan out concurrently; a spinner tracks how many of the N cluster fetches have
 	// returned (order is nondeterministic — a down/slow one just ticks the count

@@ -134,7 +134,9 @@ func fetchJobs(node string, who userSel) ([]queue.Job, error) {
 	if cmd == "" {
 		return nil, errNoScheduler(node)
 	}
-	hpc.EnsureTicket()
+	if err := hpc.EnsureTicket(); err != nil {
+		return nil, runErr("%s", err)
+	}
 	out, err := hpc.RemoteExec(target, cmd)
 	if err != nil {
 		return nil, runErr("%s: remote fetch failed: %v", node, err)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // muBin is the mu binary built once for the suite; skipReason is set when the sandbox
@@ -294,6 +295,75 @@ func TestSSHFSRoundtrip(t *testing.T) {
 	mustContain(t, muCfgLocal(t, cfg, "sshfs", "umount", "boxhome"), "unmounted boxhome")
 	if _, err := os.ReadFile(filepath.Join(mdir, "sshfs_marker.txt")); err == nil {
 		t.Error("marker still readable after umount — was it ever a fuse mount?")
+	}
+}
+
+// writeStub drops an executable script into dir.
+func writeStub(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTicketFailureAborts simulates the offline failure that motivated the EnsureTicket
+// rework: klist shows an EXPIRED ticket for tester (mere presence must not pass) and
+// pkinit fails like an unreachable KDC. The mount must abort immediately with the pkinit
+// error — not proceed into sshfs and bury the cause under a 30s "server unreachable"
+// timeout. Runs without MU_SYSTEM=hpc (sshfs verbs are local-only), so Kerberos safety
+// is carried entirely by these failing stubs sitting FIRST on PATH.
+func TestTicketFailureAborts(t *testing.T) {
+	requireSandbox(t)
+	bin := t.TempDir()
+	writeStub(t, bin, "klist", `cat <<'EOF'
+Credentials cache: sandbox
+Default principal: tester@SANDBOX.LOCAL
+
+Valid Starting       Expires              Service Principal
+01/01/2020 00:00:00  01/02/2020 00:00:00  krbtgt/SANDBOX.LOCAL@SANDBOX.LOCAL
+EOF`)
+	writeStub(t, bin, "pkinit", `echo "pkinit: unable to reach KDC" >&2; exit 1`)
+
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.ReadFile(os.Getenv("MU_SANDBOX_CONFIG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte(string(base)+"\n[sshfs]\nroot = \""+root+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	muCfgLocal(t, cfg, "sshfs", "add", "boxhome", "sandbox", "/home/tester") // add never touches Kerberos
+
+	var env []string
+	for _, kv := range muEnv() {
+		switch {
+		case strings.HasPrefix(kv, "MU_CONFIG_FILE="):
+			kv = "MU_CONFIG_FILE=" + cfg
+		case kv == "MU_SYSTEM=hpc":
+			continue
+		case strings.HasPrefix(kv, "PATH="):
+			kv = "PATH=" + bin + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+		}
+		env = append(env, kv)
+	}
+	cmd := exec.Command(muBin, "sshfs", "mount", "boxhome")
+	cmd.Env = env
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("mount succeeded despite a dead ticket:\n%s", out)
+	}
+	mustContain(t, string(out), "pkinit failed")
+	if strings.Contains(string(out), "mounted boxhome") || strings.Contains(string(out), "timed out") {
+		t.Errorf("mount proceeded past the ticket failure:\n%s", out)
+	}
+	// The whole point: fail in the ticket check, not after the 30s sshfs deadline.
+	if e := time.Since(start); e > 15*time.Second {
+		t.Errorf("abort took %s — did it wait out the sshfs spinner?", e)
 	}
 }
 

@@ -3,8 +3,13 @@ package hpc
 import (
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 )
+
+// ticketMargin is how close to expiry a ticket is still trusted: one about to
+// lapse mid-transfer is as bad as an expired one, so it triggers a re-pkinit.
+const ticketMargin = 5 * time.Minute
 
 // TicketInfo is the parsed state of the local Kerberos credential cache.
 type TicketInfo struct {
@@ -33,6 +38,23 @@ func parseKlist(out string) TicketInfo {
 		}
 	}
 	return info
+}
+
+// ticketUsable reports whether info covers user: present, the principal is user
+// (with any realm), and the TGT isn't expired or within ticketMargin of it. An
+// unparsed expiry is trusted — an odd klist format degrades to the presence check
+// rather than forcing a pkinit. Pure (now injected) so it's testable.
+func ticketUsable(info TicketInfo, user string, now time.Time) bool {
+	if !info.Present {
+		return false
+	}
+	if info.Principal != user && !strings.HasPrefix(info.Principal, user+"@") {
+		return false
+	}
+	if info.Expires.IsZero() {
+		return true
+	}
+	return now.Add(ticketMargin).Before(info.Expires)
 }
 
 // Ticket runs klist and returns the parsed credential state. The second return is
