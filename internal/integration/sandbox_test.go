@@ -224,6 +224,79 @@ func TestHistSLURM(t *testing.T) {
 	mustContain(t, out, "history", "done_run", "failed_run")
 }
 
+// muCfgLocal is muCfg without MU_SYSTEM=hpc — for verbs registered local-only (sshfs),
+// which onHPC() would otherwise hide. Ticket safety holds without the env guard: the
+// sandbox bin/ klist stub (first on PATH) reports a live ticket for tester, so
+// EnsureTicket returns before pkinit — and the no-op pkinit stub backstops even that.
+func muCfgLocal(t *testing.T, cfg string, args ...string) string {
+	t.Helper()
+	var env []string
+	for _, kv := range muEnv() {
+		switch {
+		case strings.HasPrefix(kv, "MU_CONFIG_FILE="):
+			kv = "MU_CONFIG_FILE=" + cfg
+		case kv == "MU_SYSTEM=hpc":
+			continue
+		}
+		env = append(env, kv)
+	}
+	cmd := exec.Command(muBin, args...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mu %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+// TestSSHFSRoundtrip drives the sshfs verbs end-to-end against the box: register a mount
+// (add), mount it for real (fuse-t/sshfs on this machine → the box's sshd/sftp), read a
+// box-side marker file THROUGH the mount, unmount, and confirm the marker is unreachable
+// after — proving it was the fuse mount, not a stray local file. A temp [sshfs] root keeps
+// the real registry/mounts tree untouched. Skips when sshfs isn't installed locally.
+func TestSSHFSRoundtrip(t *testing.T) {
+	requireSandbox(t)
+	if _, err := exec.LookPath("sshfs"); err != nil {
+		t.Skip("sshfs not installed here")
+	}
+	if out, err := exec.Command("ssh", "-q", "sandbox",
+		"sh -c 'echo sshfs-marker-ok > sshfs_marker.txt'").CombinedOutput(); err != nil {
+		t.Fatalf("seed marker on box: %v\n%s", err, out)
+	}
+	// EvalSymlinks: macOS TMPDIR is under /var → /private/var, but the mount table
+	// lists resolved paths and IsMounted matches textually — hand mu the real path.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.ReadFile(os.Getenv("MU_SANDBOX_CONFIG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte(string(base)+"\n[sshfs]\nroot = \""+root+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Best-effort teardown so a failed assertion never leaves a live fuse mount for
+	// t.TempDir's cleanup to trip over (registered after TempDir → runs before it).
+	mdir := filepath.Join(root, "mounts", "boxhome")
+	t.Cleanup(func() { _ = exec.Command("umount", mdir).Run() })
+
+	muCfgLocal(t, cfg, "sshfs", "add", "boxhome", "sandbox", "/home/tester")
+	mustContain(t, muCfgLocal(t, cfg, "sshfs", "mount", "boxhome"), "mounted boxhome")
+	got, err := os.ReadFile(filepath.Join(mdir, "sshfs_marker.txt"))
+	if err != nil {
+		t.Fatalf("read through mount: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "sshfs-marker-ok" {
+		t.Errorf("marker mismatch: %q", got)
+	}
+	mustContain(t, muCfgLocal(t, cfg, "sshfs", "umount", "boxhome"), "unmounted boxhome")
+	if _, err := os.ReadFile(filepath.Join(mdir, "sshfs_marker.txt")); err == nil {
+		t.Error("marker still readable after umount — was it ever a fuse mount?")
+	}
+}
+
 // repoRoot is the mayhl_utils checkout root, from the package dir (internal/integration).
 func repoRoot(t *testing.T) string {
 	t.Helper()
