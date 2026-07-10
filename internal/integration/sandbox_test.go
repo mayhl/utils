@@ -784,3 +784,62 @@ func TestCPRoundtrip(t *testing.T) {
 		t.Errorf("roundtrip mismatch: got %q want %q", got, body)
 	}
 }
+
+// TestProjectSubmit drives iterate-mode `mu project submit` end-to-end: a case in a
+// git project under the real $HOME (HomeRel is $HOME-relative and ssh config must
+// stay intact, so no HOME override) is rsynced to the box's $WORKDIR staging, the
+// submit-origin stamp lands beside the inputs, and the fake qsub records that it ran
+// FROM staging.
+func TestProjectSubmit(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-proj-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	caseDir := filepath.Join(base, "proj_a", "simulations", "funwave", "case_a")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, body := range map[string]string{"input.nml": "dt=0.1\n", "run.sh": "#!/bin/bash\n"} {
+		if err := os.WriteFile(filepath.Join(caseDir, f), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proj := filepath.Join(base, "proj_a")
+	gitOut(t, proj, "init", "-q")
+	gitOut(t, proj, "add", "-A")
+	gitOut(t, proj, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "-m", "case")
+	_ = exec.Command("ssh", "sandbox", "rm -f qsub.log").Run()
+
+	cmd := exec.Command(muBin, "project", "submit", caseDir, "-N", "sandbox", "-y")
+	cmd.Env = append(muEnv(), "MU_MODULES=project")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mu project submit: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "1284575.sdb", "submitted")
+
+	rel, err := filepath.Rel(home, caseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := "workdir/" + rel
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).Output()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v", cmd, err)
+		}
+		return string(out)
+	}
+	mustContain(t, box("ls -A "+stage), "input.nml", "run.sh", ".mu-origin.toml")
+	mustContain(t, box("cat "+stage+"/.mu-origin.toml"), "commit = ", "dirty = false",
+		`case = 'simulations/funwave/case_a'`)
+	// qsub must have run from staging, on the script by name.
+	mustContain(t, box("cat qsub.log"), stage+" run.sh")
+}

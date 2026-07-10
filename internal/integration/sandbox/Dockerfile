@@ -50,9 +50,13 @@ RUN sh -c 'for p in /usr/share/modules/init/zsh /usr/share/Modules/init/zsh; do 
 # (mstat/minfo/mhist/queues) parses + renders without real daemons. Swap for real
 # slurmctld/pbs_server for write-side later.
 COPY stubs/ /usr/local/bin/
-RUN chmod +x /usr/local/bin/qstat /usr/local/bin/qdel /usr/local/bin/squeue \
+RUN chmod +x /usr/local/bin/qstat /usr/local/bin/qdel /usr/local/bin/qsub /usr/local/bin/squeue \
              /usr/local/bin/sacct /usr/local/bin/scontrol /usr/local/bin/scancel \
              /usr/local/bin/show_queues /usr/local/bin/show_storage /usr/local/bin/show_usage
+
+# Fake $WORKDIR (the scratch tier a real login shell exports) so staging verbs
+# ($WORKDIR/<rel>) resolve; mu only runs bash -lc, which sources profile.d.
+RUN printf 'export WORKDIR=$HOME/workdir\nmkdir -p "$WORKDIR"\n' > /etc/profile.d/workdir.sh
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd","-D","-e"]

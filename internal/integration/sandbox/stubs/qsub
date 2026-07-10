@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake PBS qsub — record the submission (cwd + args) for test assertions and
+# emit a plausible jobid.
+echo "$PWD ${*:-<no script>}" >> "$HOME/qsub.log"
+echo "1284575.sdb"
