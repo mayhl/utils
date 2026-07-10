@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Fake show_usage for the sandbox (same table on both cluster aliases). The real six-line
+# banner layout: `=` dividers (the anchoring trap), then the fiscal-year line — verbatim
+# in FORM from a live system — framed by one blank line before it and one before the
+# table. mu parses the (22.67%) for the title and the vs-FY pace column. Rows exercise
+# the pace grades: under budget (ABC +37.3), deep overuse (XYZ -12.7), slight (QRS +7.3).
+cat <<'EOF'
+===============================================================
+  Allocation usage for tester — updated nightly.
+===============================================================
+
+Hours Remaining in the Fiscal Year:  1985 (22.67%)
+
+                               Hours     Hours       Hours    Percent Background
+System        Subproject     Allocated    Used     Remaining   Remain Hours Used
+========== ================ ========== ========== ========== ======== ==========
+hpc1       ABC123DEF           1000000     400000     600000   60.00%          0
+hpc1       XYZ789GHI            500000     450000      50000   10.00%      12345
+hpc1       QRS456JKL            200000     140000      60000   30.00%          0
+EOF

@@ -214,6 +214,35 @@ func TestStorageFleet(t *testing.T) {
 	mustContain(t, out, "SYSTEM", "sbpbs", "sbslurm", "/p/home/tester")
 }
 
+// TestUsage drives `mu hpc usage --node sandbox` through the box's show_usage stub: the
+// banner's fiscal-year percent lands in the title, Remain% renders verbatim, and the
+// derived vs-FY pace column shows both the under-budget and overuse margins.
+func TestUsage(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "usage", "--node", "sandbox")
+	mustContain(t, out, "FY 22.67% left", "ABC123DEF", "1.0M", "600.0k", "60.00%", "+37.3%", "-12.7%")
+	if strings.Contains(out, "SYSTEM") || strings.Contains(out, "hpc1") {
+		t.Errorf("System column leaked into the single-cluster view:\n%s", out)
+	}
+}
+
+// TestUsageFleet drives `mu hpc usage -f`: rows tagged by config cluster name, each
+// system pacing against its own banner percent (the stamped FYLeft survives the collate),
+// and the merged table GROUPED by subproject code — both systems' ABC123DEF rows sit
+// together before any QRS456JKL row.
+func TestUsageFleet(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "usage", "-f")
+	// Both systems serve the same stub, so each subproject groups into two rows plus a
+	// bold cross-system total: ABC = 2×1M allocated / 2×600k remaining → 60.00%.
+	mustContain(t, out, "SYSTEM", "sbpbs", "sbslurm", "+37.3%", "total", "2.0M", "1.2M")
+	lastABC := strings.LastIndex(out, "ABC123DEF")
+	firstQRS := strings.Index(out, "QRS456JKL")
+	if lastABC == -1 || firstQRS == -1 || lastABC > firstQRS {
+		t.Errorf("rows not grouped by subproject (last ABC at %d, first QRS at %d):\n%s", lastABC, firstQRS, out)
+	}
+}
+
 // TestInfoPBS drives `mu hpc queue info` (minfo) end-to-end on the PBS idiom: snapshot
 // the queue (qstat -a), resolve the selector, fetch detail (qstat -f), render the house
 // card. WorkDir proves the -f detail parsed, not just the snapshot row.
