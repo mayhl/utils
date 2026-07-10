@@ -129,3 +129,41 @@ func TestStampRoundTrip(t *testing.T) {
 		t.Error("ok for a dir without a stamp")
 	}
 }
+
+func TestCollectRuns(t *testing.T) {
+	base := t.TempDir()
+	home, work := filepath.Join(base, "home"), filepath.Join(base, "work")
+	root := filepath.Join(home, "proj")
+	sim := "simulations/funwave"
+	write := func(dir, body string) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "run.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// a pulled-back run on the project tree, a live one on staging, and junk
+	write(filepath.Join(root, sim, "case_a_100"),
+		"jobid = \"100\"\nstarted = \"2026-07-09T10:00:00Z\"\ncluster = \"hpc1\"\ncase = \""+sim+"/case_a\"\ncommit = \"aaaabbbbccccdddd\"\ndirty = false\n")
+	write(filepath.Join(work, "proj", sim, "case_a_250"),
+		"jobid = \"250\"\nstarted = \"2026-07-10T09:00:00Z\"\nqueue = \"standard\"\ndirty = true\n")
+	write(filepath.Join(root, sim, "case_junk_1"), "not toml [[[")
+
+	t.Setenv("HOME", home)
+	t.Setenv("WORKDIR", work)
+	runs := CollectRuns(RunTrees(root))
+	if len(runs) != 2 {
+		t.Fatalf("runs: %+v", runs)
+	}
+	// newest started first; junk skipped
+	if runs[0].JobID != "250" || !runs[0].Dirty || runs[0].Queue != "standard" {
+		t.Errorf("first: %+v", runs[0])
+	}
+	if runs[1].JobID != "100" || runs[1].Cluster != "hpc1" || runs[1].Commit != "aaaabbbbccccdddd" {
+		t.Errorf("second: %+v", runs[1])
+	}
+}
