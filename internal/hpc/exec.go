@@ -199,12 +199,18 @@ func reachable(host string) bool {
 
 // exitText names a failure once the host is known reachable, so the cause is the
 // login itself. ssh's catch-all 255 then means a Kerberos problem — a missing ticket
-// (the common, fixable case, detected locally) or one the server rejected.
+// (the common, fixable case, detected locally) or one the server rejected. ON an HPC
+// node the local-cache diagnosis doesn't apply: there's often no cache at all (the
+// credential arrived by delegation with the login), and pkinit/--renew don't exist
+// there — so the hint points at delegation instead.
 func exitText(err error) string {
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		switch ee.ExitCode() {
 		case 255:
+			if os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc" {
+				return "authentication failed — credentials may not delegate to that host from here"
+			}
 			if info, ok := Ticket(); ok && !info.Present {
 				return "no Kerberos ticket — run `mu hpc ticket --renew`"
 			}

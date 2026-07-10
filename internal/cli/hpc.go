@@ -77,6 +77,12 @@ func showTicket() {
 		return
 	}
 	if !info.Present {
+		if onHPC() {
+			// normal on a login node: the credential arrived by delegation with
+			// the login; there's no local cache and no pkinit here
+			render.Info("no local ticket cache — expected on an HPC node (auth is delegated at login)")
+			return
+		}
 		render.Warn("no Kerberos ticket — run `mu hpc ticket --renew`")
 		return
 	}
