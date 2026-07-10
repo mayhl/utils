@@ -69,6 +69,9 @@ func logWriteCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c,
+		[2]string{"<level>", "event level: info, ok, warn, or error"},
+		[2]string{"<msg>", "event text (remaining args are joined)"})
 	c.Flags().StringVarP(&scope, "scope", "s", "ext", "event scope tag")
 	c.Flags().StringVar(&payloadJSON, "payload", "", "attach a JSON object as a structured payload")
 	return c

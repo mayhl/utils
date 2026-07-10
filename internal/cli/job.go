@@ -142,6 +142,7 @@ func jobSubCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<script>", "job script path, resolved ON the target cluster"})
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	c.Flags().StringVarP(&queue_, "queue", "q", "", "queue / partition to submit to")

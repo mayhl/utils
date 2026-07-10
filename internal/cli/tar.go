@@ -22,6 +22,8 @@ func tarCmd() *cobra.Command {
 			return codeErr(tar.Run(args[0], useGzip))
 		},
 	}
+	setHelpArgs(c,
+		[2]string{"<path>", "directory to archive, or .tar/.tar.gz archive to extract"})
 	c.Flags().BoolVarP(&useGzip, "gzip", "z", false, "gzip when archiving a dir (→ .tar.gz); ignored on extract")
 	return c
 }

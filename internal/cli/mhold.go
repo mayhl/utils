@@ -57,6 +57,7 @@ func holdReleaseCmd(use, title, past string, release bool) *cobra.Command {
 			return actOnJobs(label, title, past, cmd, matched, run)
 		},
 	}
+	setHelpArgs(c, [2]string{"<selector>", argJobSelectorDesc})
 	addQueueScopeFlags(c, &node, &userList, &allUsers, &pattern)
 	return c
 }

@@ -110,6 +110,7 @@ func sshfsMountCmd() *cobra.Command {
 			return codeErr(runMountBatch(names, verbose))
 		},
 	}
+	setHelpArgs(c, [2]string{"<name>", "registered mount name, or @group for every mount in a group"})
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show the remote target + verbose ssh output")
 	c.Flags().BoolVarP(&all, "all", "a", false, "mount every registered mount")
 	return c
@@ -189,7 +190,7 @@ func sshfsGroupCmd(remove bool) *cobra.Command {
 	if remove {
 		use, short = "ungroup <group> <name>...", "Remove mounts from a group."
 	}
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.MinimumNArgs(2),
@@ -230,6 +231,14 @@ func sshfsGroupCmd(remove bool) *cobra.Command {
 			return nil
 		},
 	}
+	argVerb := "add"
+	if remove {
+		argVerb = "remove"
+	}
+	setHelpArgs(c,
+		[2]string{"<group>", "free-form group name (mount together with `hmt @group`)"},
+		[2]string{"<name>", "registered mount name(s) to " + argVerb})
+	return c
 }
 
 // addGroup adds g to m.Groups (sorted, deduped); returns false if already present.
@@ -286,6 +295,7 @@ func sshfsUmountCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<name>", "registered mount to unmount (see mu sshfs list)"})
 	c.Flags().BoolVarP(&all, "all", "a", false, "unmount every live mount")
 	return c
 }
@@ -334,7 +344,7 @@ func umountAll() error {
 }
 
 func sshfsPathCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:               "path <name>",
 		Short:             "Print the local mount dir (used by hcd to cd). stdout = just the path.",
 		Args:              cobra.ExactArgs(1),
@@ -348,6 +358,8 @@ func sshfsPathCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<name>", "registered mount name (see mu sshfs list)"})
+	return c
 }
 
 func sshfsAddCmd() *cobra.Command {
@@ -385,6 +397,10 @@ func sshfsAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c,
+		[2]string{"<name>", "short name to register the mount under"},
+		[2]string{"<node>", "cluster/node alias from the configured inventory"},
+		[2]string{"<path>", "remote directory to mount"})
 	c.Flags().BoolVar(&readOnly, "ro", false, "mount read-only (data to browse, no writes)")
 	c.Flags().BoolVar(&readOnly, "read-only", false, "alias for --ro")
 	return c
@@ -467,6 +483,7 @@ Examples:
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<name>", "registered mount name (see mu sshfs list)"})
 	c.Flags().StringVar(&node, "node", "", "repoint to a different node")
 	c.Flags().StringVar(&path, "path", "", "repoint to a different remote path")
 	c.Flags().BoolVar(&ro, "ro", false, "make read-only (remounts if live)")
@@ -475,7 +492,7 @@ Examples:
 }
 
 func sshfsRmCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:               "rm <name>",
 		Short:             "Remove a mount from the registry (does not unmount).",
 		Args:              cobra.ExactArgs(1),
@@ -497,4 +514,6 @@ func sshfsRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<name>", "registered mount to remove (see mu sshfs list)"})
+	return c
 }

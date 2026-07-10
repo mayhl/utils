@@ -51,6 +51,7 @@ func psCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"[mask]", "filter: " + argProcSelectorDesc})
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick processes to kill interactively")
 	c.Flags().StringVarP(&userFlag, "user", "u", "", "filter by user (default: you)")
 	c.Flags().BoolVarP(&allUsers, "all-users", "a", false, "include every user's processes")
@@ -58,6 +59,10 @@ func psCmd() *cobra.Command {
 	setHelpShortcuts(c, [2]string{"mps", "list local processes (mps -i = interactive picker)"})
 	return c
 }
+
+// argProcSelectorDesc is the shared Arguments-panel line for the process verbs'
+// selectors — one wording, matching their Long texts.
+const argProcSelectorDesc = "name mask (grep-style), PID, PID range (4501-4510), or list (4501,4507); ~ forces a mask"
 
 // psInteractive runs the live picker (a selector, not an actuator), then hands the
 // picks to the SAME kill path as headless — so the destructive op is confirmed and
@@ -139,6 +144,7 @@ func psKillCmd() *cobra.Command {
 			return killProcs(matched, sig, yes)
 		},
 	}
+	setHelpArgs(c, [2]string{"<selector>", argProcSelectorDesc})
 	c.Flags().BoolVarP(&hard, "sigkill", "9", false, "use SIGKILL (-9) instead of the default SIGTERM")
 	c.Flags().BoolVarP(&pattern, "pattern", "p", false, "force every argument to be a name mask (not a PID)")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")

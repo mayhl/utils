@@ -54,7 +54,7 @@ func setupCmd() *cobra.Command {
 // Cobra's default completion command (which stays functional at the root as a hidden
 // alias, so `mu completion` still works).
 func setupCompletionCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:       "completion [bash|zsh|fish]",
 		Short:     "Generate a shell completion script.",
 		Long:      "Print the completion script for the given shell. Usually wired via\n`mu setup --eval <shell>`; this prints just the completion half.",
@@ -64,6 +64,8 @@ func setupCompletionCmd() *cobra.Command {
 			return writeCompletion(cmd.Root(), args[0], os.Stdout)
 		},
 	}
+	setHelpArgs(c, [2]string{"[bash|zsh|fish]", "shell to emit the completion script for"})
+	return c
 }
 
 // writeCompletion generates the completion script for one shell from the root

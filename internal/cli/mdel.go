@@ -50,6 +50,7 @@ func queueKillCmd() *cobra.Command {
 			return cancelJobs(label, scheduler, matched, run, yes)
 		},
 	}
+	setHelpArgs(c, [2]string{"<selector>", argJobSelectorDesc})
 	addQueueScopeFlags(c, &node, &userList, &allUsers, &pattern)
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	return c

@@ -46,6 +46,8 @@ func onboardCmd() *cobra.Command {
 			return o.run(args[0])
 		},
 	}
+	setHelpArgs(c,
+		[2]string{"<node|user@host>", "configured node alias, or a raw ssh target for a not-yet-configured box"})
 	f := c.Flags()
 	f.StringVar(&o.repo, "repo", "", "mayhl_utils checkout to cross-build from (default $MU_ROOT or ~/repos/mayhl_utils)")
 	f.StringVar(&o.configDir, "config-dir", "", "the .config git repo to push (default ~/.config)")

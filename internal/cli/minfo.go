@@ -69,6 +69,7 @@ func queueInfoCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<selector>", argJobSelectorDesc})
 	c.Flags().BoolVar(&raw, "raw", false, "print the scheduler's own detail output verbatim")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit the normalized detail as JSON")
 	addQueueScopeFlags(c, &node, &userList, &allUsers, &pattern)
@@ -146,11 +147,16 @@ func queuePeekCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"<selector>", "one job — " + argJobSelectorDesc + "; multiple matches peek the first"})
 	c.Flags().BoolVarP(&stderr, "stderr", "e", false, "tail the job's stderr file instead of stdout")
 	c.Flags().IntVarP(&lines, "lines", "n", 40, "number of trailing lines to show")
 	addQueueScopeFlags(c, &node, &userList, &allUsers, nil)
 	return c
 }
+
+// argJobSelectorDesc is the shared Arguments-panel line for the queue verbs' job
+// selectors (kill/hold/release/info/peek) — one wording, matching their Long texts.
+const argJobSelectorDesc = "job id (short or full), range (4501-4510), list (4501,4507), or name mask (-p forces a mask)"
 
 // addQueueScopeFlags registers the WHERE/WHO/selector flags the queue verbs share:
 // --node target, -a/-u user scope, and (when patternFlag is non-nil) -p force-mask.

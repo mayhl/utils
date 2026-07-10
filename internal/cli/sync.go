@@ -52,6 +52,7 @@ func syncCmd() *cobra.Command {
 			return runSync(args[0], o)
 		},
 	}
+	setHelpArgs(c, [2]string{"<node|user@host>", "box to update — configured node alias, or a raw ssh target"})
 	f := c.Flags()
 	f.StringVar(&o.muRoot, "mu-root", o.muRoot, "target MU_ROOT (holds config.toml)")
 	f.BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt")
@@ -86,6 +87,7 @@ func syncPullCmd() *cobra.Command {
 			return runSync(args[0], o)
 		},
 	}
+	setHelpArgs(c, [2]string{"<node|user@host>", "box to import from — configured node alias, or a raw ssh target"})
 	f := c.Flags()
 	f.StringVar(&o.muRoot, "mu-root", o.muRoot, "target MU_ROOT (holds config.toml)")
 	f.BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt")

@@ -73,6 +73,7 @@ const (
 	annHelpTitle         = "render.helpTitle"         // human-readable heading for the synopsis
 	annHelpShortcuts     = "render.helpShortcuts"     // shell front-doors ("name\twhat it runs" per line)
 	annHelpShortcutsNote = "render.helpShortcutsNote" // one-line lead above the Shortcuts list
+	annHelpArgs          = "render.helpArgs"          // positional args ("name\tdescription" per line)
 )
 
 // Help panel color roles. Help is a DELIBERATE exception to the app-wide color policy
@@ -84,6 +85,7 @@ const (
 	hueFlag    = render.HueUser // color3: [--flags] + Flags panel        (magenta)
 	hueRoot    = render.HueOK   // color4: <root path> + Shortcut panel   (green)
 	hueBadge   = render.HueDim  // color5: badges                         (gray)
+	hueArg     = render.HueLoc  // color6: <args> + Arguments panel       (blue)
 )
 
 // wrapHelp opts a command and its subtree into the house help renderer.
@@ -174,6 +176,32 @@ func helpShortcuts(c *cobra.Command) [][2]string {
 	return out
 }
 
+// setHelpArgs documents a command's positional args, shown as an Arguments panel
+// (color6, matching the <args> usage tokens). Each pair is {token, what it is} —
+// keep tokens byte-identical to the Use string so the legend teaches itself.
+func setHelpArgs(c *cobra.Command, pairs ...[2]string) {
+	rows := make([]string, len(pairs))
+	for i, p := range pairs {
+		rows[i] = p[0] + "\t" + p[1]
+	}
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[annHelpArgs] = strings.Join(rows, "\n")
+}
+
+func helpArgs(c *cobra.Command) [][2]string {
+	if c.Annotations == nil || c.Annotations[annHelpArgs] == "" {
+		return nil
+	}
+	var out [][2]string
+	for _, line := range strings.Split(c.Annotations[annHelpArgs], "\n") {
+		name, desc, _ := strings.Cut(line, "\t")
+		out = append(out, [2]string{name, desc})
+	}
+	return out
+}
+
 // setHelpLabel attaches a colored badge to a command, shown by its name both in its own
 // help header and in its parent's Commands panel. hue is a render.Hue* const.
 func setHelpLabel(c *cobra.Command, text, hue string) {
@@ -245,6 +273,20 @@ func houseHelp(c *cobra.Command, _ []string) {
 	}
 	b.WriteString(render.Panel(title, syn, boxW) + "\n")
 
+	if ar := helpArgs(c); len(ar) > 0 {
+		w := 0
+		for _, p := range ar {
+			if len(p[0]) > w {
+				w = len(p[0])
+			}
+		}
+		lines := make([]string, 0, len(ar))
+		for _, p := range ar {
+			lines = append(lines, wrapItem(p[0], hueArg, p[1], "", 0, w, textW))
+		}
+		b.WriteString(render.Panel(render.Bold("Arguments", hueArg), strings.Join(lines, "\n"), boxW) + "\n")
+	}
+
 	if subs := visibleSubs(c); len(subs) > 0 {
 		w := 0
 		for _, s := range subs {
@@ -290,11 +332,16 @@ func houseHelp(c *cobra.Command, _ []string) {
 	fmt.Fprint(os.Stdout, b.String())
 }
 
-// usageLegend renders "<root path> [command] [--flags]" as a colored key — path in
-// color4 (shortcuts), [command] in color2 (Commands items), [--flags] in color3 (Flags
-// items) — so the synopsis teaches the panel color code.
+// usageLegend renders "<root path> <args> [command] [--flags]" as a colored key —
+// path in color4 (shortcuts), <args> in color6 (Arguments items), [command] in color2
+// (Commands items), [--flags] in color3 (Flags items) — so the synopsis teaches the
+// panel color code. The args come from the Use string's remainder, so `<required>`
+// and `[optional]` tokens finally show up in the styled help, not just the plain one.
 func usageLegend(c *cobra.Command) string {
 	s := render.Fg(c.CommandPath(), hueRoot)
+	if rest := strings.TrimSpace(strings.TrimPrefix(c.Use, c.Name())); rest != "" {
+		s += " " + render.Fg(rest, hueArg)
+	}
 	if c.HasAvailableSubCommands() {
 		s += " " + render.Fg("[command]", hueCommand)
 	}
@@ -404,6 +451,12 @@ func plainHelp(c *cobra.Command) {
 	}
 	if desc != "" {
 		fmt.Fprintf(w, "\n%s\n", desc)
+	}
+	if ar := helpArgs(c); len(ar) > 0 {
+		fmt.Fprintln(w, "\nArguments:")
+		for _, p := range ar {
+			fmt.Fprintf(w, "  %-12s %s\n", p[0], p[1])
+		}
 	}
 	if subs := visibleSubs(c); len(subs) > 0 {
 		fmt.Fprintln(w, "\nCommands:")

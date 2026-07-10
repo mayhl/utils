@@ -46,6 +46,7 @@ func projectSubmitCmd() *cobra.Command {
 			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, verbose, keep)
 		},
 	}
+	setHelpArgs(c, [2]string{"<case-dir>", "case directory to push and run (under $HOME, inside a git project)"})
 	f := c.Flags()
 	f.StringVarP(&node, "node", "N", "", "cluster to target (required)")
 	f.StringVarP(&script, "script", "s", "run.sh", "job script inside the case dir")

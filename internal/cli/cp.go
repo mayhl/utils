@@ -32,6 +32,10 @@ func cpPushCmd() *cobra.Command {
 			return runTransfer(true, args[0], args[1], args[2], o, verbose)
 		},
 	}
+	setHelpArgs(cmd,
+		[2]string{"<node>", "target node or cluster alias from the configured inventory"},
+		[2]string{"<src>", "local path to copy"},
+		[2]string{"<dst>", "destination path on the node (~-relative or absolute)"})
 	addTransferFlags(cmd, &o, &verbose)
 	return cmd
 }
@@ -49,6 +53,10 @@ func cpPullCmd() *cobra.Command {
 			return runTransfer(false, args[0], args[1], args[2], o, verbose)
 		},
 	}
+	setHelpArgs(cmd,
+		[2]string{"<node>", "source node or cluster alias from the configured inventory"},
+		[2]string{"<src>", "remote path on the node (~-relative or absolute)"},
+		[2]string{"<dst>", "local destination path"})
 	addTransferFlags(cmd, &o, &verbose)
 	return cmd
 }

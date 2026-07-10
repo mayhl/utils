@@ -41,7 +41,7 @@ func gitCmd() *cobra.Command {
 }
 
 func gitReviewedCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "reviewed [N]",
 		Short: "Which [unreviewed] WIP `git reviewed` would un-tag (oldest-first).",
 		Args:  cobra.MaximumNArgs(1),
@@ -66,6 +66,9 @@ func gitReviewedCmd() *cobra.Command {
 			return nil
 		},
 	}
+	setHelpArgs(c,
+		[2]string{"[N]", "how many tags to preview un-tagging, oldest-first — a count or 'all' (default all)"})
+	return c
 }
 
 func gitSignwipCmd() *cobra.Command {

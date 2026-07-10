@@ -43,7 +43,7 @@ func pathCmd() *cobra.Command {
 
 // pathVerbCmd wraps one projection: `mu path <verb> [path]`, default $PWD.
 func pathVerbCmd(verb, short, long string, resolve func(string) (string, error)) *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   verb + " [path]",
 		Short: short,
 		Long:  long,
@@ -67,4 +67,6 @@ func pathVerbCmd(verb, short, long string, resolve func(string) (string, error))
 			return nil
 		},
 	}
+	setHelpArgs(c, [2]string{"[path]", "path to resolve (default: the current directory)"})
+	return c
 }
