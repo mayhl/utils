@@ -170,45 +170,7 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 	}
 	const nameFloor = 6
 	const nameCap = 20 // hard ceiling on Name regardless of terminal room; longer names truncate
-	idW, queueW, ndsW := len("ID"), len("Queue"), len("NDS")
-	badgeW, elapW, nameW := len("State"), len("Elap"), len("Name")
-	userW, clusterW, reasonW, wallW := 0, 0, 0, 0
-	submitW, startW, endW := hdrW(cols.Submit, "Submit"), hdrW(cols.Start, "Start"), hdrW(cols.End, "End")
-	if showUser {
-		userW = len("User")
-	}
-	if showCluster {
-		clusterW = len("System")
-	}
-	for _, r := range rows {
-		idW = max(idW, text.StringWidth(r.ID))
-		queueW = max(queueW, text.StringWidth(r.Queue))
-		ndsW = max(ndsW, text.StringWidth(dash(r.Nodes)))
-		badgeW = max(badgeW, text.StringWidth(jobStateBadge(r.State)))
-		elapW = max(elapW, text.StringWidth(dash(r.Elapsed)))
-		nameW = max(nameW, text.StringWidth(r.Name))
-		if showUser {
-			userW = max(userW, text.StringWidth(r.User))
-		}
-		if showCluster {
-			clusterW = max(clusterW, text.StringWidth(r.Cluster))
-		}
-		if r.Reason != "" {
-			reasonW = max(reasonW, text.StringWidth(" · "+r.Reason))
-		}
-		if strings.TrimSpace(r.ReqWall) != "" {
-			wallW = max(wallW, text.StringWidth(" / "+r.ReqWall))
-		}
-		if cols.Submit {
-			submitW = max(submitW, text.StringWidth(timeCell(r.Submit)))
-		}
-		if cols.Start {
-			startW = max(startW, text.StringWidth(timeCell(r.Start)))
-		}
-		if cols.End {
-			endW = max(endW, text.StringWidth(timeCell(r.End)))
-		}
-	}
+	w := measureCols(rows, showUser, showCluster, cols)
 	// StyleRounded overhead: 2 padding + a border glyph per column → 3*ncols + 1.
 	nCols := 6
 	if showUser {
@@ -219,16 +181,16 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 	}
 	nCols += boolN(cols.Submit) + boolN(cols.Start) + boolN(cols.End)
 	// Time columns are opt-in, so they're fixed (never shed) — they just consume budget.
-	room := tw - (idW + userW + clusterW + queueW + ndsW + badgeW + elapW + submitW + startW + endW + 3*nCols + 1) // for Name + reason + wall
-	nameMax = min(nameW, nameCap)
+	room := tw - (w.id + w.user + w.cluster + w.queue + w.nds + w.badge + w.elap + w.submit + w.start + w.end + 3*nCols + 1) // for Name + reason + wall
+	nameMax = min(w.name, nameCap)
 	for {
-		need := nameMax + boolW(showReason, reasonW) + boolW(showWall, wallW)
+		need := nameMax + boolW(showReason, w.reason) + boolW(showWall, w.wall)
 		if need <= room {
 			break
 		}
 		switch {
 		case nameMax > nameFloor:
-			nameMax = max(nameFloor, room-boolW(showReason, reasonW)-boolW(showWall, wallW))
+			nameMax = max(nameFloor, room-boolW(showReason, w.reason)-boolW(showWall, w.wall))
 		case showReason:
 			showReason = false
 		case showWall:
@@ -237,10 +199,67 @@ func planFit(rows []JobRow, showUser, showCluster bool, cols JobCols) (nameMax i
 			return nameFloor, false, false // can't shrink more — accept a slight overflow
 		}
 	}
-	if nameMax >= nameW {
+	if nameMax >= w.name {
 		nameMax = 0 // no cap needed
 	}
 	return nameMax, showReason, showWall
+}
+
+// colWidths is the measured display width of each queue-table column — the header width
+// widened by the widest visible cell. The optional User/System and the opt-in time columns
+// are 0 when off. planFit consumes these to size Name and decide what sheds.
+type colWidths struct {
+	id, queue, nds, badge, elap, name int
+	user, cluster, reason, wall       int
+	submit, start, end                int
+}
+
+// measureCols measures every column's display width across rows in one pass, seeding each
+// from its header and widening to the widest cell (reason/wall include their " · "/" / "
+// lead-in; time columns use the formatted cell). Split out of planFit so the fit-shedding
+// logic there reads as pure arithmetic over the measured widths.
+func measureCols(rows []JobRow, showUser, showCluster bool, cols JobCols) colWidths {
+	w := colWidths{
+		id: len("ID"), queue: len("Queue"), nds: len("NDS"),
+		badge: len("State"), elap: len("Elap"), name: len("Name"),
+		submit: hdrW(cols.Submit, "Submit"), start: hdrW(cols.Start, "Start"), end: hdrW(cols.End, "End"),
+	}
+	if showUser {
+		w.user = len("User")
+	}
+	if showCluster {
+		w.cluster = len("System")
+	}
+	for _, r := range rows {
+		w.id = max(w.id, text.StringWidth(r.ID))
+		w.queue = max(w.queue, text.StringWidth(r.Queue))
+		w.nds = max(w.nds, text.StringWidth(dash(r.Nodes)))
+		w.badge = max(w.badge, text.StringWidth(jobStateBadge(r.State)))
+		w.elap = max(w.elap, text.StringWidth(dash(r.Elapsed)))
+		w.name = max(w.name, text.StringWidth(r.Name))
+		if showUser {
+			w.user = max(w.user, text.StringWidth(r.User))
+		}
+		if showCluster {
+			w.cluster = max(w.cluster, text.StringWidth(r.Cluster))
+		}
+		if r.Reason != "" {
+			w.reason = max(w.reason, text.StringWidth(" · "+r.Reason))
+		}
+		if strings.TrimSpace(r.ReqWall) != "" {
+			w.wall = max(w.wall, text.StringWidth(" / "+r.ReqWall))
+		}
+		if cols.Submit {
+			w.submit = max(w.submit, text.StringWidth(timeCell(r.Submit)))
+		}
+		if cols.Start {
+			w.start = max(w.start, text.StringWidth(timeCell(r.Start)))
+		}
+		if cols.End {
+			w.end = max(w.end, text.StringWidth(timeCell(r.End)))
+		}
+	}
+	return w
 }
 
 // boolW returns w when on, else 0 — for conditional width sums.
