@@ -5,6 +5,30 @@
 #   else→ running/queued (mstat: qstat -a)
 # Output formats match mu's ParsePBS / ParseDetail fixtures.
 case " $* " in
+  # The tunnel job (qsub stub's id): Q on the first -f poll, R + exec_host
+  # after — so `mu job tunnel`'s wait loop genuinely iterates. Counter resets
+  # by deleting $HOME/qstat_f_count.
+  *" -f"*1284575*)
+    n=$(cat "$HOME/qstat_f_count" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$HOME/qstat_f_count"
+    if [ "$n" -lt 2 ]; then
+      cat <<'EOF'
+Job Id: 1284575.sdb
+    Job_Name = serve_tunnel
+    Job_Owner = tester@hpc1
+    job_state = Q
+    queue = standard
+EOF
+    else
+      cat <<'EOF'
+Job Id: 1284575.sdb
+    Job_Name = serve_tunnel
+    Job_Owner = tester@hpc1
+    job_state = R
+    queue = standard
+    exec_host = localhost/0*8
+EOF
+    fi
+    ;;
   *" -f"*|*-f\ *)
     cat <<'EOF'
 Job Id: 1284570.hpc1

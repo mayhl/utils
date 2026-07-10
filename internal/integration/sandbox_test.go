@@ -1061,3 +1061,80 @@ func TestProjectSubmitClean(t *testing.T) {
 	mustContain(t, box("cat "+stage+"/.mu-origin.toml"), "commit = '"+sha+"'", "dirty = false")
 	mustContain(t, box("cat qsub.log"), stage+" run.sh")
 }
+
+// TestJobTunnel drives the compute-node tunnel flow end-to-end over the ONE
+// held connection: submit through the qsub stub, the login-node wait loop sees
+// the stub's Q→R flip (the poll iterates inside the same session), the forward
+// is added to the live master, and the tunnel serves TWO requests with a gap —
+// held open, not per-request. While it's up, the box must show exactly the
+// master + the probe's own session (no connection churn). SIGINT tears down.
+func TestJobTunnel(t *testing.T) {
+	requireSandbox(t)
+	_ = exec.Command("ssh", "sandbox", "rm -f qstat_f_count qsub.log; touch serve.sh").Run()
+
+	// the "service" on the compute node — loops accepts so persistence is provable
+	listener := exec.Command("ssh", "-q", "sandbox",
+		`perl -MIO::Socket::INET -e 'my $s=IO::Socket::INET->new(LocalPort=>18452,Listen=>1,ReuseAddr=>1) or exit 1; alarm 60; while (my $c=$s->accept) { print $c "tunnel-ok\n"; close $c; }'`)
+	if err := listener.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Process.Kill(); _ = listener.Wait() }()
+
+	var out strings.Builder
+	mu := exec.Command(muBin, "job", "tunnel", "-N", "sandbox",
+		"-s", "/home/tester/serve.sh", "-p", "18452", "-l", "18453", "-y",
+		"--poll", "1s", "--wait", "30s")
+	mu.Env = muEnv()
+	mu.Stdout, mu.Stderr = &out, &out
+	if err := mu.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mu.Process.Kill() }()
+
+	curl := func() string {
+		b, _ := exec.Command("curl", "-s", "--max-time", "2", "telnet://localhost:18453").Output()
+		return string(b)
+	}
+	// the tunnel comes up after submit + two polls — retry the local end
+	var got string
+	for i := 0; i < 30 && !strings.Contains(got, "tunnel-ok"); i++ {
+		time.Sleep(500 * time.Millisecond)
+		got = curl()
+	}
+	if !strings.Contains(got, "tunnel-ok") {
+		t.Fatalf("no payload through the tunnel; mu output so far:\n%s", out.String())
+	}
+	// held open: the box sees ONE persistent session for the whole flow (the
+	// mux master, carrying submit + wait + tunnel) beside the test's own two
+	// (listener + this probe) — churn would show extras. Count the per-session
+	// "@" children only; privsep doubles every connection with a [priv] parent.
+	sess := strings.TrimSpace(string(mustOut(t, "ssh", "-q", "sandbox", `ps ax -o command | grep -c "[s]shd: tester@"`)))
+	if sess != "3" {
+		t.Errorf("sshd sessions during tunnel = %s, want 3 (master + listener + probe)", sess)
+	}
+	// …and still serving after a gap: same mu process, same connection
+	time.Sleep(2 * time.Second)
+	if got = curl(); !strings.Contains(got, "tunnel-ok") {
+		t.Fatalf("tunnel dropped between requests; mu output:\n%s", out.String())
+	}
+	_ = mu.Process.Signal(os.Interrupt)
+	_ = mu.Wait()
+
+	mustContain(t, out.String(), "submitted 1284575.sdb", "running on localhost", "tunnel up", "tunnel closed")
+	// the wait loop really polled: the stub counted at least the Q and R hits
+	n, err := exec.Command("ssh", "-q", "sandbox", "cat qstat_f_count").Output()
+	if err != nil || strings.TrimSpace(string(n)) < "2" {
+		t.Fatalf("poll count: %q err=%v", n, err)
+	}
+	mustContain(t, string(mustOut(t, "ssh", "-q", "sandbox", "cat qsub.log")), "serve.sh")
+}
+
+// mustOut runs a command and fails the test on error.
+func mustOut(t *testing.T, name string, args ...string) []byte {
+	t.Helper()
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		t.Fatalf("%s %s: %v", name, strings.Join(args, " "), err)
+	}
+	return out
+}
