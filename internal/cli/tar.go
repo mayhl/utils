@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 
 	"github.com/mayhl/mayhl_utils/internal/tar"
@@ -20,8 +18,8 @@ func tarCmd() *cobra.Command {
 			"bqtar/bgtar (backgrounded + reniced).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			os.Exit(tar.Run(args[0], useGzip))
-			return nil
+			// tar.Run renders its own progress/errors; propagate just its exit code
+			return codeErr(tar.Run(args[0], useGzip))
 		},
 	}
 	c.Flags().BoolVarP(&useGzip, "gzip", "z", false, "gzip when archiving a dir (→ .tar.gz); ignored on extract")
