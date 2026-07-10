@@ -31,6 +31,17 @@ func runErr(format string, a ...any) error {
 	return &exitErr{code: 1, msg: fmt.Sprintf(format, a...)}
 }
 
+// codeErr turns a process-style return code into a command error carrying that exact code
+// and NO message: the caller already rendered its own failure line (e.g. runMount prints
+// the timeout/fatal detail then hands back just a code), so main should set the exit code
+// without printing again. rc 0 → nil. HouseError skips the empty message.
+func codeErr(rc int) error {
+	if rc == 0 {
+		return nil
+	}
+	return &exitErr{code: rc}
+}
+
 // ExitCode reports the process exit code for a command error: an exitErr's own code,
 // else 1 for any other non-nil error. It matches only *exitErr, so a stray exec exit
 // error can't leak a subprocess's code as mu's. main owns the single os.Exit.

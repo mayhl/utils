@@ -44,7 +44,11 @@ func HelpColorScheme(c lipgloss.LightDarkFunc) fang.ColorScheme {
 // color policy. It writes via render.Err to stderr (the same sink fang passes as w),
 // generalizing the render.Err + os.Exit precedent in cp.go across all commands.
 func HouseError(_ io.Writer, _ fang.Styles, err error) {
-	render.Err(err.Error())
+	// A code-only error (codeErr) carries an exit code but no message — the command
+	// already rendered its own failure line, so skip an empty red error line here.
+	if msg := err.Error(); msg != "" {
+		render.Err(msg)
+	}
 }
 
 // Root builds the top-level `mu` command with all subcommand trees attached.

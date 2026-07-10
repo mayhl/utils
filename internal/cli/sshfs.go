@@ -104,16 +104,14 @@ func sshfsMountCmd() *cobra.Command {
 			} else {
 				expanded, err := expandMountArgs(args)
 				if err != nil {
-					render.Err(err.Error())
-					os.Exit(2)
+					return usageErr("%s", err)
 				}
 				names = expanded
 			}
 			if len(names) == 1 && !all {
-				os.Exit(runMount(names[0], verbose, "", false)) // classic single-mount path (hcd uses this)
+				return codeErr(runMount(names[0], verbose, "", false)) // classic single-mount path (hcd uses this)
 			}
-			os.Exit(runMountBatch(names, verbose))
-			return nil
+			return codeErr(runMountBatch(names, verbose))
 		},
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show the remote target + verbose ssh output")
@@ -230,8 +228,7 @@ func sshfsGroupCmd(remove bool) *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			group, names := args[0], args[1:]
 			if err := validGroupName(group); err != nil {
-				render.Err(err.Error())
-				os.Exit(2)
+				return usageErr("%s", err)
 			}
 			reg := sshfs.ReadRegistry()
 			changed := 0
@@ -254,8 +251,7 @@ func sshfsGroupCmd(remove bool) *cobra.Command {
 			}
 			if changed > 0 {
 				if err := sshfs.WriteRegistry(reg); err != nil {
-					render.Err(err.Error())
-					os.Exit(1)
+					return runErr("%s", err)
 				}
 			}
 			action := "added to"
@@ -502,7 +498,7 @@ func sshfsUmountCmd() *cobra.Command {
 				return umountAll()
 			}
 			if !umountOne(args[0]) {
-				os.Exit(1)
+				return codeErr(1)
 			}
 			return nil
 		},
@@ -549,7 +545,7 @@ func umountAll() error {
 		}
 	}
 	if failed > 0 {
-		os.Exit(1)
+		return codeErr(1)
 	}
 	return nil
 }
@@ -563,8 +559,7 @@ func sshfsPathCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
 			if _, ok := sshfs.ReadRegistry()[name]; !ok {
-				render.Err("unknown mount: " + name)
-				os.Exit(2)
+				return usageErr("unknown mount: %s", name)
 			}
 			fmt.Println(sshfs.MountDir(name))
 			return nil
@@ -588,17 +583,16 @@ func sshfsAddCmd() *cobra.Command {
 			name, node, path := args[0], args[1], args[2]
 			reg := sshfs.ReadRegistry()
 			if ex, ok := reg[name]; ok {
+				// warn (yellow) that it already exists, but still exit non-zero
 				render.Warn(fmt.Sprintf("mount '%s' already exists → %s:%s", name, ex.Node, ex.Path))
-				os.Exit(1)
+				return codeErr(1)
 			}
 			if _, err := hpc.Resolve(node); err != nil { // validate the node resolves
-				render.Err(err.Error())
-				os.Exit(2)
+				return usageErr("%s", err)
 			}
 			reg[name] = sshfs.Mount{Node: node, Path: path, RO: readOnly}
 			if err := sshfs.WriteRegistry(reg); err != nil {
-				render.Err(err.Error())
-				os.Exit(1)
+				return runErr("%s", err)
 			}
 			roTag := ""
 			if readOnly {
@@ -641,18 +635,15 @@ Examples:
 			reg := sshfs.ReadRegistry()
 			m, ok := reg[name]
 			if !ok {
-				render.Err("unknown mount: " + name)
-				os.Exit(2)
+				return usageErr("unknown mount: %s", name)
 			}
 			if ro && rw {
-				render.Err("--ro and --rw are mutually exclusive")
-				os.Exit(2)
+				return usageErr("--ro and --rw are mutually exclusive")
 			}
 			changed := false
 			if node != "" && node != m.Node {
 				if _, err := hpc.Resolve(node); err != nil { // validate the node resolves
-					render.Err(err.Error())
-					os.Exit(2)
+					return usageErr("%s", err)
 				}
 				m.Node, changed = node, true
 			}
@@ -674,8 +665,7 @@ Examples:
 			}
 			reg[name] = m
 			if err := sshfs.WriteRegistry(reg); err != nil {
-				render.Err(err.Error())
-				os.Exit(1)
+				return runErr("%s", err)
 			}
 			roTag := ""
 			if m.RO {
@@ -687,10 +677,9 @@ Examples:
 			if sshfs.IsMounted(sshfs.MountDir(name)) {
 				render.Info(name + ": remounting to apply")
 				if !sshfs.Umount(sshfs.MountDir(name)) {
-					render.Err(name + ": couldn't unmount to remount — unmount manually, then `hcd " + name + "`")
-					os.Exit(1)
+					return runErr("%s: couldn't unmount to remount — unmount manually, then `hcd %s`", name, name)
 				}
-				os.Exit(runMount(name, false, "", false))
+				return codeErr(runMount(name, false, "", false))
 			}
 			return nil
 		},
@@ -712,16 +701,14 @@ func sshfsRmCmd() *cobra.Command {
 			name := args[0]
 			reg := sshfs.ReadRegistry()
 			if _, ok := reg[name]; !ok {
-				render.Err("unknown mount: " + name)
-				os.Exit(2)
+				return usageErr("unknown mount: %s", name)
 			}
 			if sshfs.IsMounted(sshfs.MountDir(name)) {
 				render.Warn(name + " still mounted — `mu sshfs umount " + name + "` first")
 			}
 			delete(reg, name)
 			if err := sshfs.WriteRegistry(reg); err != nil {
-				render.Err(err.Error())
-				os.Exit(1)
+				return runErr("%s", err)
 			}
 			render.OK("removed " + name)
 			return nil
