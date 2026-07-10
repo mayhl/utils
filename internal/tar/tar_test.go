@@ -76,3 +76,36 @@ func TestRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateRooted(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "deep", "case_a_250")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "out.nc"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := filepath.Join(base, "deep", "250.tar")
+	if rc := CreateRooted(src, staging); rc != 0 {
+		t.Fatalf("create rc=%d", rc)
+	}
+	// members are rooted at the dir's basename: extracting elsewhere recreates
+	// case_a_250/ exactly, not deep/case_a_250/
+	out := filepath.Join(base, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(staging, filepath.Join(out, "250.tar")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(out)
+	if rc := Run("250.tar", false); rc != 0 {
+		t.Fatalf("extract rc=%d", rc)
+	}
+	got, err := os.ReadFile(filepath.Join(out, "case_a_250", "out.nc"))
+	if err != nil || string(got) != "data" {
+		t.Fatalf("round-trip content=%q err=%v", got, err)
+	}
+}

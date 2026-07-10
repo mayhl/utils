@@ -44,13 +44,25 @@ func archiveName(dir string, useGzip bool) string {
 }
 
 func create(dir string, useGzip bool) int {
+	return createStream(dir, archiveName(dir, useGzip), useGzip, false)
+}
+
+// CreateRooted archives dir into the named tar with members rooted at the dir's
+// basename (tar runs from the parent), so extraction recreates the dir exactly —
+// the archive put wrapper's staging shape (case_a_123/… inside 123.tar).
+func CreateRooted(dir, out string) int {
+	return createStream(dir, out, false, true)
+}
+
+// createStream tars dir → archive, metering the pipe; rooted runs tar from the
+// parent with the basename as the member root (else dir as given, from CWD).
+func createStream(dir, archive string, useGzip, rooted bool) int {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		render.Err("not a directory: " + dir)
 		return 1
 	}
 	total, _ := dirSize(dir) // best-effort total for the bar (tar adds header overhead)
-	archive := archiveName(dir, useGzip)
 
 	out, err := os.Create(archive)
 	if err != nil {
@@ -66,7 +78,14 @@ func create(dir string, useGzip bool) int {
 		dest = gz
 	}
 
-	cmd := exec.Command("tar", "-cf", "-", dir)
+	arg := dir
+	if rooted {
+		arg = filepath.Base(dir)
+	}
+	cmd := exec.Command("tar", "-cf", "-", arg)
+	if rooted {
+		cmd.Dir = filepath.Dir(dir)
+	}
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
