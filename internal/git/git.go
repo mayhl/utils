@@ -74,23 +74,55 @@ func signedBase() (string, error) {
 	return base, nil
 }
 
+// wipBase resolves the boundary the signwip workflow stacks on: the newest signed
+// commit, floored at the upstream merge-base — pushed history is never treated as WIP,
+// signed or not (a repo adopted mid-history can carry pushed unsigned commits). A repo
+// with neither (all-local, never signed) returns "" and the WIP range is all of history,
+// so the workflow bootstraps in a fresh repo. Mirrors the shell scripts' base block.
+func wipBase() (string, error) {
+	base, err := signedBase()
+	if err != nil {
+		return "", err
+	}
+	floor, ferr := out("merge-base", "HEAD", "@{u}")
+	if ferr != nil || floor == "" {
+		return base, nil // no upstream — the signed base (possibly none) stands
+	}
+	if base == "" {
+		return floor, nil
+	}
+	// The floor wins when the signed base sits at or below the pushed boundary.
+	if exec.Command("git", "merge-base", "--is-ancestor", base, floor).Run() == nil {
+		return floor, nil
+	}
+	return base, nil
+}
+
+// wipRange is the log range covering the WIP above base — all of history when there is
+// no base (never-signed, no-upstream repo).
+func wipRange(base string) string {
+	if base == "" {
+		return "HEAD"
+	}
+	return base + "..HEAD"
+}
+
 // SignwipPreview mirrors git-signwip.sh's preview without signing anything.
 func SignwipPreview() (Signwip, error) {
 	var s Signwip
-	base, err := signedBase()
+	base, err := wipBase()
 	if err != nil {
 		return s, err
 	}
-	if base == "" {
-		return s, nil // no signed base — HasBase stays false
-	}
 	s.HasBase = true
-	if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
-		if h, sub, ok := strings.Cut(bh, "\t"); ok {
-			s.Rows = append(s.Rows, WipRow{Act: "base", Hash: h, Subject: sub})
+	if base != "" {
+		if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
+			if h, sub, ok := strings.Cut(bh, "\t"); ok {
+				s.Rows = append(s.Rows, WipRow{Act: "base", Hash: h, Subject: sub})
+			}
 		}
 	}
-	wip, err := out("log", "--reverse", "--format=%h%x09%s", base+"..HEAD")
+	wip, err := out("log", "--reverse", "--format=%h%x09%s", wipRange(base))
 	if err != nil {
 		return s, err
 	}
@@ -145,20 +177,19 @@ type Reviewed struct {
 // the rest keep, oldest-first.
 func ReviewedPreview(n int) (Reviewed, error) {
 	var r Reviewed
-	base, err := signedBase()
+	base, err := wipBase()
 	if err != nil {
 		return r, err
 	}
-	if base == "" {
-		return r, nil // no signed base — HasBase stays false
-	}
 	r.HasBase = true
-	if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
-		if h, sub, ok := strings.Cut(bh, "\t"); ok {
-			r.Rows = append(r.Rows, ReviewRow{Act: "base", Hash: h, Subject: sub})
+	if base != "" {
+		if bh, err := out("log", "-1", "--format=%h%x09%s", base); err == nil {
+			if h, sub, ok := strings.Cut(bh, "\t"); ok {
+				r.Rows = append(r.Rows, ReviewRow{Act: "base", Hash: h, Subject: sub})
+			}
 		}
 	}
-	wip, err := out("log", "--reverse", "--format=%h%x09%s", base+"..HEAD")
+	wip, err := out("log", "--reverse", "--format=%h%x09%s", wipRange(base))
 	if err != nil {
 		return r, err
 	}
