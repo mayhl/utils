@@ -89,7 +89,7 @@ func doctorCmd() *cobra.Command {
 	}
 	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
 	c.Flags().BoolVar(&checkup, "checkup", false, "throttled background run for shell-init: event log + notice file, no tables")
-	c.AddCommand(doctorFmtCmd(), doctorSetupCmd())
+	c.AddCommand(doctorFmtCmd(), doctorSetupCmd(), doctorSSHFSCmd())
 	// `mu doctor git` mirrors git's own `mu git doctor` — same leaf, re-verbed. Gated on the
 	// git module like the rest of git (root only wires `mu git` when MU_MODULES lists it).
 	if modules.Enabled("git") {
@@ -202,6 +202,44 @@ func doctorFmtCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&dumpConfig, "dump-config", false, "print the effective declared-tool TOML (embedded default, or the ~/.config/mu/config.fmt.toml override)")
 	return c
+}
+
+// doctorSSHFSCmd is the `mu doctor sshfs` module: registered mounts' live state
+// (unmounted/mounted/hung) plus a scan for fuse-like mounts the registry doesn't
+// claim — orphans in mu's tree and foreign fuse mounts elsewhere.
+func doctorSSHFSCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sshfs",
+		Short: "Check sshfs mounts (registry state + orphan fuse mounts).",
+		Long: "Cross-check the sshfs registry against the live mount table: each registered\n" +
+			"mount's state (a hung one FAILs), plus any fuse-like mount the registry doesn't\n" +
+			"claim — an orphan under the mounts tree or a foreign fuse mount elsewhere (WARN).\n" +
+			"All probes are timeout-bounded, so a hung mount can't freeze the check.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			results := doctor.SSHFSResults()
+			rows := make([]render.StatusRow, len(results))
+			for i, r := range results {
+				rows[i] = render.StatusRow{Level: levelStr(r.Status), Name: r.Name, Detail: r.Detail}
+			}
+			render.StatusTable("SSHFS mounts", rows)
+
+			ok, warn, fail := tally(results)
+			summary := fmt.Sprintf("sshfs: %d ok, %d warn, %d fail", ok, warn, fail)
+			switch {
+			case fail > 0:
+				render.EventErr("doctor", summary)
+			case warn > 0:
+				render.EventWarn("doctor", summary)
+			default:
+				render.EventOK("doctor", summary)
+			}
+			if fail > 0 {
+				return codeErr(1)
+			}
+			return nil
+		},
+	}
 }
 
 // fmtBanner is the matrix title: name plus the current fmt-tier mode.
