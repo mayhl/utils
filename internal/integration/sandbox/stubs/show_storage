@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fake show_storage for the sandbox (same table on both cluster aliases). Banner carries
+# its own all-`=` divider to exercise the parser's header anchoring. Box-distinct sizes
+# (home 50% of 100GB, work 45% of 20TB, cwfs 90%/95% near-quota) so tests prove the
+# output crossed ssh and the derived Use% grades render.
+cat <<'EOF'
+===============================================================
+  Storage usage for tester — reported hourly, not live.
+===============================================================
+
+System     Location                  Disk Usage (KB)  Disk Quota (KB)  File Usage  File Quota
+=========  ========================  ===============  ===============  ==========  ==========
+hpc1       /p/home/tester                   52428800        104857600       41250      250000
+hpc1       /p/work1/tester                9663676416      21474836480      182340     4000000
+hpc1       /p/cwfs/tester                  966367641       1073741824      950000     1000000
+EOF

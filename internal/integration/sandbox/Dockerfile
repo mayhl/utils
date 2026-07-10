@@ -52,7 +52,7 @@ RUN sh -c 'for p in /usr/share/modules/init/zsh /usr/share/Modules/init/zsh; do 
 COPY stubs/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/qstat /usr/local/bin/qdel /usr/local/bin/squeue \
              /usr/local/bin/sacct /usr/local/bin/scontrol /usr/local/bin/scancel \
-             /usr/local/bin/show_queues
+             /usr/local/bin/show_queues /usr/local/bin/show_storage
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd","-D","-e"]

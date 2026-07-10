@@ -192,6 +192,28 @@ func TestQueuesSLURM(t *testing.T) {
 	}
 }
 
+// TestStorage drives `mu hpc storage --node sandbox` through the box's show_storage
+// stub: rows parse past the banner's own `=` divider, KB figures land as human sizes,
+// and the derived Use% columns appear (50% home, 90% near-quota cwfs).
+func TestStorage(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "storage", "--node", "sandbox")
+	mustContain(t, out, "/p/home/tester", "50.0GB", "100.0GB", "50%", "90%", "95%")
+	if strings.Contains(out, "SYSTEM") || strings.Contains(out, "hpc1") {
+		t.Errorf("System column leaked into the single-cluster view:\n%s", out)
+	}
+}
+
+// TestStorageFleet drives `mu hpc storage -f`: no fleet list is configured, so the scope
+// falls back to one node per active cluster — both aliases hit the one box and the merged
+// table carries a System column tagged with the CONFIG cluster names (not the site-
+// reported "hpc1").
+func TestStorageFleet(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "storage", "-f")
+	mustContain(t, out, "SYSTEM", "sbpbs", "sbslurm", "/p/home/tester")
+}
+
 // TestInfoPBS drives `mu hpc queue info` (minfo) end-to-end on the PBS idiom: snapshot
 // the queue (qstat -a), resolve the selector, fetch detail (qstat -f), render the house
 // card. WorkDir proves the -f detail parsed, not just the snapshot row.
