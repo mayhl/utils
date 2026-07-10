@@ -152,6 +152,14 @@ func frontDoors() string {
 			door{"mhold", `mu hpc queue hold "$@"`},
 			door{"mrls", `mu hpc queue release "$@"`},
 			door{"mhist", `mu hpc queue hist "$@"`},
+			// Cluster info + compute-node access planes. hpcs breaks the m- prefix
+			// deliberately: it's about SYSTEMS (plural of HPC), not jobs.
+			door{"mqueues", `mu hpc queues "$@"`},
+			door{"mstorage", `mu hpc storage "$@"`},
+			door{"musage", `mu hpc usage "$@"`},
+			door{"hpcs", `mu hpc nodes "$@"`},
+			door{"mtunnel", `mu job tunnel "$@"`},
+			door{"mshell", `mu job shell "$@"`},
 		)
 	}
 	// archive is mirror-aware end-to-end via `mu archive` (project module),
@@ -161,6 +169,7 @@ func frontDoors() string {
 		if _, err := exec.LookPath("archive"); err == nil {
 			doors = append(doors, door{"archive", `mu archive "$@"`})
 		}
+		doors = append(doors, door{"mruns", `mu project runs "$@"`})
 	}
 
 	names := make([]string, len(doors))
