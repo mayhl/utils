@@ -26,7 +26,8 @@ import (
 // workstation; the login node relays). -I instead allocates an interactive
 // shell (qsub -I / salloc) under a real tty.
 func jobTunnelCmd() *cobra.Command {
-	var node, jobID, account, queue_ string
+	var node, jobID, account string
+	var sel queueSel
 	var port, localPort int
 	var yes bool
 	var wait, poll time.Duration
@@ -60,7 +61,7 @@ func jobTunnelCmd() *cobra.Command {
 			if localPort == 0 {
 				localPort = port
 			}
-			return jobTunnel(node, script, jobID, account, queue_, port, localPort, yes, wait, poll)
+			return jobTunnel(node, script, jobID, account, &sel, port, localPort, yes, wait, poll)
 		},
 	}
 	setHelpArgs(c, [2]string{"[script]", "service script to submit, path resolved ON the target"})
@@ -70,7 +71,7 @@ func jobTunnelCmd() *cobra.Command {
 	f.IntVarP(&port, "port", "p", 0, "service port on the compute node")
 	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: same as --port)")
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
-	f.StringVarP(&queue_, "queue", "q", "", "queue / partition")
+	addQueueSelFlags(c, &sel)
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.DurationVar(&wait, "wait", 15*time.Minute, "give up if the job isn't running by then")
 	f.DurationVar(&poll, "poll", 5*time.Second, "scheduler poll interval while waiting")
@@ -86,7 +87,8 @@ func jobTunnelCmd() *cobra.Command {
 // = you on the node, tunnel = a service's port. FUTURE: -p adds a tunnel to the
 // allocated node once the scheduler names it (the mux makes that composable).
 func jobShellCmd() *cobra.Command {
-	var node, account, queue_ string
+	var node, account string
+	var sel queueSel
 	c := &cobra.Command{
 		Use:   "shell",
 		Short: "Open an interactive allocation on a compute node (qsub -I / salloc).",
@@ -94,15 +96,15 @@ func jobShellCmd() *cobra.Command {
 			"the shell on the compute node, tty and all. Exiting the shell releases the\n" +
 			"allocation. For tunnelling a service's port instead, see `mu job tunnel`.\n" +
 			"Front-door: `mshell`.\n\n" +
-			"    mu job shell -N hpc1 -q debug",
+			"    mu job shell -N hpc1 --debug",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return jobInteractive(node, account, queue_)
+			return jobInteractive(node, account, &sel)
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
-	c.Flags().StringVarP(&queue_, "queue", "q", "", "queue / partition")
+	addQueueSelFlags(c, &sel)
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -113,7 +115,7 @@ func jobShellCmd() *cobra.Command {
 // ControlMaster (the single auth), submit and wait as channels on it, then add
 // the port-forward to the same live connection and hold until Ctrl-C. The
 // login node sees one session for the whole flow.
-func jobTunnel(node, script, jobID, account, queue_ string, port, localPort int, yes bool, wait, poll time.Duration) error {
+func jobTunnel(node, script, jobID, account string, sel *queueSel, port, localPort int, yes bool, wait, poll time.Duration) error {
 	if node == "" {
 		return usageErr("needs -N <cluster> — the tunnel runs from the workstation")
 	}
@@ -128,6 +130,12 @@ func jobTunnel(node, script, jobID, account, queue_ string, port, localPort int,
 	}
 	if account == "" {
 		account = config.AccountFor(node)
+	}
+	queue_ := ""
+	if jobID == "" { // adopt mode never submits — don't resolve (or live-fetch) a queue for it
+		if queue_, err = sel.resolve(node, node, false); err != nil {
+			return err
+		}
 	}
 	opts := queue.SubmitOpts{Account: account, Queue: queue_}
 	submitCmd := adapter.SubmitCmd(script, opts)
@@ -335,7 +343,7 @@ func (m *sshMux) close() {
 // jobInteractive replaces mu with `ssh -t <login> <qsub -I|salloc>` — the
 // scheduler's own interactive allocation under a real tty (RemoteExec is
 // tty-less by design, so this path builds its own ssh).
-func jobInteractive(node, account, queue_ string) error {
+func jobInteractive(node, account string, sel *queueSel) error {
 	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
 	if err != nil {
 		return err
@@ -353,6 +361,10 @@ func jobInteractive(node, account, queue_ string) error {
 	}
 	if account == "" {
 		account = config.AccountFor(label)
+	}
+	queue_, err := sel.resolve(node, label, false)
+	if err != nil {
+		return err
 	}
 	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: queue_})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))

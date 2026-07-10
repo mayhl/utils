@@ -86,8 +86,8 @@ func jobPrepCmd() *cobra.Command {
 // the current cluster. -A overrides the cluster's config default; empty opts fall through
 // to the script's own #PBS/#SBATCH directives.
 func jobSubCmd() *cobra.Command {
-	var node, account, queue_ string
-	var gpu, vis, bigmem, himem, xfer, debug, dbg, background, back bool
+	var node, account string
+	var sel queueSel
 	var yes, dryRun bool
 	c := &cobra.Command{
 		Use:   "sub <script>",
@@ -115,27 +115,11 @@ func jobSubCmd() *cobra.Command {
 			if account == "" {
 				account = config.AccountFor(label)
 			}
-			if queue_ == "" {
-				key := "" // "" → the bare-sub default
-				switch {
-				case gpu:
-					key = "gpu"
-				case vis:
-					key = "vis"
-				case bigmem || himem:
-					key = "bigmem"
-				case xfer:
-					key = "xfer"
-				case debug || dbg:
-					key = "debug"
-				case background || back:
-					key = "background"
-				}
-				if queue_, err = resolveSubmitQueue(node, label, key); err != nil {
-					return err
-				}
+			queueName, err := sel.resolve(node, label, true)
+			if err != nil {
+				return err
 			}
-			opts := queue.SubmitOpts{Account: account, Queue: queue_}
+			opts := queue.SubmitOpts{Account: account, Queue: queueName}
 			cmd := adapter.SubmitCmd(script, opts)
 
 			render.Info(fmt.Sprintf("Submit to %s (%s)", label, scheduler))
@@ -171,26 +155,75 @@ func jobSubCmd() *cobra.Command {
 	setHelpArgs(c, [2]string{"<script>", "job script path, resolved ON the target cluster"})
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
-	c.Flags().StringVarP(&queue_, "queue", "q", "", "queue / partition to submit to")
-	c.Flags().BoolVar(&gpu, "gpu", false, "submit to the GPU queue (config submit_queue.gpu, else resolved live)")
-	c.Flags().BoolVar(&vis, "vis", false, "submit to the visualization queue (config submit_queue.vis, else resolved live)")
-	c.Flags().BoolVar(&bigmem, "bigmem", false, "submit to the big-memory queue (config submit_queue.bigmem, else resolved live)")
-	c.Flags().BoolVar(&himem, "himem", false, "alias for --bigmem")
-	c.Flags().BoolVar(&xfer, "xfer", false, "submit to the transfer/archive queue (config submit_queue.xfer, else resolved live)")
-	c.Flags().BoolVar(&debug, "debug", false, "submit to the debug queue — quick iterations (config submit_queue.debug, else the queue named 'debug')")
-	c.Flags().BoolVar(&dbg, "dbg", false, "alias for --debug")
-	c.Flags().BoolVar(&background, "background", false, "submit to the no-charge background queue (config submit_queue.background, else the queue named 'background')")
-	c.Flags().BoolVar(&back, "back", false, "alias for --background")
-	_ = c.Flags().MarkHidden("himem")
-	_ = c.Flags().MarkHidden("dbg")
-	_ = c.Flags().MarkHidden("back")
-	c.MarkFlagsMutuallyExclusive("queue", "gpu", "vis", "bigmem", "himem", "xfer", "debug", "dbg", "background", "back")
+	addQueueSelFlags(c, &sel)
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print the submit command without submitting")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
+}
+
+// queueSel is the queue selector shared by the submitting job verbs (sub/tunnel/shell):
+// -q names a queue literally, or one class/purpose flag resolves it via the cluster's
+// submit_queue config, falling back per key — see resolveSubmitQueue.
+type queueSel struct {
+	queue                                                       string
+	gpu, vis, bigmem, himem, xfer, debug, dbg, background, back bool
+}
+
+// addQueueSelFlags registers -q plus the class/purpose selector flags on c, all
+// mutually exclusive (-q stays literal-always, so a queue named "gpu" is never shadowed).
+func addQueueSelFlags(c *cobra.Command, s *queueSel) {
+	f := c.Flags()
+	f.StringVarP(&s.queue, "queue", "q", "", "queue / partition to submit to")
+	f.BoolVar(&s.gpu, "gpu", false, "submit to the GPU queue (config submit_queue.gpu, else resolved live)")
+	f.BoolVar(&s.vis, "vis", false, "submit to the visualization queue (config submit_queue.vis, else resolved live)")
+	f.BoolVar(&s.bigmem, "bigmem", false, "submit to the big-memory queue (config submit_queue.bigmem, else resolved live)")
+	f.BoolVar(&s.himem, "himem", false, "alias for --bigmem")
+	f.BoolVar(&s.xfer, "xfer", false, "submit to the transfer/archive queue (config submit_queue.xfer, else resolved live)")
+	f.BoolVar(&s.debug, "debug", false, "submit to the debug queue — quick iterations (config submit_queue.debug, else the queue named 'debug')")
+	f.BoolVar(&s.dbg, "dbg", false, "alias for --debug")
+	f.BoolVar(&s.background, "background", false, "submit to the no-charge background queue (config submit_queue.background, else the queue named 'background')")
+	f.BoolVar(&s.back, "back", false, "alias for --background")
+	_ = f.MarkHidden("himem")
+	_ = f.MarkHidden("dbg")
+	_ = f.MarkHidden("back")
+	c.MarkFlagsMutuallyExclusive("queue", "gpu", "vis", "bigmem", "himem", "xfer", "debug", "dbg", "background", "back")
+}
+
+// key maps the selected flag to its submit_queue config key, or "" when none is set.
+func (s *queueSel) key() string {
+	switch {
+	case s.gpu:
+		return "gpu"
+	case s.vis:
+		return "vis"
+	case s.bigmem || s.himem:
+		return "bigmem"
+	case s.xfer:
+		return "xfer"
+	case s.debug || s.dbg:
+		return "debug"
+	case s.background || s.back:
+		return "background"
+	}
+	return ""
+}
+
+// resolve returns the queue to target: -q verbatim, else the submit_queue resolution
+// for the selected flag. bareDefault opts a flagless call into submit_queue.default —
+// true for `sub` (batch default belongs there), false for tunnel/shell (interactive
+// verbs stay on the scheduler default unless a flag says otherwise).
+func (s *queueSel) resolve(node, label string, bareDefault bool) (string, error) {
+	if s.queue != "" {
+		return s.queue, nil
+	}
+	key := s.key()
+	if key == "" && !bareDefault {
+		return "", nil
+	}
+	return resolveSubmitQueue(node, label, key)
 }
 
 // submitClasses maps a class-flag key to the node class the live fallback filters by.
