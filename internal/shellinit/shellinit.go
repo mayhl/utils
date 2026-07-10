@@ -8,12 +8,14 @@ package shellinit
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	shellassets "github.com/mayhl/mayhl_utils"
 	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/doctor"
+	"github.com/mayhl/mayhl_utils/internal/modules"
 )
 
 // The dispatcher: bare `<node>` connects (interactive ssh), `<node> push|pull`
@@ -151,6 +153,14 @@ func frontDoors() string {
 			door{"mrls", `mu hpc queue release "$@"`},
 			door{"mhist", `mu hpc queue hist "$@"`},
 		)
+	}
+	// archive is mirror-aware end-to-end via `mu archive` (project module),
+	// defined only where the site PST/TUSC binary exists and deliberately
+	// shadowing it — mu resolves the real binary from PATH, so no recursion.
+	if modules.Enabled("project") {
+		if _, err := exec.LookPath("archive"); err == nil {
+			doors = append(doors, door{"archive", `mu archive "$@"`})
+		}
 	}
 
 	names := make([]string, len(doors))
