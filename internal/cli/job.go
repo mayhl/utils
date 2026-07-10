@@ -23,7 +23,60 @@ func jobCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(jobEnvCmd(), jobSubCmd())
+	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd())
+	return c
+}
+
+// jobPrepCmd is `mu job prep`: create this job's run dir (sibling case_a_<jobid>,
+// inputs copied, run.toml provenance) and emit the shell that moves the job into it.
+// stdout is CODE for eval — mu owns the failure semantics (a failed prep emits
+// `exit 1`, so the job dies instead of computing in the authored case dir); all
+// human-facing lines go to stderr.
+func jobPrepCmd() *cobra.Command {
+	var pathOnly bool
+	c := &cobra.Command{
+		Use:   "prep",
+		Short: "Create the run dir (case copy + run.toml) — eval inside a job.",
+		Long: "Give this job its own run dir: copy the submit (case) dir to a sibling named\n" +
+			"<case>_<jobid> (scheduler log files excluded), drop a run.toml provenance record,\n" +
+			"and print shell that exports MU_RUN_DIR and cds there — a failed prep prints\n" +
+			"`exit 1` so the job aborts rather than running in the case dir. Preamble idiom:\n\n" +
+			"    eval \"$(mu job env)\"\n" +
+			"    eval \"$(mu job prep)\"\n\n" +
+			"A requeue (run dir already present) reuses it without re-copying, so partial\n" +
+			"outputs survive. --path prints the run dir path and changes nothing.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if pathOnly {
+				dir, err := job.RunDir()
+				if err != nil {
+					return runErr("%s", err)
+				}
+				fmt.Println(dir)
+				return nil
+			}
+			snippet, reused, err := job.Prep()
+			if err != nil {
+				// stdout carries the abort for the eval'ing job script; the returned
+				// error covers interactive use (stderr + non-zero exit).
+				fmt.Printf("echo 'mu job prep: %s' >&2\nexit 1\n", strings.ReplaceAll(err.Error(), "'", `'\''`))
+				return runErr("%s", err)
+			}
+			if home := os.Getenv("HOME"); home != "" && strings.HasPrefix(os.Getenv("MU_SUBMIT_DIR")+"/", home+"/") {
+				render.Warn("submit dir is under $HOME — this run will write to the permanent tier (submit from the $WORKDIR copy)")
+			}
+			fmt.Print(snippet)
+			verb := "prepared"
+			if reused {
+				verb = "reusing"
+			}
+			dir, _ := job.RunDir()
+			render.OK(verb + " run dir " + dir)
+			render.EventOK("job", verb+" run dir "+dir)
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&pathOnly, "path", false, "print the run dir path only (no copy, no run.toml)")
 	return c
 }
 
