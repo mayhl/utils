@@ -30,20 +30,23 @@ func projectCmd() *cobra.Command {
 
 func projectSubmitCmd() *cobra.Command {
 	var node, script, account, queue_ string
-	var yes, dryRun, verbose, keep bool
+	var yes, dryRun, verbose, keep, clean bool
 	c := &cobra.Command{
 		Use:   "submit <case-dir>",
-		Short: "Push a case to a cluster's $WORK staging and submit it (iterate mode).",
-		Long: "The edit→run debug loop: rsync the case dir to the target's $WORKDIR at the\n" +
-			"same $HOME-relative path (the remote git clone is never touched), drop a\n" +
-			"submit-origin stamp (HEAD sha + dirty — `mu job prep` folds it into run.toml),\n" +
-			"and qsub/sbatch the script from staging. Staging mirrors the case dir exactly\n" +
-			"(stale files are deleted; scheduler logs from prior runs are kept) — it is the\n" +
-			"disposable submit copy, not the authored source. --clean (commit-gated,\n" +
-			"git-mediated study mode) comes later.",
+		Short: "Push a case to a cluster's $WORK staging and submit it.",
+		Long: "Iterate mode (default), the edit→run debug loop: rsync the case dir to the\n" +
+			"target's $WORKDIR at the same $HOME-relative path (the remote git clone is\n" +
+			"never touched), drop a submit-origin stamp (HEAD sha + dirty — `mu job prep`\n" +
+			"folds it into run.toml), and qsub/sbatch the script from staging. Staging\n" +
+			"mirrors the case dir exactly (stale files are deleted; scheduler logs from\n" +
+			"prior runs are kept) — the disposable submit copy, not the authored source.\n\n" +
+			"--clean, the study phase: refuse a dirty tree, push the branch through the\n" +
+			"per-node remote (updateInstead refreshes the $HOME clone; `mu project clone`\n" +
+			"bootstraps it), stage $HOME→$WORK on the node, submit — every run.toml then\n" +
+			"carries a real reproducible sha. Pre-flight refuses a diverged remote.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, verbose, keep)
+			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, verbose, keep, clean)
 		},
 	}
 	setHelpArgs(c, [2]string{"<case-dir>", "case directory to push and run (under $HOME, inside a git project)"})
@@ -56,6 +59,7 @@ func projectSubmitCmd() *cobra.Command {
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "show the plan without pushing or submitting")
 	f.BoolVarP(&verbose, "verbose", "v", false, "per-file rsync output instead of the aggregate bar")
 	f.BoolVar(&keep, "keep-extra", false, "keep staging files the case dir no longer has (skip rsync --delete)")
+	f.BoolVar(&clean, "clean", false, "commit-gated study mode: push via the per-node remote, stage $HOME→$WORK on the node")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -72,9 +76,10 @@ var stageProtect = []string{
 	"--filter=P /" + project.StampFile,
 }
 
-// projectSubmit is the iterate-mode pipeline: resolve → preview+confirm → make
-// staging (leg 1) → rsync (leg 2) → stamp + submit (leg 3).
-func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep bool) error {
+// projectSubmit is the push-and-run pipeline: resolve → preview+confirm → get
+// the case into $WORK staging (iterate: laptop rsync; clean: git push + node-side
+// copy) → stamp + submit.
+func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep, clean bool) error {
 	caseAbs, err := filepath.Abs(caseDir)
 	if err != nil {
 		return usageErr("%s", err)
@@ -85,7 +90,8 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	if _, err := os.Stat(filepath.Join(caseAbs, script)); err != nil {
 		return usageErr("script %s not found in %s", script, caseDir)
 	}
-	if _, err := project.FindRoot(caseAbs); err != nil {
+	root, err := project.FindRoot(caseAbs)
+	if err != nil {
 		return usageErr("%s", err)
 	}
 	rel, err := project.HomeRel(caseAbs)
@@ -110,8 +116,25 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	opts := queue.SubmitOpts{Account: account, Queue: queue_}
 	submitCmd := adapter.SubmitCmd(script, opts)
 	stamp := project.NewStamp(caseAbs)
+	branch := ""
+	if clean {
+		// The study-phase gates: a real commit, a clean tree, a branch to push.
+		if stamp.Commit == "" {
+			return usageErr("--clean needs a commit — the run must be reproducible from a sha")
+		}
+		if stamp.Dirty {
+			return usageErr("--clean refuses a dirty tree — commit (or submit iterate-mode) first")
+		}
+		if branch = gitLine(root, "branch", "--show-current"); branch == "" {
+			return usageErr("%s is on a detached HEAD — check out a branch for --clean", root)
+		}
+	}
 
-	render.Info(fmt.Sprintf("Submit case → %s (%s)", node, scheduler))
+	mode := "iterate"
+	if clean {
+		mode = "clean"
+	}
+	render.Info(fmt.Sprintf("Submit case → %s (%s, %s)", node, scheduler, mode))
 	render.Detail("case:    " + rel)
 	render.Detail("stage:   $WORKDIR/" + rel)
 	render.Detail("script:  " + script)
@@ -154,16 +177,24 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 		return runErr("%s: staging dir: empty $WORKDIR resolution", node)
 	}
 
-	// Leg 2: mirror the case dir into staging.
-	o := rsync.Opts{Delete: !keep, PartialDir: true}
-	if !keep {
-		o.Ropt = stageProtect
-	}
-	label := "stage " + node
-	code, _ := rsync.Run(rsync.BuildArgs(caseAbs+"/", target+":"+stage+"/", o), label, verbose)
-	if code != 0 {
-		render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
-		return codeErr(code)
+	// Leg 2: get the case into staging — iterate rsyncs the working tree from
+	// the laptop; clean pushes the branch through the per-node remote
+	// (updateInstead refreshes the $HOME clone) and stages node-side.
+	if clean {
+		if err := cleanStage(node, target, root, branch, rel, stage, keep); err != nil {
+			return err
+		}
+	} else {
+		o := rsync.Opts{Delete: !keep, PartialDir: true}
+		if !keep {
+			o.Ropt = stageProtect
+		}
+		label := "stage " + node
+		code, _ := rsync.Run(rsync.BuildArgs(caseAbs+"/", target+":"+stage+"/", o), label, verbose)
+		if code != 0 {
+			render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
+			return codeErr(code)
+		}
 	}
 
 	// Leg 3: drop the stamp and submit from staging.
@@ -178,5 +209,43 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	msg := "submitted " + rel + " → " + node
 	render.OK(msg)
 	render.EventOK("project", msg)
+	return nil
+}
+
+// cleanStage is the --clean transport: divergence pre-flight (the remote must be
+// an ancestor of HEAD — can't attribute which side diverged, doesn't need to),
+// push through the per-node remote, then a node-side $HOME→$WORK copy of the
+// case. The push refreshing the checked-out tree is the updateInstead contract
+// `mu project clone` set up.
+func cleanStage(node, target, root, branch, rel, stage string, keep bool) error {
+	if gitLine(root, "remote", "get-url", node) == "" {
+		return usageErr("no %s remote in %s — run `mu project clone %s` first", node, root, node)
+	}
+	env := append(os.Environ(), "GIT_SSH_COMMAND="+config.SSHCommand())
+	if msg, ok := gitRun(root, env, "fetch", "-q", node, branch); !ok {
+		return runErr("fetch from %s failed: %s", node, msg)
+	}
+	remote := gitLine(root, "rev-parse", "FETCH_HEAD")
+	if remote != "" {
+		if _, ok := gitRun(root, nil, "merge-base", "--is-ancestor", remote, "HEAD"); !ok {
+			return usageErr("%s's clone is at %.12s, not an ancestor of HEAD — reconcile first", node, remote)
+		}
+	}
+	if msg, ok := gitRun(root, env, "push", "-q", node, branch); !ok {
+		return runErr("push to %s failed (dirty remote checkout?): %s", node, msg)
+	}
+	qfilters := ""
+	if !keep {
+		qs := make([]string, 0, len(stageProtect)+1)
+		qs = append(qs, "--delete")
+		for _, f := range stageProtect {
+			qs = append(qs, shell.Quote(f))
+		}
+		qfilters = " " + strings.Join(qs, " ")
+	}
+	cmd := fmt.Sprintf(`rsync -a%s "$HOME"/%s/ %s/`, qfilters, shell.Quote(rel), shell.Quote(stage))
+	if out, err := hpc.RemoteExec(target, cmd); err != nil {
+		return runErr("%s: node-side stage: %s\n%s", node, err, strings.TrimSpace(out))
+	}
 	return nil
 }
