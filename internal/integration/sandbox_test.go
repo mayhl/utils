@@ -262,6 +262,17 @@ func TestUsage(t *testing.T) {
 	if strings.Contains(out, "SYSTEM") || strings.Contains(out, "hpc1") {
 		t.Errorf("System column leaked into the single-cluster view:\n%s", out)
 	}
+	// Use-it-or-lose-it: with 22.67% of the year left, ABC's 60% unspent is a 2.6× burn
+	// multiple → forfeit-flagged (↑ on Remain% and the pace margin). QRS's 30% is 1.3× —
+	// on track, so the glyph must NOT spread to it.
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(line, "ABC123DEF") && !strings.Contains(line, "↑"):
+			t.Errorf("hoarded allocation not flagged use-it-or-lose-it:\n%s", line)
+		case strings.Contains(line, "QRS456JKL") && strings.Contains(line, "↑"):
+			t.Errorf("on-pace allocation wrongly flagged use-it-or-lose-it:\n%s", line)
+		}
+	}
 }
 
 // TestUsageFleet drives `mu hpc usage -f`: rows tagged by config cluster name, each

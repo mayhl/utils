@@ -21,10 +21,11 @@ import (
 // for the title and the per-row pace column.
 const showUsageCmd = "show_usage"
 
-// hpcUsageCmd is `mu hpc usage`: per-subproject allocation usage as a house table, with
-// the Remain% colored by headroom and a derived "vs FY" pace column — allocation-percent-
-// remaining minus fiscal-year-percent-remaining, so a negative margin warns of overuse
-// (burning hours faster than the year passes). Sibling of `mu hpc storage`, same targets.
+// hpcUsageCmd is `mu hpc usage`: per-subproject allocation usage as a house table, with a
+// derived "vs FY" pace column — allocation-percent-remaining minus fiscal-year-percent-
+// remaining — so a negative margin warns of overuse (burning hours faster than the year
+// passes) and a big positive one late in the year warns of forfeiture (use-it-or-lose-it).
+// Sibling of `mu hpc storage`, same targets.
 func hpcUsageCmd() *cobra.Command {
 	var node string
 	var local, fleet, all, raw, jsonOut bool
@@ -35,6 +36,8 @@ func hpcUsageCmd() *cobra.Command {
 			"— as one house table. The banner's percent-of-fiscal-year-remaining lands in\n" +
 			"the title, and each row gets a derived `vs FY` margin (Remain% minus FY%):\n" +
 			"negative means the allocation is burning faster than the year passes — overuse.\n" +
+			"A large positive margin is its own warning (marked ↑): hours that can no longer\n" +
+			"plausibly be spent before the year ends are forfeited — use them or lose them.\n" +
 			"--raw prints the site command's own output verbatim.\n\n" +
 			"Target, like `mu hpc storage`: --node fetches one cluster over remote-exec,\n" +
 			"--local runs it on the current cluster (no ssh), -f/--fleet and\n" +
@@ -160,6 +163,7 @@ func toUsageRows(infos []queue.UsageInfo, collate bool) []render.UsageRow {
 			RemainPct:  s.PctRemain,
 			Background: countHuman(s.Background),
 			VsFY:       vsFY(s.PctRemain, s.FYLeft),
+			FYLeft:     s.FYLeft, // render paces the row against its own system's year percent
 		}
 	}
 	return rows
@@ -230,6 +234,7 @@ func usageTotalRow(group []queue.UsageInfo) (render.UsageRow, bool) {
 		RemainPct:  pct,
 		Background: countHuman(strconv.FormatInt(bg, 10)),
 		VsFY:       vsFY(pct, fy),
+		FYLeft:     fy,
 	}, true
 }
 
