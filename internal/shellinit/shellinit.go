@@ -43,8 +43,8 @@ const helper = `_mu_node_help() {
     "  $n N              connect to login node N ($n 3 -> ${n}03)" \
     "  $n <cmd>          run <cmd> on $n over ssh" \
     "  $n N <cmd>        run <cmd> on login node N" \
-    "  $n push SRC DST   upload   (mu cp push)" \
-    "  $n pull SRC DST   download (mu cp pull)" \
+    "  $n push SRC [DST] upload   (mu cp push; DST default \$HOME on $n)" \
+    "  $n pull SRC [DST] download (mu cp pull; DST default .)" \
     "  $n mstat [-a]     show $n's queue (mu hpc queue --node $n)" \
     "  $n -h | --help    show this help"
 }

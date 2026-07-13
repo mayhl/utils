@@ -23,19 +23,20 @@ func cpPushCmd() *cobra.Command {
 	var o rsync.Opts
 	var verbose bool
 	cmd := &cobra.Command{
-		Use:               "push <node> <src> <dst>",
-		Short:             "Copy a local path TO a node (rsync push), with a progress bar.",
-		Long:              "Copy a local path TO a node (rsync push), with a live progress bar.\n\n" + hpc.NodesHint(),
-		Args:              cobra.ExactArgs(3),
+		Use:   "push <node> <src> [dst]",
+		Short: "Copy a local path TO a node (rsync push), with a progress bar.",
+		Long: "Copy a local path TO a node (rsync push), with a live progress bar.\n" +
+			"With no <dst> the path lands in your home dir on the node.\n\n" + hpc.NodesHint(),
+		Args:              cobra.RangeArgs(2, 3),
 		ValidArgsFunction: nodeCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runTransfer(true, args[0], args[1], args[2], o, verbose)
+			return runTransfer(true, args[0], args[1], transferDst(args, ""), o, verbose)
 		},
 	}
 	setHelpArgs(cmd,
 		[2]string{"<node>", "target node or cluster alias from the configured inventory"},
 		[2]string{"<src>", "local path to copy"},
-		[2]string{"<dst>", "destination path on the node (~-relative or absolute)"})
+		[2]string{"[dst]", "destination path on the node (~-relative or absolute); default: your home dir"})
 	addTransferFlags(cmd, &o, &verbose)
 	return cmd
 }
@@ -44,21 +45,32 @@ func cpPullCmd() *cobra.Command {
 	var o rsync.Opts
 	var verbose bool
 	cmd := &cobra.Command{
-		Use:               "pull <node> <src> <dst>",
-		Short:             "Copy a path FROM a node to local (rsync pull), with a progress bar.",
-		Long:              "Copy a path FROM a node TO local (rsync pull), with a live progress bar.\n\n" + hpc.NodesHint(),
-		Args:              cobra.ExactArgs(3),
+		Use:   "pull <node> <src> [dst]",
+		Short: "Copy a path FROM a node to local (rsync pull), with a progress bar.",
+		Long: "Copy a path FROM a node TO local (rsync pull), with a live progress bar.\n" +
+			"With no <dst> the path lands in the current directory.\n\n" + hpc.NodesHint(),
+		Args:              cobra.RangeArgs(2, 3),
 		ValidArgsFunction: nodeCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runTransfer(false, args[0], args[1], args[2], o, verbose)
+			return runTransfer(false, args[0], args[1], transferDst(args, "."), o, verbose)
 		},
 	}
 	setHelpArgs(cmd,
 		[2]string{"<node>", "source node or cluster alias from the configured inventory"},
 		[2]string{"<src>", "remote path on the node (~-relative or absolute)"},
-		[2]string{"<dst>", "local destination path"})
+		[2]string{"[dst]", "local destination path; default: the current directory"})
 	addTransferFlags(cmd, &o, &verbose)
 	return cmd
+}
+
+// transferDst is the optional 3rd arg, else the side's default: "" for a push (rsync
+// reads a bare `node:` as the remote home dir) and "." for a pull (the local CWD) — the
+// symmetric "no destination named → the natural landing spot on the receiving side".
+func transferDst(args []string, def string) string {
+	if len(args) > 2 {
+		return args[2]
+	}
+	return def
 }
 
 // runTransfer resolves the node, ensures a Kerberos ticket, and runs rsync. For

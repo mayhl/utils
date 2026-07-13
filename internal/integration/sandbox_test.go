@@ -823,6 +823,35 @@ func TestCPRoundtrip(t *testing.T) {
 	}
 }
 
+// TestCPDefaultDst drives the optional-dst forms against the box: `push <node> <src>`
+// with no dst lands in the remote $HOME, and `pull <node> <src>` with no dst lands in
+// the CWD (the test's temp dir) — the rsync `node:` / "." defaults, end to end.
+func TestCPDefaultDst(t *testing.T) {
+	requireSandbox(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "dflt.txt")
+	const body = "default-dst-ok\n"
+	if err := os.WriteFile(src, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mu(t, "cp", "push", "sandbox", src) // → remote $HOME/dflt.txt
+
+	pullDir := t.TempDir()
+	cmd := exec.Command(muBin, "cp", "pull", "sandbox", "dflt.txt") // → ./dflt.txt
+	cmd.Env = muEnv()
+	cmd.Dir = pullDir
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mu cp pull (default dst): %v\n%s", err, raw)
+	}
+	got, err := os.ReadFile(filepath.Join(pullDir, "dflt.txt"))
+	if err != nil {
+		t.Fatalf("pull did not land in the CWD: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("default-dst roundtrip mismatch: got %q want %q", got, body)
+	}
+}
+
 // TestProjectSubmit drives iterate-mode `mu project submit` end-to-end: a case in a
 // git project under the real $HOME (HomeRel is $HOME-relative and ssh config must
 // stay intact, so no HOME override) is rsynced to the box's $WORKDIR staging, the
