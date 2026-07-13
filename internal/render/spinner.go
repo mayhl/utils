@@ -9,7 +9,20 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
-var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var (
+	spinFrames      = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	spinFramesASCII = []string{"|", "/", "-", "\\"}
+)
+
+// spinnerFrames picks the frame set: braille reads as mojibake on a non-UTF-8 terminal
+// (PuTTY on the clusters), where the old barber-pole is what a spinner is supposed to
+// look like anyway.
+func spinnerFrames() []string {
+	if asciiMode() {
+		return spinFramesASCII
+	}
+	return spinFrames
+}
 
 // Spinner is a minimal braille spinner on stderr, for wrapping a blocking op
 // (e.g. an sshfs mount settling) with a live "…working" line. Like the progress
@@ -45,16 +58,23 @@ func (s *Spinner) Start() {
 	}
 	go func() {
 		defer close(s.done)
+		frames := spinnerFrames()
 		tick := time.NewTicker(100 * time.Millisecond)
 		defer tick.Stop()
 		for i := 0; ; i++ {
-			frame := spinFrames[i%len(spinFrames)]
+			frame := frames[i%len(frames)]
 			if !colorOff() {
 				frame = text.Colors{text.FgCyan}.Sprint(frame)
 			}
 			s.mu.Lock()
 			msg := s.msg
 			s.mu.Unlock()
+			// Trim to the terminal: the glyph + its gap cost 2 columns, and a message
+			// that wraps would leave the tail behind on Stop (\r + \033[K only clear the
+			// last line). Keep the head — a spinner message leads with what it's doing.
+			if tw := termWidth(); tw > 2 {
+				msg = truncRight(msg, tw-2)
+			}
 			fmt.Fprintf(os.Stderr, "\r%s %s\033[K", frame, msg)
 			select {
 			case <-s.stop:

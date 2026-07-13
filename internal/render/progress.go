@@ -8,7 +8,39 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
-const barWidth = 30
+// Bar geometry: barWidth is the roomy default, minBarWidth the floor a bar stays
+// readable at, and barFixedCols the non-bar, non-label furniture on the line — the two
+// gaps, " 100%", the 11-col rate field, and " ETA 0:00:12".
+const (
+	barWidth      = 30
+	minBarWidth   = 10
+	minLabelWidth = 8
+	barFixedCols  = 33
+)
+
+// planBar sizes the bar and the label to the terminal: the bar keeps its full width while
+// the label still has room, then SHRINKS (to minBarWidth) rather than letting the line
+// wrap — a wrapped in-place bar smears across the scrollback, since \r only returns to the
+// start of the last line. Under ~43 columns even the floor bar plus the fixed furniture
+// won't fit; the label budget goes to 0 (Update drops the label) and the line is as short
+// as it can be. An unknown width (piped) assumes 80.
+func planBar(tw int) (bar, label int) {
+	if tw <= 0 {
+		tw = 80
+	}
+	tw-- // leave the last column empty: writing into it arms an auto-wrap on some terminals
+	bar = tw - barFixedCols - minLabelWidth
+	switch {
+	case bar > barWidth:
+		bar = barWidth
+	case bar < minBarWidth:
+		bar = minBarWidth
+	}
+	if label = tw - barFixedCols - bar; label < 0 {
+		label = 0
+	}
+	return bar, label
+}
 
 // ProgressBar draws a single in-place rsync transfer bar — label, bar, percent,
 // rate, ETA — redrawn on one line via carriage return. It mirrors the retired
@@ -45,22 +77,18 @@ func (p *ProgressBar) Update(pct int, rate, eta string) {
 		pct = 100
 	}
 	p.rate = rate
-	filled := pct * barWidth / 100
+	// Keep the whole line within the terminal: the bar sizes to the width first, then a
+	// long current-filename label truncates into whatever's left, so neither wraps.
+	bw, budget := planBar(termWidth())
+	filled := pct * bw / 100
 	fillCh, emptyCh := "█", "░"
 	if asciiMode() {
 		fillCh, emptyCh = "#", "-"
 	}
-	bar := strings.Repeat(fillCh, filled) + strings.Repeat(emptyCh, barWidth-filled)
-	// Keep the whole line within the terminal: cap the label to whatever's left
-	// after the bar and the fixed pct/rate/eta columns (~33 cols) so a long
-	// current-filename label truncates instead of wrapping.
-	label := p.label
-	tw := termWidth()
-	if tw <= 0 {
-		tw = 80
-	}
-	if budget := tw - barWidth - 33; budget >= 4 {
-		label = truncLeft(label, budget)
+	bar := strings.Repeat(fillCh, filled) + strings.Repeat(emptyCh, bw-filled)
+	label := ""
+	if budget >= 4 { // below that there's no room for a meaningful label — drop it
+		label = truncLeft(p.label, budget)
 	}
 	if !colorOff() {
 		label = text.Colors{text.FgCyan}.Sprint(label)
