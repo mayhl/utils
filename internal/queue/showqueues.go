@@ -7,6 +7,7 @@ import "strings"
 // non-numeric markers, and the blank E/R flags some systems emit survive verbatim;
 // callers convert as needed. Type (Exe/Rou) distinguishes submittable from routing queues.
 type QueueInfo struct {
+	System      string // owning cluster, tagged by the collate views (show_queues doesn't emit it)
 	Name        string
 	MaxWalltime string // HH:MM:SS, "" if blank
 	MaxJobs     string

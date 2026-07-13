@@ -29,7 +29,7 @@ const showQueuesCmd = "show_queues"
 // stdin is parsed.
 func hpcQueuesCmd() *cobra.Command {
 	var node string
-	var local, jsonOut, all, interactive bool
+	var local, jsonOut, all, interactive, fleet, allSystems bool
 	c := &cobra.Command{
 		Use:   "queues",
 		Short: "Show a cluster's batch queues (show_queues) as a house table.",
@@ -41,9 +41,11 @@ func hpcQueuesCmd() *cobra.Command {
 			"dropped as noise; -a/--all brings them back and adds the routing/admin and\n" +
 			"down queues too. A submittable queue that's stopped/disabled is warned about.\n\n" +
 			"Target, like `mu hpc queue`: --node fetches one cluster over remote-exec, --local\n" +
-			"runs it on the current cluster (no ssh), and with neither a listing piped on stdin\n" +
-			"is parsed — the test/pipe-your-own seam:\n" +
+			"runs it on the current cluster (no ssh), -f/--fleet collates the fleet and\n" +
+			"-e/--all-systems every configured cluster (adding a System column), and with none\n" +
+			"of those a listing piped on stdin is parsed — the test/pipe-your-own seam:\n" +
 			"    mu hpc queues --node hpc1\n" +
+			"    mu hpc queues -f\n" +
 			"    hpc1 show_queues | mu hpc queues",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -56,6 +58,16 @@ func hpcQueuesCmd() *cobra.Command {
 				err   error
 			)
 			switch {
+			case fleet, allSystems:
+				targets, scope := fleetScope(), "fleet"
+				if allSystems {
+					targets, scope = allSystemsScope(), "all"
+				}
+				var down []string
+				label, qs, down, err = collateQueues(targets, scope)
+				for _, d := range down {
+					render.Warn(d)
+				}
 			case node != "":
 				label, qs, err = fetchQueues(node)
 			case local:
@@ -112,10 +124,12 @@ func hpcQueuesCmd() *cobra.Command {
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "fetch queues from this node (else read stdin)")
 	c.Flags().BoolVarP(&local, "local", "l", false, "run show_queues on the current cluster, locally (no ssh)")
+	c.Flags().BoolVarP(&fleet, "fleet", "f", false, "collate the fleet's queues (adds a System column)")
+	c.Flags().BoolVarP(&allSystems, "all-systems", "e", false, "collate every configured cluster, incl. inactive")
 	c.Flags().BoolVarP(&all, "all", "a", false, "include routing/admin (non-Exe) queues (default: only submittable Exe queues)")
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "browse queues in a live-filterable picker (type to narrow, `i` to inspect)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit queues as JSON (complete, untruncated) instead of a table")
-	c.MarkFlagsMutuallyExclusive("node", "local")
+	c.MarkFlagsMutuallyExclusive("node", "local", "fleet", "all-systems")
 	c.MarkFlagsMutuallyExclusive("json", "interactive")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
@@ -158,6 +172,14 @@ func fetchQueuesLocal() (string, []queue.QueueInfo, error) {
 	return self, queue.ParseShowQueues(out), nil
 }
 
+// collateQueues is the -f/--fleet / -e/--all-systems queues view: the shared site-command
+// fan-out with each row's System tagged by cluster label (show_queues, unlike show_storage,
+// emits no System column of its own).
+func collateQueues(targets []queueTarget, scope string) (string, []queue.QueueInfo, []string, error) {
+	return collateSite(targets, scope, showQueuesCmd, queue.ParseShowQueues,
+		func(q *queue.QueueInfo, label string) { q.System = label })
+}
+
 // execQueues keeps only submittable (Exe) queues — part of the default `mu hpc queues`
 // view. Non-Exe queues are routing/admin queues a user never targets with `mu job sub`.
 // Matches the `Exe` Type code case-insensitively by prefix, tolerating a longer spelling
@@ -191,18 +213,31 @@ func upQueues(qs []queue.QueueInfo) (up []queue.QueueInfo, down int) {
 // toQueueRows maps parsed QueueInfo to render's plain QueueRow (keeping render domain-
 // free). label is the cluster, used to resolve the config class/cores overrides: Class is
 // the config override or the name heuristic, and MaxNodes = ceil(MaxCores / cores-per-node)
-// with a per-queue cores override falling back to the cluster default.
+// with a per-queue cores override falling back to the cluster default. In a collate view
+// each row carries its OWN cluster (System), which overrides label — the overrides are
+// per-cluster, so a fleet row must resolve against the cluster it came from.
 func toQueueRows(label string, qs []queue.QueueInfo) []render.QueueRow {
 	rows := make([]render.QueueRow, len(qs))
 	for i, q := range qs {
+		cluster := queueCluster(label, q)
 		rows[i] = render.QueueRow{
-			Name: q.Name, Class: queueClass(label, q.Name), Type: q.Type,
+			System: q.System,
+			Name:   q.Name, Class: queueClass(cluster, q.Name), Type: q.Type,
 			Walltime: q.MaxWalltime, MaxJobs: q.MaxJobs, MaxCores: q.MaxCores,
-			MaxNodes: queueMaxNodes(label, q.Name, q.MaxCores),
+			MaxNodes: queueMaxNodes(cluster, q.Name, q.MaxCores),
 			Run:      q.JobsRun, Pend: q.JobsPend, Enabled: q.Enabled, Running: q.Running,
 		}
 	}
 	return rows
+}
+
+// queueCluster is the cluster a queue's config overrides resolve against: its own System
+// tag in a collate view, else the view's label.
+func queueCluster(label string, q queue.QueueInfo) string {
+	if q.System != "" {
+		return q.System
+	}
+	return label
 }
 
 // queueClass resolves a queue's node class: the config queue→class override if set, else
@@ -248,9 +283,11 @@ func queuesInteractive(label string, qs []queue.QueueInfo, all bool) error {
 	if !render.Interactive() {
 		return fmt.Errorf("mu hpc queues -i needs a terminal (stdin is not a tty)")
 	}
-	byName := make(map[string]queue.QueueInfo, len(qs))
+	// Keyed by System/Name: a bare queue name collides across clusters in a collate view
+	// (every system has a `standard`), and the key is the picker's row ID.
+	byID := make(map[string]queue.QueueInfo, len(qs))
 	for _, q := range qs {
-		byName[q.Name] = q
+		byID[queueID(q)] = q
 	}
 	qrows := toQueueRows(label, qs)
 	cols := render.QueueColumns(qrows, all) // shed low-priority columns to fit, like the table
@@ -265,17 +302,44 @@ func queuesInteractive(label string, qs []queue.QueueInfo, all bool) error {
 		for j, h := range cols {
 			cells[j], hues[j] = queuePickerCell(h, r)
 		}
-		selRows[i] = render.SelectRow{ID: r.Name, Cells: cells, Hues: hues}
+		selRows[i] = render.SelectRow{ID: rowID(r), Cells: cells, Hues: hues}
 	}
 	return render.Viewer(render.SelectSpec{
 		Title:      label + " queues",
 		Columns:    display,
 		Interval:   time.Hour, // static snapshot — queues rarely change; don't refetch on the tick
 		Fetch:      func() []render.SelectRow { return selRows },
-		Detail:     queueDetailCard(label, byName),
-		FacetCol:   2, // Class is always the 2nd column — `f` cycles all → CPU → GPU → … → all
+		Detail:     queueDetailCard(label, byID),
+		FacetCol:   colIndex(cols, "Class"), // 1-based; `f` cycles all → CPU → GPU → … → all
 		FacetLabel: "class",
 	})
+}
+
+// queueID / rowID are the picker's row key — System/Name in a collate view, the bare name
+// otherwise (the two must agree, hence one rule expressed over each shape).
+func queueID(q queue.QueueInfo) string {
+	if q.System == "" {
+		return q.Name
+	}
+	return q.System + "/" + q.Name
+}
+
+func rowID(r render.QueueRow) string {
+	if r.System == "" {
+		return r.Name
+	}
+	return r.System + "/" + r.Name
+}
+
+// colIndex is the 1-based position of a header in the shed column set (0 = absent, which
+// disables the facet).
+func colIndex(cols []string, header string) int {
+	for i, h := range cols {
+		if h == header {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // queuePickerCell returns the plain cell text + house hue for a queues-picker column, so
@@ -283,6 +347,8 @@ func queuesInteractive(label string, qs []queue.QueueInfo, all bool) error {
 // cursor row) exactly as the static table colors its columns.
 func queuePickerCell(header string, r render.QueueRow) (string, string) {
 	switch header {
+	case "System":
+		return orDash(r.System), render.HueLoc
 	case "Queue":
 		return r.Name, render.HueGroup
 	case "Class":
@@ -312,17 +378,21 @@ func queuePickerCell(header string, r render.QueueRow) (string, string) {
 
 // queueDetailCard returns the `i`-inspect renderer for the queue picker: a house KVCard
 // with the queue's derived class/load/state plus the full limits and per-state core figures
-// the table omits, looked up by name from the fetched snapshot.
-func queueDetailCard(label string, byName map[string]queue.QueueInfo) func(string) string {
-	return func(name string) string {
-		q, ok := byName[name]
+// the table omits, looked up by row id from the fetched snapshot.
+func queueDetailCard(label string, byID map[string]queue.QueueInfo) func(string) string {
+	return func(id string) string {
+		q, ok := byID[id]
 		if !ok {
 			return ""
 		}
+		cluster := queueCluster(label, q)
 		loadLabel, loadHue := render.QueueLoad(q.JobsRun, q.JobsPend)
 		stateLabel, stateHue := render.QueueState(q.Enabled, q.Running)
 		title := render.Bold("Queue "+q.Name, render.HueGroup) + "   ·   " +
-			render.Fg(queueClass(label, q.Name), render.HueUser)
+			render.Fg(queueClass(cluster, q.Name), render.HueUser)
+		if q.System != "" {
+			title += "   ·   " + render.Fg(q.System, render.HueLoc)
+		}
 		return render.KVCard(title, []render.KVField{
 			{Label: "State", Value: stateLabel, Hue: stateHue},
 			{Label: "Load", Value: loadLabel, Hue: loadHue},
@@ -330,7 +400,7 @@ func queueDetailCard(label string, byName map[string]queue.QueueInfo) func(strin
 			{Label: "Walltime", Value: orDash(q.MaxWalltime), Hue: render.HueName},
 			{Label: "Max jobs", Value: orDash(q.MaxJobs)},
 			{Label: "Cores/job", Value: coresRange(q.MinCores, q.MaxCores)},
-			{Label: "Max nodes", Value: orDash(queueMaxNodes(label, q.Name, q.MaxCores))},
+			{Label: "Max nodes", Value: orDash(queueMaxNodes(cluster, q.Name, q.MaxCores))},
 			{Label: "Running", Value: countCores(q.JobsRun, q.CoresRun)},
 			{Label: "Pending", Value: countCores(q.JobsPend, q.CoresPend)},
 		})

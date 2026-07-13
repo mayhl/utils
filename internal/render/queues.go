@@ -14,9 +14,11 @@ import (
 // domain-free (like JobRow/ProcRow). Type is the queue class (Exe = submittable, Rou =
 // routing); Enabled/Running are the raw flags (Y / N / -, or blank) — "-" or blank means
 // the system doesn't report them, which the State cell renders as unknown, not disabled.
+// System is the owning cluster in a collate view, "" in a single-cluster view (where the
+// cluster is the title and the column would be uniform noise) — as in StorageRow.
 type QueueRow struct {
-	Name, Class, Type, Walltime, MaxJobs, MaxCores, MaxNodes, Run, Pend string
-	Enabled, Running                                                    string
+	System, Name, Class, Type, Walltime, MaxJobs, MaxCores, MaxNodes, Run, Pend string
+	Enabled, Running                                                            string
 }
 
 // queueCol is one renderable queues-table column: its header and a row→cell formatter.
@@ -54,6 +56,7 @@ func QueuesTable(cluster string, rows []QueueRow, all bool) {
 	// ColumnConfigs match by header name, so a config for an absent column is harmless.
 	// Class gets its own blue (HueLoc) to stand out next to the bright-blue bold Queue.
 	t.SetColumnConfigs([]table.ColumnConfig{
+		{Name: "System", Colors: append(tc(HueLoc), text.Bold)}, // cluster — same hue as mstat's collate column
 		{Name: "Queue", Colors: append(tc(HueGroup), text.Bold), WidthMax: 24, WidthMaxEnforcer: truncRight},
 		{Name: "Class", Colors: tc(HueUser)}, // magenta — stands out from the blue Queue
 		{Name: "Type", Colors: tc(HueDim)},
@@ -77,6 +80,7 @@ func QueueColumns(rows []QueueRow, all bool) []string {
 // queueColDefs is the full set of column formatters, keyed by header.
 func queueColDefs() map[string]queueCol {
 	return map[string]queueCol{
+		"System":   {"System", func(r QueueRow) string { return dash(r.System) }},
 		"Queue":    {"Queue", func(r QueueRow) string { return r.Name }},
 		"Class":    {"Class", func(r QueueRow) string { return dash(r.Class) }},
 		"Type":     {"Type", func(r QueueRow) string { return dash(r.Type) }},
@@ -106,9 +110,18 @@ func planQueueCols(rows []QueueRow, all bool) []queueCol {
 			break
 		}
 	}
+	// System leads only in a collate view (rows tagged by cluster), like StorageTable —
+	// and is never shed: it's what disambiguates same-named queues across clusters.
+	var lead []string
+	for _, r := range rows {
+		if r.System != "" {
+			lead = []string{"System"}
+			break
+		}
+	}
 
 	if all {
-		order := []string{"Queue", "Class", "Type", "Walltime", "MaxJobs", "MaxCores"}
+		order := append(lead, "Queue", "Class", "Type", "Walltime", "MaxJobs", "MaxCores")
 		if hasNodes {
 			order = append(order, "MaxNodes")
 		}
@@ -116,7 +129,7 @@ func planQueueCols(rows []QueueRow, all bool) []queueCol {
 		return pickCols(defs, order)
 	}
 
-	order := []string{"Queue", "Class", "Walltime", "MaxJobs", "MaxCores"}
+	order := append(lead, "Queue", "Class", "Walltime", "MaxJobs", "MaxCores")
 	if hasNodes {
 		order = append(order, "MaxNodes")
 	}

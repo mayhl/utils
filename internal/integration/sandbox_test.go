@@ -192,6 +192,25 @@ func TestQueuesSLURM(t *testing.T) {
 	}
 }
 
+// TestQueuesFleet drives `mu hpc queues -f`: both aliases hit the one box, rows tag with
+// the CONFIG cluster names, and each row resolves its OWN cluster's overrides — sbpbs
+// derives MaxNodes 32 from cores_per_node=128 while sbslurm (none configured) shows --,
+// and only sbslurm's `standard` takes the bigmem queue_class relabel. That per-row split
+// is what a shared label would have flattened.
+func TestQueuesFleet(t *testing.T) {
+	requireSandbox(t)
+	out := mu(t, "hpc", "queues", "-f")
+	mustContain(t, out, "SYSTEM", "sbpbs", "sbslurm", "standard", "bigmem", "32")
+	if strings.Contains(out, "route") || strings.Contains(out, "frozen") {
+		t.Errorf("routing/down queue leaked into the default collate view:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "sbslurm") && strings.Contains(line, "32") {
+			t.Errorf("sbslurm row took sbpbs's cores_per_node (MaxNodes 32):\n%s", line)
+		}
+	}
+}
+
 // TestQueueFleet drives `mu hpc queue -f` with the project module on: both clusters'
 // jobs merge under their config labels, and the per-target hooks fetch — which fails
 // on the box (`mu job hooks` errs box-side: no BC_HOST in the login profile) — must
