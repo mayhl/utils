@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,10 +27,10 @@ import (
 // workstation; the login node relays). -I instead allocates an interactive
 // shell (qsub -I / salloc) under a real tty.
 func jobTunnelCmd() *cobra.Command {
-	var node, jobID, account, walltime string
+	var node, jobID, account, walltime, name string
 	var sel queueSel
 	var port, localPort int
-	var yes, interactive bool
+	var yes, interactive, foreground bool
 	var wait, poll time.Duration
 	c := &cobra.Command{
 		Use:   "tunnel [script]",
@@ -78,7 +79,7 @@ func jobTunnelCmd() *cobra.Command {
 				script, jobID, account, walltime = f.Script, f.JobID, f.Account, f.Walltime
 				port, localPort = f.Port, f.LocalPort
 				sel = queueSel{queue: f.Queue}
-				return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, yes, wait, poll)
+				return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, name, foreground, yes, wait, poll)
 			}
 			if script == "" && jobID == "" {
 				return usageErr("tunnel needs a <script> to submit or --job <id> (or -i for the form)")
@@ -92,7 +93,7 @@ func jobTunnelCmd() *cobra.Command {
 			if localPort == 0 {
 				localPort = port
 			}
-			return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, yes, wait, poll)
+			return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, name, foreground, yes, wait, poll)
 		},
 	}
 	setHelpArgs(c, [2]string{"[script]", "service script to submit, path resolved ON the target"})
@@ -104,6 +105,8 @@ func jobTunnelCmd() *cobra.Command {
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
 	f.StringVarP(&walltime, "walltime", "t", "", "how long to hold the job: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
+	f.StringVarP(&name, "name", "J", "", "job name (default: mu-tun-<port>)")
+	f.BoolVar(&foreground, "fg", false, "hold the tunnel in the foreground (default: background — mu exits once it's up)")
 	f.BoolVarP(&interactive, "interactive", "i", false, "edit the tunnel in a form (fields pre-seeded from flags + config, live queue list)")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.DurationVar(&wait, "wait", 15*time.Minute, "give up if the job isn't running by then")
@@ -111,6 +114,7 @@ func jobTunnelCmd() *cobra.Command {
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
+	c.AddCommand(tunnelLsCmd(), tunnelCloseCmd())
 	return c
 }
 
@@ -182,15 +186,23 @@ func jobShellCmd() *cobra.Command {
 // ControlMaster (the single auth), submit and wait as channels on it, then add
 // the port-forward to the same live connection and hold until Ctrl-C. The
 // login node sees one session for the whole flow.
-func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, port, localPort int, yes bool, wait, poll time.Duration) error {
+func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, port, localPort int, name string, foreground, yes bool, wait, poll time.Duration) error {
 	if node == "" {
 		return usageErr("needs -N <cluster> — the tunnel runs from the workstation")
+	}
+	// Bind the local end BEFORE anything remote: a doomed port shouldn't cost a submit. When
+	// -l was given it must be that port or an error; otherwise mu picks the first free one at
+	// or above the remote port, so the URL stays predictable.
+	localPort, err := pickLocalPort(localPort, port)
+	if err != nil {
+		return err
 	}
 	scheduler := config.SchedulerFor(node)
 	adapter := queue.For(scheduler)
 	if adapter == nil {
 		return errNoScheduler(node)
 	}
+	startedAt := time.Now()
 	target, err := hpc.Resolve(node)
 	if err != nil {
 		return usageErr("%s", err)
@@ -217,7 +229,15 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		}
 	}
 	part, qos := submitTarget(node, queue_)
-	opts := queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall}
+	if name == "" {
+		name = fmt.Sprintf("mu-tun-%d", port)
+	}
+	// Hand the job its port so the service and the forward agree by construction — the trap
+	// otherwise is a script that hardcodes one number while -p names another.
+	opts := queue.SubmitOpts{
+		Account: account, Queue: part, QOS: qos, Walltime: wall, Name: name,
+		Env: map[string]string{"MU_PORT": strconv.Itoa(port)},
+	}
 	submitCmd := adapter.SubmitCmd(script, opts)
 
 	render.Info(fmt.Sprintf("Tunnel job → %s (%s)", node, scheduler))
@@ -228,6 +248,9 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		render.Detail("job:     " + jobID)
 	}
 	render.Detail(fmt.Sprintf("tunnel:  localhost:%d → <node>:%d, one held connection", localPort, port))
+	if !foreground {
+		render.Detail("mode:    background — mu exits once it's up; close with `mu job tunnel close`")
+	}
 	if !yes {
 		fmt.Fprintf(os.Stderr, "connect + tunnel on %s? [y/N] ", node)
 		var r string
@@ -241,11 +264,15 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		return runErr("%s", err)
 	}
 
-	mux, err := startMux(target)
+	mux, err := startMux(target, !foreground, fmt.Sprintf("%s-%d", node, localPort))
 	if err != nil {
 		return runErr("%s: connect: %s", node, err)
 	}
-	defer mux.close()
+	// A backgrounded master must SURVIVE mu's exit — that's the point — so only tear it down
+	// on the foreground path. On success below, the background path returns without closing.
+	if foreground {
+		defer mux.close()
+	}
 	// Ctrl-C anywhere in the flow: closing the mux collapses whatever leg is
 	// in flight (its channel dies with the master) — flows unwind naturally.
 	sig := make(chan os.Signal, 1)
@@ -278,7 +305,22 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	if err := mux.forward(localPort, host, port); err != nil {
 		return runErr("adding the forward: %s", err)
 	}
-	render.OK(fmt.Sprintf("tunnel up: http://localhost:%d → %s:%d (Ctrl-C to close)", localPort, host, port))
+
+	rec := tunnelRec{
+		System: node, Job: jobID, Host: host, Target: target, Sock: mux.sock,
+		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: script, Started: startedAt,
+	}
+	if err := saveTunnel(rec); err != nil {
+		// The tunnel is up; we just can't track it. Say so rather than tear down working work.
+		render.Warn(fmt.Sprintf("tunnel is up but not recorded (%v) — `close` won't find it; Ctrl-C or `mdel %s`", err, jobID))
+	}
+
+	if !foreground {
+		render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (background; close with `mu job tunnel close %s`)", rec.URL(), host, port, jobID))
+		return nil
+	}
+	render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (Ctrl-C to close)", rec.URL(), host, port))
+	defer forgetTunnel(rec) // foreground: the tunnel dies with this process, so its record should too
 	select {
 	case <-aborted:
 		render.Info("tunnel closed")
@@ -356,23 +398,43 @@ type sshMux struct {
 // startMux opens the master (auth prompts pass through) and waits until the
 // control socket answers. The socket lives in the temp dir — short enough for
 // the unix-socket path limit.
-func startMux(target string) (*sshMux, error) {
+//
+// persist detaches it: ssh forks into the background (-f) and stays alive after mu exits
+// (ControlPersist), which is what makes a BACKGROUNDED tunnel possible at all — the forward
+// belongs to the master, so the master has to outlive the process that asked for it. The
+// socket is then named for the target and port rather than mu's pid: a pid that no longer
+// exists is a poor handle for something you want to close tomorrow.
+func startMux(target string, persist bool, id string) (*sshMux, error) {
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("mu-tun-%d", os.Getpid()))
+	if persist {
+		sock = filepath.Join(os.TempDir(), "mu-tun-"+id)
+	}
 	m := &sshMux{
 		bin:    config.SSHCommand(),
-		sock:   filepath.Join(os.TempDir(), fmt.Sprintf("mu-tun-%d", os.Getpid())),
+		sock:   sock,
 		target: target,
 		death:  make(chan error, 1),
 	}
 	// -x: no X11 forwarding. A tunnel never needs it, and a ~/.ssh/config that turns it on
 	// makes every channel print "No xauth data; using fake authentication data" — noise on a
 	// path whose whole output is three status lines.
-	m.master = exec.Command(m.bin, "-x", "-M", "-S", m.sock, "-N",
-		"-o", "ConnectTimeout=10", target)
+	args := []string{"-x", "-M", "-S", m.sock, "-N", "-o", "ConnectTimeout=10"}
+	if persist {
+		args = append(args, "-f", "-o", "ControlPersist=yes")
+	}
+	m.master = exec.Command(m.bin, append(args, target)...)
 	m.master.Stdin, m.master.Stderr = os.Stdin, os.Stderr // Kerberos/host-key prompts stay answerable
 	if err := m.master.Start(); err != nil {
 		return nil, err
 	}
-	go func() { m.death <- m.master.Wait() }()
+	if persist {
+		// -f means the process we started EXITS once the real master has forked away, so its
+		// exit is success, not death. Nothing to watch: the socket check below is the test.
+		_ = m.master.Wait()
+		m.master = nil
+	} else {
+		go func() { m.death <- m.master.Wait() }()
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if exec.Command(m.bin, "-q", "-S", m.sock, "-O", "check", target).Run() == nil {
