@@ -282,7 +282,7 @@ var (
 // resolveSubmitQueue picks the submit queue for a selector-flag key (gpu/vis/bigmem/
 // xfer/debug/background), or for the bare default (key ""). Order: the cluster's config
 // submit_queue entry; then the standard literal name for the purpose keys; else the
-// live queue list filtered by class — exactly one up submittable match resolves, zero
+// cluster's queue list filtered by class — exactly one up submittable match resolves, zero
 // or several error with a submit_queue hint. node routes the fetch (""=local cluster).
 func resolveSubmitQueue(node, label, key string) (string, error) {
 	if key == "" {
@@ -294,15 +294,7 @@ func resolveSubmitQueue(node, label, key string) (string, error) {
 	if q, ok := submitLiterals[key]; ok {
 		return q, nil
 	}
-	var (
-		qs  []queue.QueueInfo
-		err error
-	)
-	if node != "" {
-		_, qs, err = fetchQueues(node)
-	} else {
-		_, qs, err = fetchQueuesLocal()
-	}
+	_, qs, err := cachedQueues(node)
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +302,7 @@ func resolveSubmitQueue(node, label, key string) (string, error) {
 	names := classQueues(label, class, qs)
 	switch len(names) {
 	case 1:
-		render.Info(fmt.Sprintf("--%s → queue %s (from the live queue list; pin it: submit_queue = { %s = %q })", key, names[0], key, names[0]))
+		render.Info(fmt.Sprintf("--%s → queue %s (from %s's queue list; pin it: submit_queue = { %s = %q })", key, names[0], label, key, names[0]))
 		return names[0], nil
 	case 0:
 		return "", runErr("no up %s queue on %s — set submit_queue = { %s = \"<queue>\" } in config.toml, or use -q", class, label, key)

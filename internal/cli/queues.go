@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -137,39 +138,75 @@ func hpcQueuesCmd() *cobra.Command {
 	return c
 }
 
-// fetchQueues runs show_queues on node over remote-exec and parses it (same format on
-// PBS and SLURM — it's a site wrapper). show_queues is broken/absent on some systems, so
-// a run failure degrades to a warning and an empty result, never a crash. Mirrors fetchJobs.
-func fetchQueues(node string) (string, []queue.QueueInfo, error) {
-	target, err := hpc.Resolve(node)
-	if err != nil {
-		return "", nil, usageErr("%s", err)
+// queueLabel is the cluster a queue fetch is about: the named node, else the cluster we
+// are standing on. It's also the queue cache's key, so it is resolved BEFORE any fetch.
+func queueLabel(node string) (string, error) {
+	if node != "" {
+		return node, nil
 	}
-	if err := hpc.EnsureTicket(); err != nil {
-		return "", nil, runErr("%s", err)
-	}
-	out, err := hpc.RemoteExec(target, showQueuesCmd)
-	if err != nil {
-		render.Warn(fmt.Sprintf("%s: show_queues failed (broken or unsupported on this system?): %v", node, err))
-		return node, nil, nil
-	}
-	return node, queue.ParseShowQueues(out), nil
-}
-
-// fetchQueuesLocal runs show_queues on the current cluster (no ssh) — the on-HPC path.
-// bash -lc so the site profile puts show_queues on PATH; same graceful degradation as
-// fetchQueues when show_queues is broken here.
-func fetchQueuesLocal() (string, []queue.QueueInfo, error) {
 	self, _ := currentCluster()
 	if self == "" {
-		return "", nil, usageErr("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
+		return "", usageErr("not on an HPC cluster — use `mu hpc queues --node <n>` or pipe `show_queues`")
 	}
-	out, err := hpc.LocalExec(showQueuesCmd)
+	return self, nil
+}
+
+// showQueuesAt runs show_queues on node ("" = the current cluster, no ssh — bash -lc so
+// the site profile puts it on PATH) and parses the listing (same format on PBS and SLURM;
+// it's a site wrapper). QUIET: it renders nothing, so it is safe under a TUI. Two failure
+// shapes, which the callers tell apart: an unknown node or a dead ticket is an exitErr and
+// stops the command; a show_queues that failed (it is broken/absent on some systems) is a
+// plain error, which the table views degrade to a warning.
+func showQueuesAt(node string) (string, []queue.QueueInfo, error) {
+	label, err := queueLabel(node)
 	if err != nil {
-		render.Warn(fmt.Sprintf("%s: local show_queues failed (broken or unsupported here?): %v", self, err))
-		return self, nil, nil
+		return "", nil, err
 	}
-	return self, queue.ParseShowQueues(out), nil
+	var out string
+	if node == "" {
+		out, err = hpc.LocalExec(showQueuesCmd)
+	} else {
+		target, rerr := hpc.Resolve(node)
+		if rerr != nil {
+			return "", nil, usageErr("%s", rerr)
+		}
+		if terr := hpc.EnsureTicket(); terr != nil {
+			return "", nil, runErr("%s", terr)
+		}
+		out, err = hpc.RemoteExec(target, showQueuesCmd)
+	}
+	if err != nil {
+		return label, nil, err
+	}
+	return label, queue.ParseShowQueues(out), nil
+}
+
+// fetchQueues is the table views' live fetch: show_queues over remote-exec, warning instead
+// of dying when it's broken, and refreshing the submit path's cache on the way past — which
+// makes `mu hpc queues -N <n>` the way to force a queue-list refresh. Mirrors fetchJobs.
+func fetchQueues(node string) (string, []queue.QueueInfo, error) {
+	return warnBroken(showQueuesAt(node))
+}
+
+// fetchQueuesLocal is fetchQueues for the cluster we're standing on (no ssh).
+func fetchQueuesLocal() (string, []queue.QueueInfo, error) {
+	return warnBroken(showQueuesAt(""))
+}
+
+// warnBroken degrades a failed show_queues to a warning and an empty list — a table would
+// rather print nothing than crash — and caches whatever a live fetch did return. A hard
+// exitErr (unknown node, no ticket) passes straight through and stops the command.
+func warnBroken(label string, qs []queue.QueueInfo, err error) (string, []queue.QueueInfo, error) {
+	var hard *exitErr
+	if err != nil {
+		if errors.As(err, &hard) {
+			return label, nil, err
+		}
+		render.Warn(fmt.Sprintf("%s: show_queues failed (broken or unsupported on this system?): %v", label, err))
+		return label, nil, nil
+	}
+	writeQueueCache(label, qs)
+	return label, qs, nil
 }
 
 // collateQueues is the -f/--fleet / -e/--all-systems queues view: the shared site-command

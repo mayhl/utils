@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/mayhl/mayhl_utils/internal/config"
-	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/queue"
 	"github.com/mayhl/mayhl_utils/internal/render"
 )
@@ -113,27 +112,16 @@ func subFormSeed(label string, sel *queueSel) (queueVal, pendingKey string, opti
 	return queueVal, pendingKey, options
 }
 
-// subFormPatches is the form's Load: fetch the live queue list QUIETLY (no render
-// output — we're under the TUI; the ticket was ensured before the form opened) and
-// turn it into patches: real names for the queue enum, the pending class flag's
-// single match selected, and walltime/nodes validated against the selected queue's
-// limits. A broken fetch returns nil — the form just stays on its config seed.
+// subFormPatches is the form's Load: read the queue list QUIETLY (cachedQueues renders
+// nothing — we're under the TUI; the ticket was ensured before the form opened) and turn
+// it into patches: real names for the queue enum, the pending class flag's single match
+// selected, and walltime/nodes validated against the selected queue's limits. A failed
+// read returns nil — the form just stays on its config seed.
 func subFormPatches(node, label, pendingKey string) []render.FieldPatch {
-	var out string
-	var err error
-	if node != "" {
-		target, rerr := hpc.Resolve(node)
-		if rerr != nil {
-			return nil
-		}
-		out, err = hpc.RemoteExec(target, showQueuesCmd)
-	} else {
-		out, err = hpc.LocalExec(showQueuesCmd)
-	}
+	_, qs, err := cachedQueues(node)
 	if err != nil {
 		return nil
 	}
-	qs := queue.ParseShowQueues(out)
 	up, _ := upQueues(execQueues(qs))
 	if len(up) == 0 {
 		return nil
