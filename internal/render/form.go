@@ -42,7 +42,7 @@ type FieldPatch struct {
 }
 
 // FormSpec configures the editable form: a titled panel of fields the user walks
-// with tab/arrows and submits with ctrl+s (or enter on the last field).
+// with tab/arrows and submits with F2/ctrl+s (or enter on the last field).
 type FormSpec struct {
 	Title  string
 	Fields []FormField
@@ -124,7 +124,7 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			m.confirmed = false
 			return m, tea.Quit
-		case "ctrl+s":
+		case saveKey, altSaveKey:
 			return m.submit()
 		case "enter":
 			if m.cursor == len(m.fields)-1 {
@@ -304,7 +304,7 @@ func (m formModel) View() tea.View {
 	}
 	dot := glyph(" · ", " - ")
 	foot := glyph("↑↓", "u/d") + "/tab move" + dot + "type to edit" + dot +
-		glyph("←→", "l/r") + " cycle" + dot + "ctrl+s submit" + dot + "esc cancel"
+		glyph("←→", "l/r") + " cycle" + dot + strings.Replace(saveHint, "save", "submit", 1) + dot + "esc cancel"
 	if m.loading && m.spec.LoadNote != "" {
 		foot += dot + m.spec.LoadNote
 	}

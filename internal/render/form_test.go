@@ -21,6 +21,8 @@ func formKey(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyLeft}
 	case "ctrl+s":
 		return tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
+	case "f2":
+		return tea.KeyPressMsg{Code: tea.KeyF2}
 	}
 	r := []rune(s)[0]
 	return tea.KeyPressMsg{Code: r, Text: s}
@@ -53,6 +55,20 @@ func TestFormEditSubmit(t *testing.T) {
 	m = step(t, m, "ctrl+s")
 	if !m.confirmed {
 		t.Fatal("ctrl+s should submit a valid form")
+	}
+}
+
+// TestCommitKeys: ctrl+s is not deliverable on every terminal (XOFF, remapped modifiers),
+// so F2 must commit too — in BOTH widgets, or the alternate is only half an escape hatch.
+func TestCommitKeys(t *testing.T) {
+	f := newFormModel(FormSpec{Fields: []FormField{{Label: "name", Kind: FieldText, Value: "x"}}})
+	if f = step(t, f, "f2"); !f.confirmed {
+		t.Error("F2 must submit a Form")
+	}
+	e := newEditorModel(tree())
+	res, _ := e.Update(formKey("f2"))
+	if !res.(editorModel).saved {
+		t.Error("F2 must save an Editor")
 	}
 }
 

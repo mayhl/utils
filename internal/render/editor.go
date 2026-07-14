@@ -221,7 +221,7 @@ func (m editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			m.saved = false
 			return m, tea.Quit
-		case "ctrl+s":
+		case saveKey, altSaveKey:
 			return m.save()
 		case "up", "shift+tab":
 			m.move(-1)
@@ -516,7 +516,7 @@ func (m editorModel) View() tea.View {
 		title += dot + fmt.Sprintf("%d%s%d of %d", m.top+1, glyph("–", "-"), end, len(vis))
 	}
 	foot := glyph("↑↓", "u/d") + " move" + dot + "type to edit" + dot +
-		glyph("←→", "l/r") + " fold/cycle" + dot + "ctrl+s save" + dot + "esc cancel"
+		glyph("←→", "l/r") + " fold/cycle" + dot + saveHint + dot + "esc cancel"
 	if m.loading && m.spec.LoadNote != "" {
 		foot += dot + m.spec.LoadNote
 	}

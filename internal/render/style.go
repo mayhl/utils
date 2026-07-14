@@ -13,6 +13,21 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
+// The keys that commit a widget's edits — Form submits, Editor saves.
+//
+// ctrl+s is the convention, but it is NOT reliably deliverable: on a tty with flow control
+// left on it is XOFF (the terminal eats it to pause output), and a user who remaps the
+// modifiers Mac-to-PC can end up sending a chord the terminal never forwards as ctrl. So a
+// commit key must ALSO exist that needs no modifier at all — and it can't be a letter,
+// because a letter types itself into whatever field has the cursor. F2 is what's left.
+const (
+	saveKey    = "ctrl+s"
+	altSaveKey = "f2"
+)
+
+// saveHint is the footer's name for those keys, so every widget hints them identically.
+const saveHint = "F2/ctrl+s save"
+
 // glyph returns the UTF-8 form, or the ASCII fallback when asciiMode() is on. One gate
 // for every house glyph — status tags, table cells, progress bars, the picker — so a
 // PuTTY/latin1 session degrades uniformly instead of mojibaking static output while only
