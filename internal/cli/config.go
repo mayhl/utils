@@ -187,9 +187,17 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 		return "", "unset"
 	}
 
+	// Root scalars (hpc_user) live at the TOML top level, not under a [table], but a lone
+	// top-level key reads as orphaned beside the section headers — so the panel gathers them
+	// under a synthetic "[general]" heading. Display only: each still writes to table 0. The
+	// section's Key keeps its decorated label out of the leaf paths (see the leaf-path fix).
+	var general []render.EditorNode
 	for _, k := range rootKeys {
 		v, origin := value(0, k)
-		root = append(root, leaf([]string{k.name}, target{0, k.name, k.quoted}, k, v, origin))
+		general = append(general, leaf([]string{"general", k.name}, target{0, k.name, k.quoted}, k, v, origin))
+	}
+	if len(general) > 0 {
+		root = append(root, render.EditorNode{Label: "[general]", Key: "general", Hue: render.HueGroup, Children: general})
 	}
 	for _, name := range []string{"transfer", "sshfs", "ssh", "shell", "project"} {
 		ts := doc.Tables(name)
@@ -306,8 +314,9 @@ func configEdit() error {
 
 	root, targets := buildTree(doc)
 	changes, saved, err := render.Editor(render.EditorSpec{
-		Title: "config " + path,
-		Root:  root,
+		Title:     "config " + path,
+		Root:      root,
+		Collapsed: true, // a config tree is deep — open on the headings, expand into what you want
 	})
 	if err != nil {
 		return runErr("%s", err)

@@ -36,6 +36,9 @@ type EditorSpec struct {
 	// when they land — the panel is usable immediately and enriches later, as in Form.
 	Load     func() []EditorPatch
 	LoadNote string // dim footer notice while Load is in flight
+	// Collapsed opens every section folded, so a deep tree (config's cluster→node→keys)
+	// presents as a short list of headings you expand into, rather than a wall.
+	Collapsed bool
 }
 
 // EditorPatch is a late update to one leaf, addressed by its path (not an index — a tree's
@@ -100,7 +103,7 @@ type editorModel struct {
 
 func newEditorModel(spec EditorSpec) editorModel {
 	m := editorModel{spec: spec, loading: spec.Load != nil, height: 24}
-	m.rows = flatten(spec.Root, 0, nil)
+	m.rows = flatten(spec.Root, 0, nil, !spec.Collapsed)
 	for i := range m.rows {
 		r := &m.rows[i]
 		if f := r.field; f != nil {
@@ -179,7 +182,7 @@ func (m *editorModel) clampScroll() {
 
 // flatten walks the tree depth-first into rows, recording each section's descendant count
 // so a collapsed section can be skipped in one jump.
-func flatten(nodes []EditorNode, depth int, prefix []string) []edRow {
+func flatten(nodes []EditorNode, depth int, prefix []string, expanded bool) []edRow {
 	var out []edRow
 	for _, n := range nodes {
 		key := n.Key
@@ -187,14 +190,14 @@ func flatten(nodes []EditorNode, depth int, prefix []string) []edRow {
 			key = n.Label
 		}
 		path := append(append([]string(nil), prefix...), key)
-		row := edRow{label: n.Label, depth: depth, path: path, origin: n.Origin, hue: n.Hue, expanded: true}
+		row := edRow{label: n.Label, depth: depth, path: path, origin: n.Origin, hue: n.Hue, expanded: expanded}
 		if n.Field != nil {
 			f := *n.Field // copy: the widget edits its own state, never the caller's spec
 			row.field = &f
 		}
 		at := len(out)
 		out = append(out, row)
-		kids := flatten(n.Children, depth+1, path)
+		kids := flatten(n.Children, depth+1, path, expanded)
 		out = append(out, kids...)
 		out[at].kids = len(kids)
 	}
