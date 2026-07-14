@@ -113,7 +113,8 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	if account == "" {
 		account = config.AccountFor(node)
 	}
-	opts := queue.SubmitOpts{Account: account, Queue: queue_}
+	part, qos := submitTarget(node, queue_)
+	opts := queue.SubmitOpts{Account: account, Queue: part, QOS: qos}
 	submitCmd := adapter.SubmitCmd(script, opts)
 	stamp := project.NewStamp(caseAbs)
 	branch := ""

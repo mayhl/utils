@@ -35,6 +35,7 @@ type Cluster struct {
 	QueueClass   map[string]string // queue name → forced node class, overriding the name heuristic
 	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
 	SubmitQueue  map[string]string // submit key → queue name: "default" for bare sub, class/purpose keys (gpu/vis/bigmem/xfer/debug/background) for the selector flags
+	QueueFlag    string            // how SLURM takes this site's queue names: "partition" (-p, default) or "qos" (--qos=)
 	NodeOverride []Node            // per-machine overrides, config order
 }
 
@@ -52,6 +53,7 @@ type Node struct {
 	QueueClass   map[string]string
 	QueueCores   map[string]int
 	SubmitQueue  map[string]string
+	QueueFlag    string
 }
 
 // MirrorSet is one mirror-set: roots sharing a relative-path namespace, mapped
@@ -104,6 +106,7 @@ type file struct {
 		QueueClass   map[string]string `toml:"queue_class"`          // queue → forced node class; optional
 		QueueCores   map[string]int    `toml:"queue_cores"`          // queue → cores/node override; optional
 		SubmitQueue  map[string]string `toml:"submit_queue"`         // submit key → queue (default + class flags); optional
+		QueueFlag    string            `toml:"queue_flag"`           // "partition" (default) | "qos" — how SLURM takes this site's queue names; optional
 		Node         []struct {        // [[cluster.node]] — per-machine overrides of the above
 			Name         string            `toml:"name"`
 			Scheduler    string            `toml:"scheduler"`
@@ -113,6 +116,7 @@ type file struct {
 			QueueClass   map[string]string `toml:"queue_class"`
 			QueueCores   map[string]int    `toml:"queue_cores"`
 			SubmitQueue  map[string]string `toml:"submit_queue"`
+			QueueFlag    string            `toml:"queue_flag"`
 		} `toml:"node"`
 	} `toml:"cluster"`
 }
@@ -205,6 +209,7 @@ func ClusterDefs() []Cluster {
 				QueueClass:   n.QueueClass,
 				QueueCores:   n.QueueCores,
 				SubmitQueue:  lowerKeys(n.SubmitQueue),
+				QueueFlag:    strings.ToLower(n.QueueFlag),
 			})
 		}
 		sort.Strings(nodes)
@@ -218,6 +223,7 @@ func ClusterDefs() []Cluster {
 			QueueClass:   c.QueueClass,
 			QueueCores:   c.QueueCores,
 			SubmitQueue:  lowerKeys(c.SubmitQueue),
+			QueueFlag:    strings.ToLower(c.QueueFlag),
 			NodeOverride: over,
 		})
 	}
@@ -282,6 +288,26 @@ func SubmitQueueFor(node, key string) string {
 		return q
 	}
 	return c.SubmitQueue[key]
+}
+
+// QueueFlagFor says which SLURM flag carries this site's queue names: "qos" (--qos=) or
+// "partition" (-p, the default).
+//
+// A site's "queues" are its own abstraction, and `show_queues` reports them uniformly across
+// PBS and SLURM — but a SLURM site may implement them as QOS values on a shared partition
+// rather than as partitions. There, `-p debug` fails with "invalid partition specified" even
+// though the debug queue plainly exists: the name was never a partition. mu cannot tell the
+// two apart from the listing, so the site says which it is. PBS ignores this entirely — a
+// queue is a queue there.
+func QueueFlagFor(node string) string {
+	n, c, _ := siteFor(node)
+	if n.QueueFlag != "" {
+		return n.QueueFlag
+	}
+	if c.QueueFlag != "" {
+		return c.QueueFlag
+	}
+	return "partition"
 }
 
 // CoresPerNodeFor returns node n's cores-per-node (for the MaxNodes column), or 0 if unset

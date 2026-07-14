@@ -214,7 +214,8 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 			return err
 		}
 	}
-	opts := queue.SubmitOpts{Account: account, Queue: queue_, Walltime: wall}
+	part, qos := submitTarget(node, queue_)
+	opts := queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall}
 	submitCmd := adapter.SubmitCmd(script, opts)
 
 	render.Info(fmt.Sprintf("Tunnel job → %s (%s)", node, scheduler))
@@ -452,7 +453,8 @@ func jobInteractive(node, account, walltime string, sel *queueSel) error {
 	if err != nil {
 		return err
 	}
-	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: queue_, Walltime: wall})
+	part, qos := submitTarget(label, queue_)
+	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
 	cmd := exec.Command(ssh, "-t", target, icmd)

@@ -165,8 +165,9 @@ func jobSubCmd() *cobra.Command {
 				if walltime, err = resolveWalltime(node, queueName, walltime, "", debugMax); err != nil {
 					return err
 				}
+				q, qos := submitTarget(label, queueName)
 				opts = queue.SubmitOpts{
-					Account: account, Queue: queueName,
+					Account: account, Queue: q, QOS: qos,
 					Walltime: walltime, Nodes: nodes, Name: name,
 					CoresPerNode: queueCPN(label, queueName),
 				}

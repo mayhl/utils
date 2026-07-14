@@ -142,3 +142,19 @@ func mayInjectWalltime(script string) bool {
 	}
 	return !reScriptWalltime.Match(b)
 }
+
+// queueTarget puts a resolved queue name into the field the site's SLURM actually reads:
+// --qos= where the center implements its queues as QOS values (config queue_flag = "qos"),
+// -p everywhere else. Every SubmitOpts mu builds goes through here, so the choice is made
+// once rather than at each of the six call sites.
+//
+// The name mu resolved is the same either way — what changes is only the flag it rides.
+func submitTarget(label, queueName string) (queue_, qos string) {
+	if queueName == "" {
+		return "", ""
+	}
+	if config.QueueFlagFor(label) == "qos" && config.SchedulerFor(label) == "slurm" {
+		return "", queueName
+	}
+	return queueName, ""
+}

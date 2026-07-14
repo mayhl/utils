@@ -59,6 +59,13 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #                                  wrong (CPU/GPU/VIS/BigMem/Transfer/Archive).
 #   queue_cores = { q = 64 }     — per-queue cores/node override (GPU/specialty nodes whose
 #                                  core count differs from cores_per_node; feeds MaxNodes).
+#   queue_flag = "qos"           — how SLURM takes this site's queue names: "partition" (-p,
+#                                  the default) or "qos" (--qos=). A center may implement its
+#                                  queues as QOS values on a shared partition, and then
+#                                  `-p debug` fails with "invalid partition specified" even
+#                                  though the debug queue exists — the name was never a
+#                                  partition. `show_queues` reports both the same way, so mu
+#                                  cannot tell; say which here. PBS ignores it.
 #   submit_queue = { default = "standard", gpu = "gpu_short" }
 #                                — queues `mu job sub` targets: `default` applies when no
 #                                  -q / selector flag is given; gpu/vis/bigmem/xfer/debug/

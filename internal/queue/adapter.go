@@ -29,8 +29,14 @@ type Adapter interface {
 // adapter maps each to the scheduler's flag. Empty/zero fields fall through to the
 // script's own directives / the scheduler default.
 type SubmitOpts struct {
-	Account      string // allocation to charge (-A)
-	Queue        string // queue / partition   (-q / -p)
+	Account string // allocation to charge (-A)
+	Queue   string // queue / partition   (-q / -p)
+	// QOS is a SLURM-only tier (--qos=). A site may expose a purpose tier — debug,
+	// background — as a QOS on the standard partition rather than as a partition of its
+	// own, in which case `-p debug` is rejected outright: the name is not a partition.
+	// PBS has no equivalent in mu's model — there the same tier IS a queue — so the PBS
+	// adapter ignores this field.
+	QOS          string
 	Walltime     string // HH:MM:SS            (-l walltime= / -t)
 	Nodes        int    // node count          (-l select= / -N); 0 = unset
 	CoresPerNode int    // PBS select-chunk detail (ncpus/mpiprocs per node); 0 = bare select
@@ -214,6 +220,9 @@ func slurmOpts(o SubmitOpts) string {
 	if o.Queue != "" {
 		s += " -p " + shell.Quote(o.Queue)
 	}
+	if o.QOS != "" {
+		s += " --qos=" + shell.Quote(o.QOS)
+	}
 	if o.Walltime != "" {
 		s += " -t " + shell.Quote(o.Walltime)
 	}
@@ -241,6 +250,9 @@ func (slurmAdapter) Directives(o SubmitOpts) []string {
 	}
 	if o.Queue != "" {
 		d = append(d, "#SBATCH -p "+o.Queue)
+	}
+	if o.QOS != "" {
+		d = append(d, "#SBATCH --qos="+o.QOS)
 	}
 	if o.Walltime != "" {
 		d = append(d, "#SBATCH -t "+o.Walltime)

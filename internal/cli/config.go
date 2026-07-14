@@ -80,6 +80,7 @@ var (
 		enumKey("scheduler", []string{"pbs", "slurm"}),
 		strKey("account", "default allocation"),
 		wallKey("interactive_walltime", "held session: 1h, 45m…"),
+		enumKey("queue_flag", []string{"partition", "qos"}),
 		intKey("cores_per_node", "→ MaxNodes"),
 		{name: "active", kind: render.FieldEnum, options: []string{"true", "false"}},
 	}
@@ -89,6 +90,7 @@ var (
 		enumKey("scheduler", []string{"", "pbs", "slurm"}),
 		strKey("account", "this machine's allocation"),
 		wallKey("interactive_walltime", "this machine's held session"),
+		enumKey("queue_flag", []string{"", "partition", "qos"}),
 		intKey("cores_per_node", "cores on THIS machine"),
 	}
 )

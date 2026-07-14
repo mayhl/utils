@@ -98,8 +98,9 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 	if err != nil {
 		return "", queue.SubmitOpts{}, false, err
 	}
+	part, qos := submitTarget(label, q)
 	opts := queue.SubmitOpts{
-		Account: vals[sfAccount], Queue: q,
+		Account: vals[sfAccount], Queue: part, QOS: qos,
 		Walltime: wall, Nodes: n, Name: vals[sfName],
 		CoresPerNode: queueCPN(label, q),
 	}

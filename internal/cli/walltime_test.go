@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/queue"
 )
 
@@ -90,5 +91,54 @@ func TestMayInjectWalltime(t *testing.T) {
 	}
 	if mayInjectWalltime(filepath.Join(dir, "lives-on-the-cluster.sh")) {
 		t.Error("an unreadable script must be assumed to declare one — overriding what you can't see is the whole hazard")
+	}
+}
+
+// TestSubmitTarget: a center may implement its SLURM queues as QOS values rather than
+// partitions, and then `-p debug` is rejected as an invalid partition even though the debug
+// queue plainly exists. queue_flag says which, and the resolved name rides the right flag.
+func TestSubmitTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[[cluster]]
+name = "qsite"
+domain = "q.example.mil"
+scheduler = "slurm"
+nodes = ["hpc-q"]
+queue_flag = "qos"
+
+[[cluster]]
+name = "psite"
+domain = "p.example.mil"
+scheduler = "slurm"
+nodes = ["hpc-p"]
+
+[[cluster]]
+name = "pbssite"
+domain = "b.example.mil"
+scheduler = "pbs"
+nodes = ["hpc-b"]
+queue_flag = "qos"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	config.ResetForTest()
+	defer config.ResetForTest()
+
+	if q, qos := submitTarget("hpc-q", "debug"); q != "" || qos != "debug" {
+		t.Errorf("queue_flag=qos: got -p %q --qos=%q, want the name on --qos", q, qos)
+	}
+	if q, qos := submitTarget("hpc-p", "debug"); q != "debug" || qos != "" {
+		t.Errorf("default: got -p %q --qos=%q, want the name on -p", q, qos)
+	}
+	// PBS has no QOS in mu's model — a queue is a queue there, whatever the config says.
+	if q, qos := submitTarget("hpc-b", "debug"); q != "debug" || qos != "" {
+		t.Errorf("pbs: got -p %q --qos=%q, want the name on the queue flag", q, qos)
+	}
+	if q, qos := submitTarget("hpc-q", ""); q != "" || qos != "" {
+		t.Errorf("no queue at all stays empty, got %q/%q", q, qos)
 	}
 }
