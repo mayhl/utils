@@ -192,8 +192,11 @@ func (m *formModel) edit(msg tea.KeyPressMsg) {
 }
 
 // cycle steps an enum field's value through its options (wrapping); a value not in
-// the list (a pre-seeded literal) restarts at the first option.
-func (m *formModel) cycle(f *FormField, dir int) string {
+// the list (a pre-seeded literal) restarts at the first option. Shared with Editor,
+// whose leaves are the same FormFields.
+func (m *formModel) cycle(f *FormField, dir int) string { return cycleOption(f, dir) }
+
+func cycleOption(f *FormField, dir int) string {
 	n := len(f.Options)
 	if n == 0 {
 		return f.Value

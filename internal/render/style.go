@@ -111,3 +111,8 @@ func Detail(msg string) {
 	}
 	fmt.Fprintln(os.Stderr, text.Colors{text.FgHiBlack}.Sprint(msg))
 }
+
+// Glyph is the exported ASCII gate, for callers outside render that draw their own lines
+// (e.g. `mu config`'s resolved view). Same rule as the internal one: MU_ASCII or a non-UTF-8
+// locale falls back.
+func Glyph(utf, ascii string) string { return glyph(utf, ascii) }
