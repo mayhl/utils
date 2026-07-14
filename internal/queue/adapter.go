@@ -2,6 +2,7 @@ package queue
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,27 @@ type SubmitOpts struct {
 	Nodes        int    // node count          (-l select= / -N); 0 = unset
 	CoresPerNode int    // PBS select-chunk detail (ncpus/mpiprocs per node); 0 = bare select
 	Name         string // job name            (-N / -J)
+	// Env are variables the job must see (-v / --export). `mu job tunnel` hands the job its
+	// port this way, so the service and the forward cannot disagree about the number.
+	Env map[string]string
+}
+
+// envPairs renders Env as sorted K=V pairs. Sorted because a map's iteration order is not:
+// a submit command that differs between identical runs is one you can't review or diff.
+func envPairs(o SubmitOpts) []string {
+	if len(o.Env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(o.Env))
+	for k := range o.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+o.Env[k])
+	}
+	return out
 }
 
 // pbsSelect renders the PBS select chunk: nodes alone, or nodes:ncpus:mpiprocs when the
@@ -134,6 +156,9 @@ func pbsOpts(o SubmitOpts) string {
 	}
 	if o.Name != "" {
 		s += " -N " + shell.Quote(o.Name)
+	}
+	if e := envPairs(o); len(e) > 0 {
+		s += " -v " + shell.Quote(strings.Join(e, ","))
 	}
 	return s
 }
@@ -231,6 +256,11 @@ func slurmOpts(o SubmitOpts) string {
 	}
 	if o.Name != "" {
 		s += " -J " + shell.Quote(o.Name)
+	}
+	if e := envPairs(o); len(e) > 0 {
+		// ALL first: --export replaces the environment wholesale, and dropping the login env
+		// would break every module the site's profile loaded.
+		s += " --export=" + shell.Quote("ALL,"+strings.Join(e, ","))
 	}
 	return s
 }
