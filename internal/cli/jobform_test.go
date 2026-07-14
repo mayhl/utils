@@ -20,16 +20,18 @@ func TestWalltimeField(t *testing.T) {
 		{"0:30:00", true},
 		{"12:60:00", false},
 		{"12:00", false},
-		{"12h", false},
 		{"::", false},
+		// The field takes the duration shorthand too, and refuses a bare number — the parser
+		// is queue.ParseWalltime, tested there; this pins that the FIELD uses it.
+		{"12h", true},
+		{"1.5h", true},
+		{"10m", true},
+		{"90", false},
 	}
 	for _, c := range cases {
 		if got := walltimeField(c.in, nil) == ""; got != c.ok {
 			t.Errorf("walltimeField(%q) ok=%v, want %v", c.in, got, c.ok)
 		}
-	}
-	if wallSeconds("2:30:15") != 2*3600+30*60+15 {
-		t.Errorf("wallSeconds = %d", wallSeconds("2:30:15"))
 	}
 }
 

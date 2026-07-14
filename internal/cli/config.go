@@ -35,6 +35,12 @@ func intKey(name, hint string) cfgKey {
 	return cfgKey{name: name, kind: render.FieldText, hint: hint, validate: intOrEmpty}
 }
 
+// wallKey is a duration the schedulers will have to accept — checked here, in the panel,
+// rather than surfacing as a scheduler rejection minutes into a submit.
+func wallKey(name, hint string) cfgKey {
+	return cfgKey{name: name, kind: render.FieldText, hint: hint, quoted: true, validate: walltimeField}
+}
+
 func enumKey(name string, options []string) cfgKey {
 	return cfgKey{name: name, kind: render.FieldEnum, options: options, quoted: true}
 }
@@ -73,6 +79,7 @@ var (
 		strKey("domain", ""),
 		enumKey("scheduler", []string{"pbs", "slurm"}),
 		strKey("account", "default allocation"),
+		wallKey("interactive_walltime", "held session: 1h, 45m…"),
 		intKey("cores_per_node", "→ MaxNodes"),
 		{name: "active", kind: render.FieldEnum, options: []string{"true", "false"}},
 	}
@@ -81,6 +88,7 @@ var (
 	nodeKeys = []cfgKey{
 		enumKey("scheduler", []string{"", "pbs", "slurm"}),
 		strKey("account", "this machine's allocation"),
+		wallKey("interactive_walltime", "this machine's held session"),
 		intKey("cores_per_node", "cores on THIS machine"),
 	}
 )

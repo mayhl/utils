@@ -155,6 +155,16 @@ func jobSubCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// A batch script declares its own walltime and a qsub -l would override it,
+				// so --debug only asks for the queue's slot when the script is silent — and
+				// when it isn't, mu says whether what it asks for even fits.
+				debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(script)
+				if (sel.debug || sel.dbg) && !debugMax && walltime == "" {
+					warnScriptWalltime(node, queueName, script)
+				}
+				if walltime, err = resolveWalltime(node, queueName, walltime, "", debugMax); err != nil {
+					return err
+				}
 				opts = queue.SubmitOpts{
 					Account: account, Queue: queueName,
 					Walltime: walltime, Nodes: nodes, Name: name,
@@ -197,7 +207,7 @@ func jobSubCmd() *cobra.Command {
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
-	c.Flags().StringVarP(&walltime, "walltime", "t", "", "walltime limit, HH:MM:SS")
+	c.Flags().StringVarP(&walltime, "walltime", "t", "", "walltime limit: HH:MM:SS or a duration (10m, 1h, 1.5h, 1h30m)")
 	c.Flags().IntVarP(&nodes, "nodes", "n", 0, "node count (PBS select chunk / SLURM -N)")
 	c.Flags().StringVarP(&name, "name", "J", "", "job name")
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "edit the submission in a form (fields pre-seeded from flags + config, live queue list)")

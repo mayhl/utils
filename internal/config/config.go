@@ -30,6 +30,7 @@ type Cluster struct {
 	Scheduler    string            // "pbs" | "slurm"; "" if unset
 	Active       bool              // in the default collate set (config `active`, default true)
 	Account      string            // default allocation to charge on submit; "" if unset (mu job sub -A overrides)
+	IntWalltime  string            // walltime an interactive session (job shell/tunnel) asks for; "" = the scheduler's own default
 	CoresPerNode int               // cores per compute node → MaxNodes = ceil(MaxCores / this); 0 = unset
 	QueueClass   map[string]string // queue name → forced node class, overriding the name heuristic
 	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
@@ -46,6 +47,7 @@ type Node struct {
 	Name         string
 	Scheduler    string
 	Account      string
+	IntWalltime  string
 	CoresPerNode int
 	QueueClass   map[string]string
 	QueueCores   map[string]int
@@ -95,16 +97,18 @@ type file struct {
 		Domain       string            `toml:"domain"`
 		Nodes        []string          `toml:"nodes"`
 		Scheduler    string            `toml:"scheduler"`
-		Active       *bool             `toml:"active"`         // nil (omitted) → active by default
-		Account      string            `toml:"account"`        // default submit allocation; optional
-		CoresPerNode int               `toml:"cores_per_node"` // cores per node → MaxNodes; optional
-		QueueClass   map[string]string `toml:"queue_class"`    // queue → forced node class; optional
-		QueueCores   map[string]int    `toml:"queue_cores"`    // queue → cores/node override; optional
-		SubmitQueue  map[string]string `toml:"submit_queue"`   // submit key → queue (default + class flags); optional
+		Active       *bool             `toml:"active"`               // nil (omitted) → active by default
+		Account      string            `toml:"account"`              // default submit allocation; optional
+		IntWalltime  string            `toml:"interactive_walltime"` // how long an interactive session asks for; optional
+		CoresPerNode int               `toml:"cores_per_node"`       // cores per node → MaxNodes; optional
+		QueueClass   map[string]string `toml:"queue_class"`          // queue → forced node class; optional
+		QueueCores   map[string]int    `toml:"queue_cores"`          // queue → cores/node override; optional
+		SubmitQueue  map[string]string `toml:"submit_queue"`         // submit key → queue (default + class flags); optional
 		Node         []struct {        // [[cluster.node]] — per-machine overrides of the above
 			Name         string            `toml:"name"`
 			Scheduler    string            `toml:"scheduler"`
 			Account      string            `toml:"account"`
+			IntWalltime  string            `toml:"interactive_walltime"`
 			CoresPerNode int               `toml:"cores_per_node"`
 			QueueClass   map[string]string `toml:"queue_class"`
 			QueueCores   map[string]int    `toml:"queue_cores"`
@@ -196,6 +200,7 @@ func ClusterDefs() []Cluster {
 				Name:         n.Name,
 				Scheduler:    strings.ToLower(n.Scheduler),
 				Account:      n.Account,
+				IntWalltime:  n.IntWalltime,
 				CoresPerNode: n.CoresPerNode,
 				QueueClass:   n.QueueClass,
 				QueueCores:   n.QueueCores,
@@ -208,6 +213,7 @@ func ClusterDefs() []Cluster {
 			Scheduler:    strings.ToLower(c.Scheduler),
 			Active:       c.Active == nil || *c.Active, // default true
 			Account:      c.Account,
+			IntWalltime:  c.IntWalltime,
 			CoresPerNode: c.CoresPerNode,
 			QueueClass:   c.QueueClass,
 			QueueCores:   c.QueueCores,
@@ -250,6 +256,20 @@ func AccountFor(node string) string {
 		return n.Account
 	}
 	return c.Account
+}
+
+// InteractiveWalltimeFor returns the walltime an interactive session (`mu job shell`, `mu
+// job tunnel`) asks for on node n, as written — "1h", "45m", "01:00:00" — or "" if unset.
+// Node-first like the rest; the caller normalizes and clamps it to the queue's own maximum.
+//
+// Deliberately NOT consulted by `mu job sub`: a batch script declares its own walltime, and
+// a qsub `-l walltime=` would override that silently.
+func InteractiveWalltimeFor(node string) string {
+	n, c, _ := siteFor(node)
+	if n.IntWalltime != "" {
+		return n.IntWalltime
+	}
+	return c.IntWalltime
 }
 
 // SubmitQueueFor returns the configured submit queue for a key on node n — "default" for

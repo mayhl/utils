@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -35,6 +34,7 @@ const (
 	tfJob
 	tfQueue
 	tfAccount
+	tfWalltime
 	tfPort
 	tfLocal
 )
@@ -42,6 +42,7 @@ const (
 const (
 	shQueue = iota
 	shAccount
+	shWalltime
 )
 
 // subForm runs the `mu job sub -i` form and maps its values to SubmitOpts. Fields are
@@ -52,6 +53,14 @@ const (
 func subForm(node, label, script, account string, sel *queueSel, walltime string, nodes int, name string) (string, queue.SubmitOpts, bool, error) {
 	queueVal, pendingKey, options := queueSeed(label, sel, true)
 
+	// --debug means "give me the whole slot", so the field opens on the queue's maximum —
+	// same rule as the flag path, or -i would quietly submit a different job than the flags
+	// alone would. The script still wins if it declares one (the caller checks).
+	if walltime == "" && (sel.debug || sel.dbg) && mayInjectWalltime(script) {
+		if max, ok := queueMax(node, queueVal); ok {
+			walltime = queue.FormatWalltime(max)
+		}
+	}
 	nodesVal := ""
 	if nodes > 0 {
 		nodesVal = strconv.Itoa(nodes)
@@ -60,7 +69,7 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 		{Label: "script", Value: script, Hint: "path resolved on " + label, Validate: requiredField},
 		{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
 		{Label: "account", Value: account},
-		{Label: "walltime", Value: walltime, Hint: "HH:MM:SS", Validate: walltimeField},
+		{Label: "walltime", Value: walltime, Hint: wallHint, Validate: walltimeField},
 		{Label: "nodes", Value: nodesVal, Validate: intField},
 		{Label: "name", Value: name},
 	}
@@ -83,9 +92,15 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 	if vals[sfNodes] != "" {
 		n, _ = strconv.Atoi(vals[sfNodes])
 	}
+	// The field takes a duration ("1.5h"); the scheduler takes H+:MM:SS. Normalize on the
+	// way out, against the queue the user actually settled on.
+	wall, err := resolveWalltime(node, q, vals[sfWalltime], "", false)
+	if err != nil {
+		return "", queue.SubmitOpts{}, false, err
+	}
 	opts := queue.SubmitOpts{
 		Account: vals[sfAccount], Queue: q,
-		Walltime: vals[sfWalltime], Nodes: n, Name: vals[sfName],
+		Walltime: wall, Nodes: n, Name: vals[sfName],
 		CoresPerNode: queueCPN(label, q),
 	}
 	return vals[sfScript], opts, true, nil
@@ -172,7 +187,9 @@ func queuePatches(node, label, pendingKey string, ix queueFields) []render.Field
 			if !ok || q.MaxWalltime == "" {
 				return ""
 			}
-			if wallSeconds(v) > wallSeconds(q.MaxWalltime) {
+			// Compare in SECONDS, so "1.5h" can't slip past a limit written 01:00:00.
+			want, _ := queue.ParseWalltime(v)
+			if max, ok := queue.ParseWalltime(q.MaxWalltime); ok && want > max {
 				return "over the " + all[ix.queue] + " max " + q.MaxWalltime
 			}
 			return ""
@@ -204,8 +221,8 @@ func queuePatches(node, label, pendingKey string, ix queueFields) []render.Field
 // tunnelFields is what `mu job tunnel -i` gathers: the same knobs the flags set. Queue ""
 // means the scheduler default (the form's sentinel), as with the flags.
 type tunnelFields struct {
-	Script, JobID, Account, Queue string
-	Port, LocalPort               int
+	Script, JobID, Account, Queue, Walltime string
+	Port, LocalPort                         int
 }
 
 // tunnelForm runs the `mu job tunnel -i` form. Fields are pre-seeded from the flags and
@@ -213,13 +230,15 @@ type tunnelFields struct {
 // --job exclusivity that the flag path checks in RunE is a cross-field rule here, so the
 // form itself refuses to submit until exactly one of them is set. Gathers only — the
 // caller runs the usual preview + confirm and holds the connection.
-func tunnelForm(node, label, script, jobID, account string, sel *queueSel, port, localPort int) (tunnelFields, bool, error) {
+func tunnelForm(node, label, script, jobID, account, walltime string, sel *queueSel, port, localPort int) (tunnelFields, bool, error) {
 	queueVal, pendingKey, options := queueSeed(label, sel, false)
+	walltime = seedWalltime(node, label, script, walltime, queueVal, sel)
 	fields := []render.FormField{
 		{Label: "script", Value: script, Hint: "the service to submit, path resolved on " + label, Validate: eitherScriptOrJob},
 		{Label: "job", Value: jobID, Hint: "adopt an already-submitted job instead", Validate: eitherScriptOrJob},
 		{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
 		{Label: "account", Value: account},
+		{Label: "walltime", Value: walltime, Hint: wallHint, Validate: walltimeField},
 		{Label: "port", Value: intOrBlank(port), Hint: "service port ON the compute node", Validate: requiredPort},
 		{Label: "local", Value: intOrBlank(localPort), Hint: "local port to listen on (blank: same)", Validate: intField},
 	}
@@ -227,7 +246,7 @@ func tunnelForm(node, label, script, jobID, account string, sel *queueSel, port,
 		Title:  "Tunnel to " + label,
 		Fields: fields,
 		Load: func() []render.FieldPatch {
-			return queuePatches(node, label, pendingKey, queueFields{queue: tfQueue, walltime: -1, nodes: -1})
+			return queuePatches(node, label, pendingKey, queueFields{queue: tfQueue, walltime: tfWalltime, nodes: -1})
 		},
 		LoadNote: "fetching queues...",
 	})
@@ -236,7 +255,8 @@ func tunnelForm(node, label, script, jobID, account string, sel *queueSel, port,
 	}
 	out := tunnelFields{
 		Script: vals[tfScript], JobID: vals[tfJob], Account: vals[tfAccount],
-		Queue: vals[tfQueue], Port: atoiOr(vals[tfPort], 0), LocalPort: atoiOr(vals[tfLocal], 0),
+		Queue: vals[tfQueue], Walltime: vals[tfWalltime],
+		Port: atoiOr(vals[tfPort], 0), LocalPort: atoiOr(vals[tfLocal], 0),
 	}
 	if out.Queue == schedDefault {
 		out.Queue = ""
@@ -250,27 +270,49 @@ func tunnelForm(node, label, script, jobID, account string, sel *queueSel, port,
 // shellForm runs the `mu job shell -i` form: the two knobs an interactive allocation takes,
 // with the queue enum backed by the live list — which is the point, since the class flags
 // can't name a queue you didn't know existed.
-func shellForm(node, label, account string, sel *queueSel) (queueName, acct string, ok bool, err error) {
+func shellForm(node, label, account, walltime string, sel *queueSel) (queueName, acct, wall string, ok bool, err error) {
 	queueVal, pendingKey, options := queueSeed(label, sel, false)
+	walltime = seedWalltime(node, label, "", walltime, queueVal, sel)
 	vals, ok, err := render.Form(render.FormSpec{
 		Title: "Interactive allocation on " + label,
 		Fields: []render.FormField{
 			{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
 			{Label: "account", Value: account},
+			{Label: "walltime", Value: walltime, Hint: wallHint, Validate: walltimeField},
 		},
 		Load: func() []render.FieldPatch {
-			return queuePatches(node, label, pendingKey, queueFields{queue: shQueue, walltime: -1, nodes: -1})
+			return queuePatches(node, label, pendingKey, queueFields{queue: shQueue, walltime: shWalltime, nodes: -1})
 		},
 		LoadNote: "fetching queues...",
 	})
 	if err != nil || !ok {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	queueName = vals[shQueue]
 	if queueName == schedDefault {
 		queueName = ""
 	}
-	return queueName, vals[shAccount], true, nil
+	return queueName, vals[shAccount], vals[shWalltime], true, nil
+}
+
+// seedWalltime is what a held session's walltime field OPENS on: an explicit -t, else the
+// queue's whole slot under --debug, else the config default — the same order the flag path
+// resolves, so -i and the flags can't disagree about what they'd submit. Left as typed (not
+// normalized): the field is the user's, and it's normalized on the way out.
+func seedWalltime(node, label, script, walltime, queueVal string, sel *queueSel) string {
+	if walltime != "" || !mayInjectWalltime(script) {
+		return walltime
+	}
+	if sel.debug || sel.dbg {
+		if max, ok := queueMax(node, queueVal); ok {
+			return queue.FormatWalltime(max)
+		}
+	}
+	dflt, err := interactiveWalltime(label)
+	if err != nil {
+		return "" // a bad config value is reported by the caller's own resolve
+	}
+	return dflt
 }
 
 // eitherScriptOrJob is the tunnel form's cross-field rule, on both fields so the message
@@ -310,27 +352,20 @@ func atoiOr(s string, fallback int) int {
 	return fallback
 }
 
-var wallRe = regexp.MustCompile(`^\d+:[0-5]\d:[0-5]\d$`)
+// wallHint is what the walltime field advertises — the shorthand, since that's the whole
+// point of accepting it.
+const wallHint = "HH:MM:SS or 10m / 1h / 1.5h"
 
-// walltimeField accepts empty (fall through to the script) or H+:MM:SS.
+// walltimeField accepts empty (fall through to the script / the scheduler) or anything
+// queue.ParseWalltime reads — canonical or shorthand.
 func walltimeField(v string, _ []string) string {
-	if v == "" || wallRe.MatchString(v) {
+	if v == "" {
 		return ""
 	}
-	return "want HH:MM:SS"
-}
-
-// wallSeconds converts H+:MM:SS to seconds (0 on malformed input — callers validate
-// the format first).
-func wallSeconds(s string) int {
-	p := strings.Split(s, ":")
-	if len(p) != 3 {
-		return 0
+	if _, ok := queue.ParseWalltime(v); !ok {
+		return "want " + wallHint
 	}
-	h, _ := strconv.Atoi(p[0])
-	m, _ := strconv.Atoi(p[1])
-	sec, _ := strconv.Atoi(p[2])
-	return h*3600 + m*60 + sec
+	return ""
 }
 
 func requiredField(v string, _ []string) string {

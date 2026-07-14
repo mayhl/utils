@@ -46,6 +46,12 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #                                  mstat off HPC) skip it. --all includes it regardless.
 #   account   = "ALLOC-ID"       — optional default allocation `mu job sub` charges
 #                                  (-A overrides); omit to use the script's own directive.
+#   interactive_walltime = "1h"  — how long a HELD session (`mu job shell`, `mu job tunnel`)
+#                                  asks for; HH:MM:SS or a duration (10m, 1h, 1.5h, 1h30m).
+#                                  Clamped down to the queue's own maximum, so one value works
+#                                  across machines whose debug queue caps at 30m or at 1h.
+#                                  NOT used by `mu job sub`: a batch script declares its own
+#                                  walltime, and a qsub -l would silently override it.
 #   cores_per_node = 128         — cores per compute node; enables the `mu hpc queues`
 #                                  MaxNodes column (ceil(MaxCores / cores_per_node)). Omit
 #                                  → MaxNodes shows "--".
@@ -78,6 +84,7 @@ domain    = "dsrc1.example.hpc.mil"
 nodes     = ["node-a", "node-b", "node-c"]
 scheduler = "slurm"
 account   = "ALLOC-1234"
+interactive_walltime = "1h"
 cores_per_node = 128
 # queue_class = { "gpu-debug" = "GPU" }
 # queue_cores = { "gpu-debug" = 64 }

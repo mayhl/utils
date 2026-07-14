@@ -26,7 +26,7 @@ import (
 // workstation; the login node relays). -I instead allocates an interactive
 // shell (qsub -I / salloc) under a real tty.
 func jobTunnelCmd() *cobra.Command {
-	var node, jobID, account string
+	var node, jobID, account, walltime string
 	var sel queueSel
 	var port, localPort int
 	var yes, interactive bool
@@ -66,7 +66,7 @@ func jobTunnelCmd() *cobra.Command {
 				if account == "" {
 					account = config.AccountFor(node)
 				}
-				f, ok, err := tunnelForm(node, node, script, jobID, account, &sel, port, localPort)
+				f, ok, err := tunnelForm(node, node, script, jobID, account, walltime, &sel, port, localPort)
 				if err != nil {
 					return err
 				}
@@ -75,10 +75,10 @@ func jobTunnelCmd() *cobra.Command {
 					return nil
 				}
 				// The form validated the exclusivity and the port; its queue is now literal.
-				script, jobID, account = f.Script, f.JobID, f.Account
+				script, jobID, account, walltime = f.Script, f.JobID, f.Account, f.Walltime
 				port, localPort = f.Port, f.LocalPort
 				sel = queueSel{queue: f.Queue}
-				return jobTunnel(node, script, jobID, account, &sel, port, localPort, yes, wait, poll)
+				return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, yes, wait, poll)
 			}
 			if script == "" && jobID == "" {
 				return usageErr("tunnel needs a <script> to submit or --job <id> (or -i for the form)")
@@ -92,7 +92,7 @@ func jobTunnelCmd() *cobra.Command {
 			if localPort == 0 {
 				localPort = port
 			}
-			return jobTunnel(node, script, jobID, account, &sel, port, localPort, yes, wait, poll)
+			return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, yes, wait, poll)
 		},
 	}
 	setHelpArgs(c, [2]string{"[script]", "service script to submit, path resolved ON the target"})
@@ -103,6 +103,7 @@ func jobTunnelCmd() *cobra.Command {
 	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: same as --port)")
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
+	f.StringVarP(&walltime, "walltime", "t", "", "how long to hold the job: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
 	f.BoolVarP(&interactive, "interactive", "i", false, "edit the tunnel in a form (fields pre-seeded from flags + config, live queue list)")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.DurationVar(&wait, "wait", 15*time.Minute, "give up if the job isn't running by then")
@@ -119,7 +120,7 @@ func jobTunnelCmd() *cobra.Command {
 // = you on the node, tunnel = a service's port. FUTURE: -p adds a tunnel to the
 // allocated node once the scheduler names it (the mux makes that composable).
 func jobShellCmd() *cobra.Command {
-	var node, account string
+	var node, account, walltime string
 	var sel queueSel
 	var interactive bool
 	c := &cobra.Command{
@@ -150,7 +151,7 @@ func jobShellCmd() *cobra.Command {
 				if account == "" {
 					account = config.AccountFor(label)
 				}
-				q, acct, ok, err := shellForm(node, label, account, &sel)
+				q, acct, wall, ok, err := shellForm(node, label, account, walltime, &sel)
 				if err != nil {
 					return err
 				}
@@ -158,16 +159,17 @@ func jobShellCmd() *cobra.Command {
 					render.Info("aborted")
 					return nil
 				}
-				account = acct
+				account, walltime = acct, wall
 				sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
 			}
-			return jobInteractive(node, account, &sel)
+			return jobInteractive(node, account, walltime, &sel)
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
-	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick the queue and account in a form (queue enum from the cluster's queue list)")
+	c.Flags().StringVarP(&walltime, "walltime", "t", "", "how long to hold the session: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
+	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick the queue, account and walltime in a form (queue enum from the cluster's queue list)")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -178,7 +180,7 @@ func jobShellCmd() *cobra.Command {
 // ControlMaster (the single auth), submit and wait as channels on it, then add
 // the port-forward to the same live connection and hold until Ctrl-C. The
 // login node sees one session for the whole flow.
-func jobTunnel(node, script, jobID, account string, sel *queueSel, port, localPort int, yes bool, wait, poll time.Duration) error {
+func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, port, localPort int, yes bool, wait, poll time.Duration) error {
 	if node == "" {
 		return usageErr("needs -N <cluster> — the tunnel runs from the workstation")
 	}
@@ -194,13 +196,25 @@ func jobTunnel(node, script, jobID, account string, sel *queueSel, port, localPo
 	if account == "" {
 		account = config.AccountFor(node)
 	}
-	queue_ := ""
+	queue_, wall := "", ""
 	if jobID == "" { // adopt mode never submits — don't resolve (or live-fetch) a queue for it
 		if queue_, err = sel.resolve(node, node, false); err != nil {
 			return err
 		}
+		// A tunnel is a HELD session: it lives exactly as long as its job, so the config
+		// default applies — unless the script speaks for itself.
+		dflt := ""
+		if mayInjectWalltime(script) {
+			if dflt, err = interactiveWalltime(node); err != nil {
+				return err
+			}
+		}
+		debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(script)
+		if wall, err = resolveWalltime(node, queue_, walltime, dflt, debugMax); err != nil {
+			return err
+		}
 	}
-	opts := queue.SubmitOpts{Account: account, Queue: queue_}
+	opts := queue.SubmitOpts{Account: account, Queue: queue_, Walltime: wall}
 	submitCmd := adapter.SubmitCmd(script, opts)
 
 	render.Info(fmt.Sprintf("Tunnel job → %s (%s)", node, scheduler))
@@ -406,7 +420,7 @@ func (m *sshMux) close() {
 // jobInteractive replaces mu with `ssh -t <login> <qsub -I|salloc>` — the
 // scheduler's own interactive allocation under a real tty (RemoteExec is
 // tty-less by design, so this path builds its own ssh).
-func jobInteractive(node, account string, sel *queueSel) error {
+func jobInteractive(node, account, walltime string, sel *queueSel) error {
 	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
 	if err != nil {
 		return err
@@ -429,7 +443,16 @@ func jobInteractive(node, account string, sel *queueSel) error {
 	if err != nil {
 		return err
 	}
-	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: queue_})
+	// No script here at all — the session IS the job, so the config default always applies.
+	dflt, err := interactiveWalltime(label)
+	if err != nil {
+		return err
+	}
+	wall, err := resolveWalltime(node, queue_, walltime, dflt, sel.debug || sel.dbg)
+	if err != nil {
+		return err
+	}
+	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: queue_, Walltime: wall})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
 	cmd := exec.Command(ssh, "-t", target, icmd)
