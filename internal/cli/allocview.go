@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/render"
@@ -33,7 +35,10 @@ type allocView struct {
 	phase int
 	noise *regexp.Regexp
 	jobID string
-	said  bool // the "queued" line is printed once, not per salloc phrasing of it
+	said  bool // the "queued" line is raised once, not per salloc phrasing of it
+
+	spin *render.Spinner
+	tick chan struct{} // stops the elapsed-time updater
 }
 
 const (
@@ -96,6 +101,7 @@ func (a *allocView) line(s string) {
 		a.held = append(append(a.held, text...), '\n')
 	default:
 		a.phase = phasePass // salloc has stopped talking: this is the shell
+		a.stopWait()
 		if a.noise != nil && a.noise.MatchString(text) {
 			return
 		}
@@ -122,22 +128,64 @@ func (a *allocView) salloc(msg string) {
 	case strings.Contains(msg, "Pending job allocation"), strings.Contains(msg, "queued and waiting"):
 		if !a.said {
 			a.said = true
-			render.Info("job " + a.jobID + " queued — waiting for resources")
+			a.wait("job " + a.jobID + " queued — waiting for resources")
 		}
 	case strings.Contains(msg, "Granted job allocation"), strings.Contains(msg, "has been allocated resources"):
 		// Both say the same thing, and the next line says it better.
 	case strings.Contains(msg, "Waiting for resource configuration"):
+		a.stopWait()
 		render.Detail("configuring nodes...")
 	case reAllocNodes.MatchString(msg):
+		a.stopWait()
 		render.OK(reAllocNodes.FindStringSubmatch(msg)[1] + " ready — job " + a.jobID)
 	default:
+		a.stopWait()
 		render.Detail("salloc: " + msg)
 	}
+}
+
+// wait spins while the job sits in the queue, counting UP. A spinner alone says "still
+// alive"; the elapsed time is the thing you actually want, because a queue wait has no
+// upper bound and the only question worth asking is whether to keep waiting.
+func (a *allocView) wait(msg string) {
+	a.spin = render.NewSpinner(msg)
+	if !a.spin.Animating() { // piped or redirected — say it once, plainly
+		a.spin = nil
+		render.Info(msg)
+		return
+	}
+	a.spin.Start()
+	a.tick = make(chan struct{})
+	go func(start time.Time, stop <-chan struct{}, spin *render.Spinner) {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case now := <-t.C:
+				d := now.Sub(start).Round(time.Second)
+				spin.SetMessage(fmt.Sprintf("%s (%dm%02ds)", msg, int(d.Minutes()), int(d.Seconds())%60))
+			}
+		}
+	}(time.Now(), a.tick, a.spin)
+}
+
+// stopWait clears the spinner before anything else prints — its line is redrawn in place,
+// so a house line written over it would land in the middle of the animation.
+func (a *allocView) stopWait() {
+	if a.spin == nil {
+		return
+	}
+	close(a.tick)
+	a.spin.Stop()
+	a.spin, a.tick = nil, nil
 }
 
 // flush ends the stream. A session that never reached salloc still owes the user whatever it
 // printed on the way down — that held text is the only account of what went wrong.
 func (a *allocView) flush() {
+	a.stopWait()
 	if len(a.buf) > 0 && a.phase != phaseHold {
 		_, _ = a.out.Write(a.buf)
 	}

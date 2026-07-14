@@ -462,6 +462,10 @@ func jobInteractive(node, account, walltime string, sel *queueSel) error {
 	cmd := exec.Command(ssh, "-q", "-t", target, icmd)
 	view := newAllocView(os.Stdout)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
+	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return the cursor to
+	// column 0 — without this every house line below staircases to the right.
+	render.SetCRLF(true)
+	defer render.SetCRLF(false)
 	err = cmd.Run()
 	view.flush()
 	if err != nil && !strings.Contains(err.Error(), "signal:") {

@@ -51,6 +51,10 @@ func NewSpinner(msg string) *Spinner {
 	return &Spinner{msg: msg, tty: tty, stop: make(chan struct{}), done: make(chan struct{})}
 }
 
+// Animating reports whether this spinner will actually draw (stderr is a TTY) — a caller
+// that must say SOMETHING falls back to a plain line when it won't.
+func (s *Spinner) Animating() bool { return s.tty }
+
 // Start begins animating in a goroutine; pair with Stop.
 func (s *Spinner) Start() {
 	if !s.tty {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -88,6 +89,25 @@ func plainMode() bool {
 	return !term.IsTerminal(os.Stdout.Fd())
 }
 
+// crlf makes the house lines end \r\n instead of \n.
+//
+// A pty session (`ssh -t`) puts the LOCAL terminal in raw mode, where ONLCR is off: a bare
+// \n moves the cursor down WITHOUT returning it to column 0, so every line mu prints while
+// that session is up starts further right than the last — the staircase. A caller holding a
+// pty open turns this on for the duration; nothing else needs to know.
+var crlf atomic.Bool
+
+// SetCRLF is set by a command that hands the terminal to a remote pty (see `mu job shell`).
+func SetCRLF(on bool) { crlf.Store(on) }
+
+// nl is the line ending the house currently prints.
+func nl() string {
+	if crlf.Load() {
+		return "\r\n"
+	}
+	return "\n"
+}
+
 // logLine prints one house-style status line to stderr: a colored glyph tag
 // followed by the message. A multi-line message tails below the header — each
 // continuation line indented under the message text and dimmed (the Detail idiom) —
@@ -100,7 +120,7 @@ func logLine(utf, ascii string, colors text.Colors, msg string) {
 	if !colorOff() {
 		tag = colors.Sprint(tag)
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", tag, head)
+	fmt.Fprintf(os.Stderr, "%s %s%s", tag, head, nl())
 	if !multi {
 		return
 	}
@@ -109,7 +129,7 @@ func logLine(utf, ascii string, colors text.Colors, msg string) {
 		if !colorOff() {
 			line = text.Colors{text.FgHiBlack}.Sprint(line)
 		}
-		fmt.Fprintln(os.Stderr, line)
+		fmt.Fprint(os.Stderr, line+nl())
 	}
 }
 
@@ -121,10 +141,10 @@ func logLine(utf, ascii string, colors text.Colors, msg string) {
 // block under a verbose sshfs mount).
 func Detail(msg string) {
 	if colorOff() {
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprint(os.Stderr, msg+nl())
 		return
 	}
-	fmt.Fprintln(os.Stderr, text.Colors{text.FgHiBlack}.Sprint(msg))
+	fmt.Fprint(os.Stderr, text.Colors{text.FgHiBlack}.Sprint(msg)+nl())
 }
 
 // Glyph is the exported ASCII gate, for callers outside render that draw their own lines
