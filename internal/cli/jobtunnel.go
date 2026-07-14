@@ -457,9 +457,15 @@ func jobInteractive(node, account, walltime string, sel *queueSel) error {
 	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
-	// -q silences the client's pre-auth banner (the consent notice); the MOTD and the
-	// profile noise come down the pty instead, and allocView drops those.
-	cmd := exec.Command(ssh, "-q", "-t", target, icmd)
+	// `bash -lc`, exactly as RemoteExec does it: ssh runs the command in the user's LOGIN
+	// SHELL WITHOUT LOGIN SEMANTICS, so /etc/profile.d never runs and the scheduler isn't on
+	// PATH — a PBS site answers `command not found: qsub`. (SLURM happened to work only
+	// because salloc was already on the default PATH there.) The login shell must be bash,
+	// not the user's zsh: the site's profile scripts are written for it.
+	//
+	// -q silences the client's pre-auth banner (the consent notice); the MOTD and the profile
+	// noise come down the pty instead, and allocView drops those.
+	cmd := exec.Command(ssh, "-q", "-t", target, "bash -lc "+shell.Quote(icmd))
 	view := newAllocView(os.Stdout)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
 	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return the cursor to

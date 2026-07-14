@@ -75,3 +75,29 @@ func TestAllocViewUnknownSallocLine(t *testing.T) {
 		t.Errorf("the shell's own output was swallowed: %q", out.String())
 	}
 }
+
+// TestAllocViewPBS: PBS narrates an interactive allocation in its own words, and a job id
+// there is "12345.pbs01", not a number. Same three house lines out.
+func TestAllocViewPBS(t *testing.T) {
+	var out bytes.Buffer
+	a := newAllocView(&out)
+	feed(a, "*** CONSENT TO MONITORING ***\n"+
+		"qsub: waiting for job 12345.pbs01 to start\n"+
+		"qsub: job 12345.pbs01 ready\n"+
+		"user@n0044:~$ ", 6)
+	a.flush()
+
+	got := out.String()
+	if strings.Contains(got, "CONSENT") {
+		t.Errorf("preamble leaked:\n%s", got)
+	}
+	if a.jobID != "12345.pbs01" {
+		t.Errorf("job id = %q, want the full PBS id 12345.pbs01", a.jobID)
+	}
+	if strings.Contains(got, "qsub: job") {
+		t.Errorf("raw qsub chatter passed through:\n%s", got)
+	}
+	if !strings.Contains(got, "user@n0044:~$ ") {
+		t.Errorf("the shell prompt never arrived:\n%s", got)
+	}
+}

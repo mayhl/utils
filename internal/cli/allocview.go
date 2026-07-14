@@ -26,7 +26,9 @@ import (
 //     profile chatter. Held, and DISCARDED once salloc speaks. HELD rather than dropped
 //     outright so a session that dies before salloc ever runs — refused key, dead host, bad
 //     account — still prints why. Silence is the one thing this must never produce.
-//  2. ALLOC — salloc's own lines, re-rendered as house lines: six become three.
+//  2. ALLOC — the scheduler's own progress lines, re-rendered as house lines. SLURM's salloc
+//     narrates in six; PBS's `qsub -I` in two ("waiting for job … to start", "job … ready").
+//     Both say the same three things, so both come out as the same three house lines.
 //  3. PASS  — the shell is the user's; everything through verbatim, bar the known noise.
 type allocView struct {
 	out   io.Writer
@@ -79,20 +81,39 @@ func (a *allocView) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// maybeSalloc reports whether the partial line could still turn out to be salloc's.
-func (a *allocView) maybeSalloc() bool {
-	b := bytes.TrimLeft(a.buf, " \t")
-	const tag = "salloc:"
-	if len(b) < len(tag) {
-		return bytes.HasPrefix([]byte(tag), b)
+// allocTags are how the two schedulers announce themselves on an interactive allocation.
+var allocTags = []string{"salloc:", "qsub:"}
+
+// allocTag strips the scheduler's prefix from a line, reporting whether it had one.
+func allocTag(line string) (string, bool) {
+	for _, t := range allocTags {
+		if msg, ok := strings.CutPrefix(line, t); ok {
+			return msg, true
+		}
 	}
-	return bytes.HasPrefix(b, []byte(tag))
+	return "", false
+}
+
+// maybeSalloc reports whether the partial line could still turn out to be the scheduler's —
+// a chunk boundary can land mid-tag ("sall" + "oc: Granted…"), and releasing it early would
+// print the scheduler's own chatter raw.
+func (a *allocView) maybeSalloc() bool {
+	b := string(bytes.TrimLeft(a.buf, " \t"))
+	for _, t := range allocTags {
+		if len(b) < len(t) && strings.HasPrefix(t, b) {
+			return true
+		}
+		if strings.HasPrefix(b, t) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *allocView) line(s string) {
 	text := strings.TrimRight(s, "\r")
-	if msg, ok := strings.CutPrefix(strings.TrimSpace(text), "salloc:"); ok {
-		a.phase, a.held = phaseAlloc, nil // salloc spoke — the preamble was noise after all
+	if msg, ok := allocTag(strings.TrimSpace(text)); ok {
+		a.phase, a.held = phaseAlloc, nil // the scheduler spoke — the preamble was noise
 		a.salloc(strings.TrimSpace(msg))
 		return
 	}
@@ -110,8 +131,10 @@ func (a *allocView) line(s string) {
 }
 
 var (
-	reAllocJob   = regexp.MustCompile(`job (?:allocation )?(\d+)`)
+	// A PBS job id is not a number — it's 12345.pbs01 — so the id is anything non-blank.
+	reAllocJob   = regexp.MustCompile(`job (?:allocation )?(\S+)`)
 	reAllocNodes = regexp.MustCompile(`^Nodes (\S+) are ready`)
+	reQsubReady  = regexp.MustCompile(`^job (\S+) ready`)
 )
 
 // salloc re-renders one of salloc's lines. Its six-line report says three things — queued,
@@ -124,8 +147,9 @@ func (a *allocView) salloc(msg string) {
 	}
 	switch {
 	case strings.HasPrefix(msg, "error:"):
-		render.Err("salloc: " + strings.TrimSpace(strings.TrimPrefix(msg, "error:")))
-	case strings.Contains(msg, "Pending job allocation"), strings.Contains(msg, "queued and waiting"):
+		render.Err(strings.TrimSpace(strings.TrimPrefix(msg, "error:")))
+	case strings.Contains(msg, "Pending job allocation"), strings.Contains(msg, "queued and waiting"),
+		strings.Contains(msg, "waiting for job"): // PBS: qsub: waiting for job 123.pbs to start
 		if !a.said {
 			a.said = true
 			a.wait("job " + a.jobID + " queued — waiting for resources")
@@ -135,9 +159,12 @@ func (a *allocView) salloc(msg string) {
 	case strings.Contains(msg, "Waiting for resource configuration"):
 		a.stopWait()
 		render.Detail("configuring nodes...")
-	case reAllocNodes.MatchString(msg):
+	case reAllocNodes.MatchString(msg): // SLURM names the node
 		a.stopWait()
 		render.OK(reAllocNodes.FindStringSubmatch(msg)[1] + " ready — job " + a.jobID)
+	case reQsubReady.MatchString(msg): // PBS doesn't — the prompt will
+		a.stopWait()
+		render.OK("job " + a.jobID + " ready")
 	default:
 		a.stopWait()
 		render.Detail("salloc: " + msg)
