@@ -43,6 +43,7 @@ const (
 	shQueue = iota
 	shAccount
 	shWalltime
+	shNodes
 )
 
 // subForm runs the `mu job sub -i` form and maps its values to SubmitOpts. Fields are
@@ -271,29 +272,33 @@ func tunnelForm(node, label, script, jobID, account, walltime string, sel *queue
 // shellForm runs the `mu job shell -i` form: the two knobs an interactive allocation takes,
 // with the queue enum backed by the live list — which is the point, since the class flags
 // can't name a queue you didn't know existed.
-func shellForm(node, label, account, walltime string, sel *queueSel) (queueName, acct, wall string, ok bool, err error) {
+func shellForm(node, label, account, walltime string, nodes int, sel *queueSel) (queueName, acct, wall string, n int, ok bool, err error) {
 	queueVal, pendingKey, options := queueSeed(label, sel, false)
 	walltime = seedWalltime(node, label, "", walltime, queueVal, sel)
+	if nodes < 1 {
+		nodes = 1
+	}
 	vals, ok, err := render.Form(render.FormSpec{
 		Title: "Interactive allocation on " + label,
 		Fields: []render.FormField{
 			{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
 			{Label: "account", Value: account},
 			{Label: "walltime", Value: walltime, Hint: wallHint, Validate: walltimeField},
+			{Label: "nodes", Value: strconv.Itoa(nodes), Validate: intField},
 		},
 		Load: func() []render.FieldPatch {
-			return queuePatches(node, label, pendingKey, queueFields{queue: shQueue, walltime: shWalltime, nodes: -1})
+			return queuePatches(node, label, pendingKey, queueFields{queue: shQueue, walltime: shWalltime, nodes: shNodes})
 		},
 		LoadNote: "fetching queues...",
 	})
 	if err != nil || !ok {
-		return "", "", "", false, err
+		return "", "", "", 0, false, err
 	}
 	queueName = vals[shQueue]
 	if queueName == schedDefault {
 		queueName = ""
 	}
-	return queueName, vals[shAccount], vals[shWalltime], true, nil
+	return queueName, vals[shAccount], vals[shWalltime], atoiOr(vals[shNodes], 1), true, nil
 }
 
 // seedWalltime is what a held session's walltime field OPENS on: an explicit -t, else the

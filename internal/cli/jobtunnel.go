@@ -121,6 +121,7 @@ func jobTunnelCmd() *cobra.Command {
 // allocated node once the scheduler names it (the mux makes that composable).
 func jobShellCmd() *cobra.Command {
 	var node, account, walltime string
+	var nodes int
 	var sel queueSel
 	var interactive bool
 	c := &cobra.Command{
@@ -151,7 +152,7 @@ func jobShellCmd() *cobra.Command {
 				if account == "" {
 					account = config.AccountFor(label)
 				}
-				q, acct, wall, ok, err := shellForm(node, label, account, walltime, &sel)
+				q, acct, wall, n, ok, err := shellForm(node, label, account, walltime, nodes, &sel)
 				if err != nil {
 					return err
 				}
@@ -159,16 +160,17 @@ func jobShellCmd() *cobra.Command {
 					render.Info("aborted")
 					return nil
 				}
-				account, walltime = acct, wall
+				account, walltime, nodes = acct, wall, n
 				sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
 			}
-			return jobInteractive(node, account, walltime, &sel)
+			return jobInteractive(node, account, walltime, nodes, &sel)
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
 	c.Flags().StringVarP(&walltime, "walltime", "t", "", "how long to hold the session: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
+	c.Flags().IntVarP(&nodes, "nodes", "n", 1, "nodes to allocate (PBS select chunk / SLURM -N)")
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick the queue, account and walltime in a form (queue enum from the cluster's queue list)")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
@@ -421,7 +423,7 @@ func (m *sshMux) close() {
 // jobInteractive replaces mu with `ssh -t <login> <qsub -I|salloc>` — the
 // scheduler's own interactive allocation under a real tty (RemoteExec is
 // tty-less by design, so this path builds its own ssh).
-func jobInteractive(node, account, walltime string, sel *queueSel) error {
+func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) error {
 	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
 	if err != nil {
 		return err
@@ -454,7 +456,17 @@ func jobInteractive(node, account, walltime string, sel *queueSel) error {
 		return err
 	}
 	part, qos := submitTarget(label, queue_)
-	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall})
+	// An interactive session has no script to declare its resources, so mu must — and a PBS
+	// site rejects `qsub -I` outright without a select chunk ("Please include number of nodes
+	// with -l select"). One node unless asked otherwise; ncpus/mpiprocs come from the
+	// machine's cores_per_node, because the same sites that demand the chunk demand it FULL.
+	if nodes < 1 {
+		nodes = 1
+	}
+	icmd := adapter.InteractiveCmd(queue.SubmitOpts{
+		Account: account, Queue: part, QOS: qos, Walltime: wall,
+		Nodes: nodes, CoresPerNode: queueCPN(label, queue_),
+	})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
 	// `bash -lc`, exactly as RemoteExec does it: ssh runs the command in the user's LOGIN
