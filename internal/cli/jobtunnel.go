@@ -457,9 +457,14 @@ func jobInteractive(node, account, walltime string, sel *queueSel) error {
 	icmd := adapter.InteractiveCmd(queue.SubmitOpts{Account: account, Queue: part, QOS: qos, Walltime: wall})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
-	cmd := exec.Command(ssh, "-t", target, icmd)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil && !strings.Contains(err.Error(), "signal:") {
+	// -q silences the client's pre-auth banner (the consent notice); the MOTD and the
+	// profile noise come down the pty instead, and allocView drops those.
+	cmd := exec.Command(ssh, "-q", "-t", target, icmd)
+	view := newAllocView(os.Stdout)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
+	err = cmd.Run()
+	view.flush()
+	if err != nil && !strings.Contains(err.Error(), "signal:") {
 		return runErr("interactive session: %s", err)
 	}
 	return nil

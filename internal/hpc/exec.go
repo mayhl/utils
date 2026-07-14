@@ -224,19 +224,31 @@ func exitText(err error) string {
 	return err.Error()
 }
 
-// filterStderr drops the cluster's benign login-profile noise (default: the dbus/X11
-// lines) so only real remote errors surface. Pattern overridable via
-// MU_SSH_STDERR_FILTER, matching the shell dispatcher's grep filter.
-func filterStderr(s string) string {
-	if s == "" {
-		return ""
-	}
+// StderrNoise is the pattern for the cluster's benign login-profile chatter (the dbus/X11
+// lines) — noise every remote session emits and no one wants to read. Overridable via
+// MU_SSH_STDERR_FILTER, matching the shell dispatcher's grep filter. nil when the pattern
+// is unparseable: filter nothing rather than swallow something. Exported because an
+// INTERACTIVE session (`mu job shell`) sees the same noise on its pty and has to drop it
+// itself — RemoteExec's own capture-and-filter can't reach a stream mu is passing through.
+func StderrNoise() *regexp.Regexp {
 	pat := os.Getenv("MU_SSH_STDERR_FILTER")
 	if pat == "" {
 		pat = `dbus-update-activation-environment|^Cannot continue`
 	}
 	re, err := regexp.Compile(pat)
 	if err != nil {
+		return nil
+	}
+	return re
+}
+
+// filterStderr drops that noise from a captured stderr so only real remote errors surface.
+func filterStderr(s string) string {
+	if s == "" {
+		return ""
+	}
+	re := StderrNoise()
+	if re == nil {
 		return s
 	}
 	var keep []string
