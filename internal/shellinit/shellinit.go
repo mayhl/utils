@@ -37,7 +37,9 @@ import (
 // framework's seam helpers (mu_auth, mu_ssh_login, $MU_SSH).
 //
 // The numeric guard uses a portable `case *[!0-9]*` test (no extglob) so it works
-// in both bash and zsh. `<node> -h|--help` prints the grammar.
+// in both bash and zsh. `<node> -h|--help` calls back into mu (`mu setup node-help`) so the
+// grammar renders through the house help panels — generated shell can't reach the renderer,
+// and a printf was the one help text in mu that didn't look like mu.
 //
 // Remote-exec runs `bash -lc` (login shell) so HPC modules/scheduler load from
 // /etc/profile.d — which `zsh -l` does NOT source. That login profile spews a
@@ -46,24 +48,7 @@ import (
 // command's exit code and lets real errors through). TEMPORARY workaround for the
 // cluster's /etc/profile.d — see the dbus-filter note.
 const helper = `_mu_node_help() {
-  local n=$1
-  printf '%s\n' \
-    "$n - HPC shorthand for the '$n' cluster" \
-    "  $n                connect (interactive ssh, default login)" \
-    "  $n N              connect to login node N ($n 3 -> ${n}03)" \
-    "  $n <cmd>          run <cmd> on $n over ssh" \
-    "  $n N <cmd>        run <cmd> on login node N" \
-    "  $n push SRC [DST] upload   (mu cp push; DST default \$HOME on $n)" \
-    "  $n pull SRC [DST] download (mu cp pull; DST default .)" \
-    "  $n mstat [-a]     show $n's queue (mu hpc queue --node $n)" \
-    "  $n shell [flags]  interactive allocation on $n (mu job shell)" \
-    "  $n sub SCRIPT     submit a batch script  (mu job sub)" \
-    "  $n tunnel SCRIPT  submit + tunnel a port (mu job tunnel)" \
-    "  $n queues         $n's queue list        (mu hpc queues)" \
-    "  $n usage          $n's allocation usage  (mu hpc usage)" \
-    "  $n storage        $n's disk quotas       (mu hpc storage)" \
-    "  $n exec <cmd>     run <cmd> on $n, even if it is a word above (-- also works)" \
-    "  $n -h | --help    show this help"
+  mu setup node-help "$1"
 }
 _mu_node() {
   local node=$1 target=$2; shift 2

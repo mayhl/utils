@@ -83,7 +83,7 @@ hpc1 -h
 		// ...and `exec` / `--` force remote-exec of a word that is otherwise reserved.
 		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"usage\"",
 		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"queues\"",
-		"connect to login node N", // -h prints the grammar
+		"MU setup node-help hpc1", // -h calls back into mu for the house panel
 		"real-error-boom",         // a real stderr line survives the filter
 	}
 	// The benign dbus login-profile noise must be dropped by the stderr filter.

@@ -255,7 +255,7 @@ func houseHelp(c *cobra.Command, _ []string) {
 	// Synopsis: title (color1) + version (root only, dim) + badge (color5), the colored
 	// usage legend, then the desc.
 	title := render.Bold(helpTitle(c), hueTitle)
-	if !c.HasParent() {
+	if isRoot(c) {
 		if v := muVersion(); v != "" {
 			title += " " + render.Fg(v, hueBadge)
 		}
@@ -331,6 +331,12 @@ func houseHelp(c *cobra.Command, _ []string) {
 	}
 	fmt.Fprint(os.Stdout, b.String())
 }
+
+// isRoot reports whether c is `mu` itself — the one command whose title carries the version.
+// Parentless is NOT the same test: `mu setup node-help` renders a SYNTHETIC parentless
+// command (the node dispatcher's grammar, whose path must read as the bare node name), and
+// stamping mu's version on `hpc1 — HPC shorthand` would be a lie about what that is.
+func isRoot(c *cobra.Command) bool { return !c.HasParent() && c.Name() == "mu" }
 
 // usageLegend renders "<root path> <args> [command] [--flags]" as a colored key —
 // path in color4 (shortcuts), <args> in color6 (Arguments items), [command] in color2
@@ -438,7 +444,7 @@ func flow(s string) string {
 func plainHelp(c *cobra.Command) {
 	w := os.Stdout
 	title := helpTitle(c)
-	if !c.HasParent() {
+	if isRoot(c) {
 		if v := muVersion(); v != "" {
 			title += " " + v
 		}
