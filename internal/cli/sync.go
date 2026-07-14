@@ -12,6 +12,7 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/config"
 	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/render"
+	"github.com/mayhl/mayhl_utils/internal/tomledit"
 )
 
 // syncOpts carries the resolved flags for a sync run in either direction.
@@ -23,6 +24,12 @@ type syncOpts struct {
 	dotfiles  bool
 	force     bool // push --dotfiles: overwrite the box's .config even if diverged
 }
+
+// localSeams are the tables that never travel between machines: the laptop's ossh path is
+// meaningless on a cluster, and sshfs mounts are a local-only plane. Everything else in
+// config.toml is shared fleet inventory (see ARCHITECTURE.md "Sync merge strategy"). The
+// mount registry and secrets live in other files and are never touched at all.
+var localSeams = []string{"ssh", "sshfs"}
 
 // defaultConfigDir is the .config git repo synced by --dotfiles (default ~/.config).
 func defaultConfigDir() string { return filepath.Join(os.Getenv("HOME"), ".config") }
@@ -151,9 +158,9 @@ func syncConfigTOML(target string, o syncOpts) error {
 		}
 		return runErr("nothing to sync — %s is empty or missing", src)
 	}
-	rest, _ := splitTOMLSections(srcText, "ssh", "sshfs")
-	_, seams := splitTOMLSections(dstText, "ssh", "sshfs")
-	merged := assembleConfig(rest, seams)
+	rest, _ := tomledit.Split(srcText, localSeams...)
+	_, seams := tomledit.Split(dstText, localSeams...)
+	merged := tomledit.Assemble(rest, seams, localSeams...)
 
 	dstDesc := target
 	if o.pull {
@@ -222,7 +229,7 @@ func writeLocalConfig(path string, prev []byte, merged string) error {
 // to keep what wasn't there. whose is "its" (push) or "this machine's" (pull).
 func keptClause(whose string, seams map[string]string) string {
 	var k []string
-	for _, n := range []string{"ssh", "sshfs"} {
+	for _, n := range localSeams {
 		if strings.TrimSpace(seams[n]) != "" {
 			k = append(k, "["+n+"]")
 		}
@@ -231,63 +238,6 @@ func keptClause(whose string, seams map[string]string) string {
 		return ""
 	}
 	return " (kept " + whose + " " + strings.Join(k, "/") + ")"
-}
-
-// splitTOMLSections walks TOML text and returns it with the named top-level tables
-// removed (rest), plus each removed table's verbatim text (sections). A table runs from
-// its header line to the next top-level header or EOF; the root (pre-header) lines are
-// always kept. Used to drop the laptop's [ssh]/[sshfs] and splice in the target's.
-func splitTOMLSections(text string, names ...string) (rest string, sections map[string]string) {
-	want := make(map[string]bool, len(names))
-	for _, n := range names {
-		want[n] = true
-	}
-	sections = map[string]string{}
-	var restB strings.Builder
-	cur := "" // table currently being captured into sections; "" → goes to rest
-	for _, line := range strings.Split(text, "\n") {
-		if h, ok := tomlHeader(line); ok {
-			if want[h] {
-				cur = h
-			} else {
-				cur = ""
-			}
-		}
-		if cur != "" {
-			sections[cur] += line + "\n"
-		} else {
-			restB.WriteString(line)
-			restB.WriteByte('\n')
-		}
-	}
-	return restB.String(), sections
-}
-
-// tomlHeader returns the top-level table name of a "[table]" / "[[array]]" / "[a.b]"
-// header line (the first path segment), or ok=false for a non-header line.
-func tomlHeader(line string) (name string, ok bool) {
-	s := strings.TrimSpace(line)
-	if !strings.HasPrefix(s, "[") {
-		return "", false
-	}
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "[["), "[")
-	end := strings.IndexAny(s, "].")
-	if end <= 0 {
-		return "", false
-	}
-	return s[:end], true
-}
-
-// assembleConfig joins the inventory body with the preserved seam tables (in a stable
-// order), each separated by a blank line.
-func assembleConfig(rest string, seams map[string]string) string {
-	out := strings.TrimRight(rest, "\n") + "\n"
-	for _, name := range []string{"ssh", "sshfs"} {
-		if s := strings.TrimRight(seams[name], "\n"); strings.TrimSpace(s) != "" {
-			out += "\n" + s + "\n"
-		}
-	}
-	return out
 }
 
 // showConfigDiff prints a unified diff of the destination's current config.toml vs the

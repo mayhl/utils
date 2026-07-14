@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/mayhl/mayhl_utils/internal/tomledit"
 )
 
 // TestSplitTOMLSections checks the inventory body and the named seam tables separate
@@ -21,7 +23,7 @@ root = "/laptop/mnt"
 name = "alpha"
 scheduler = "slurm"
 `
-	rest, secs := splitTOMLSections(text, "ssh", "sshfs")
+	rest, secs := tomledit.Split(text, localSeams...)
 	if strings.Contains(rest, "ossh") || strings.Contains(rest, "/laptop/mnt") {
 		t.Errorf("seam content leaked into body:\n%s", rest)
 	}
@@ -48,9 +50,9 @@ ossh = "/box/ossh"
 [sshfs]
 root = "/box/mnt"
 `
-	rest, _ := splitTOMLSections(laptop, "ssh", "sshfs")
-	_, seams := splitTOMLSections(target, "ssh", "sshfs")
-	merged := assembleConfig(rest, seams)
+	rest, _ := tomledit.Split(laptop, localSeams...)
+	_, seams := tomledit.Split(target, localSeams...)
+	merged := tomledit.Assemble(rest, seams, localSeams...)
 
 	if !strings.Contains(merged, "alpha") {
 		t.Error("lost this machine's inventory")
