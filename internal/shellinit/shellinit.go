@@ -19,8 +19,18 @@ import (
 )
 
 // The dispatcher: bare `<node>` connects (interactive ssh), `<node> push|pull`
-// transfer via the engine, and `<node> <anycmd>` runs that command over ssh. A
-// leading pure-integer arg pins a numbered login node — `<node> N` rewrites the
+// transfer via the engine, and `<node> <anycmd>` runs that command over ssh.
+//
+// A handful of words are RESERVED for the mu verbs that take a --node anyway, so the node
+// name reads as the target it already is: `hpc1 shell` is `mu job shell -N hpc1`, and
+// likewise sub/tunnel (mu job) and queues/usage/storage (mu hpc). The cost is that those
+// words can no longer name a remote command — `hpc1 usage` will not run a program called
+// `usage` — so `<node> exec <cmd>` (or `--`) forces remote-exec for anything, reserved or
+// not. The bare `<node> <anycmd>` fallback stays: it is the older idiom and the muscle
+// memory. FUTURE: if the reserved set keeps growing, make `exec` the ONLY way to run an
+// arbitrary command and drop the fallback — the shadowing is what forces the choice.
+//
+// A leading pure-integer arg pins a numbered login node — `<node> N` rewrites the
 // target's node segment to `<node>NN` (zero-padded, per the 01,02,… convention),
 // then the rest of the grammar composes (bare → connect, else → remote-exec).
 // push/pull stay node-level (mu cp resolves its own target). It leans on the shell
@@ -46,6 +56,13 @@ const helper = `_mu_node_help() {
     "  $n push SRC [DST] upload   (mu cp push; DST default \$HOME on $n)" \
     "  $n pull SRC [DST] download (mu cp pull; DST default .)" \
     "  $n mstat [-a]     show $n's queue (mu hpc queue --node $n)" \
+    "  $n shell [flags]  interactive allocation on $n (mu job shell)" \
+    "  $n sub SCRIPT     submit a batch script  (mu job sub)" \
+    "  $n tunnel SCRIPT  submit + tunnel a port (mu job tunnel)" \
+    "  $n queues         $n's queue list        (mu hpc queues)" \
+    "  $n usage          $n's allocation usage  (mu hpc usage)" \
+    "  $n storage        $n's disk quotas       (mu hpc storage)" \
+    "  $n exec <cmd>     run <cmd> on $n, even if it is a word above (-- also works)" \
     "  $n -h | --help    show this help"
 }
 _mu_node() {
@@ -55,6 +72,9 @@ _mu_node() {
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
     mstat) shift; mu hpc queue --node "$node" "$@" ;;
+    shell|sub|tunnel) local v=$1; shift; mu job "$v" --node "$node" "$@" ;;
+    queues|usage|storage) local v=$1; shift; mu hpc "$v" --node "$node" "$@" ;;
+    exec|--) shift; mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2) ;;
     "")   mu_auth && mu_ssh_login "$target" ;;
     *)
       case $1 in
@@ -126,6 +146,7 @@ func frontDoors() string {
 		{"mps", `mu ps "$@"`},
 		{"mkill", `mu ps kill "$@"`},
 		{"mlog", `mu log "$@"`},
+		{"mcfg", `mu config "$@"`},
 		// The one mirror verb that must be shell (it cds). Capture-then-cd so a failed
 		// resolve leaves the shell where it is — the error is already on stderr.
 		{"swap", `local d; d=$(mu path swap "$@") && cd "$d"`},

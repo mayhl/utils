@@ -55,6 +55,12 @@ hpc1 12
 hpc1 uptime
 hpc1 3 uptime
 hpc1 push a b
+hpc1 shell --debug
+hpc1 sub run.pbs -n 4
+hpc1 queues
+hpc1 usage
+hpc1 exec usage
+hpc1 -- queues
 hpc1 -h
 `
 	script := filepath.Join(dir, "driver.sh")
@@ -69,8 +75,16 @@ hpc1 -h
 		"SSH alice@hpc1.alpha.example.mil :: ",   // remote-exec, default login
 		"SSH alice@hpc103.alpha.example.mil :: ", // remote-exec on numbered login node
 		"MU cp push hpc1 a b",                    // push stays node-level
-		"connect to login node N",                // -h prints the grammar
-		"real-error-boom",                        // a real stderr line survives the filter
+		// The reserved verbs route to the mu command that takes a --node anyway.
+		"MU job shell --node hpc1 --debug",
+		"MU job sub --node hpc1 run.pbs -n 4",
+		"MU hpc queues --node hpc1",
+		"MU hpc usage --node hpc1",
+		// ...and `exec` / `--` force remote-exec of a word that is otherwise reserved.
+		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"usage\"",
+		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"queues\"",
+		"connect to login node N", // -h prints the grammar
+		"real-error-boom",         // a real stderr line survives the filter
 	}
 	// The benign dbus login-profile noise must be dropped by the stderr filter.
 	notWants := []string{"dbus-update-activation-environment"}
