@@ -282,8 +282,9 @@ func (s *queueSel) resolve(node, label string, bareDefault bool) (string, error)
 }
 
 // submitClasses maps a class-flag key to the node class the live fallback filters by.
-// debug/background are absent: purpose tiers, not node classes — their queue names are
-// standard across systems, so they fall back to the literal name (submitLiterals).
+// debug/background are absent: they name a PURPOSE tier, not a node class, so there is no
+// class to filter on — they start from the conventional queue name (submitLiterals) and
+// check it against the machine, see resolveLiteralQueue.
 var (
 	submitClasses  = map[string]string{"gpu": "GPU", "vis": "VIS", "bigmem": "BigMem", "xfer": "Xfer"}
 	submitLiterals = map[string]string{"debug": "debug", "background": "background"}
@@ -301,12 +302,12 @@ func resolveSubmitQueue(node, label, key string) (string, error) {
 	if q := config.SubmitQueueFor(label, key); q != "" {
 		return q, nil
 	}
-	if q, ok := submitLiterals[key]; ok {
-		return q, nil
-	}
 	_, qs, err := cachedQueues(node)
 	if err != nil {
 		return "", err
+	}
+	if lit, ok := submitLiterals[key]; ok {
+		return resolveLiteralQueue(label, key, lit, qs)
 	}
 	class := submitClasses[key]
 	names := classQueues(label, class, qs)
@@ -336,6 +337,44 @@ func queueCPN(label, queueName string) int {
 // classQueues is the pure core of the live class-flag fallback: the up, submittable
 // queues on label whose node class matches — the config queue_class override first,
 // the name heuristic else. Input order preserved.
+// resolveLiteralQueue turns a purpose key (debug/background) into a queue the machine
+// actually HAS. The conventional name is a convention, not a guarantee — a SLURM site may
+// have no partition called "debug" at all, and `salloc -p debug` then dies with "invalid
+// partition specified", which tells you nothing about what to use instead.
+//
+// So: take the conventional name when the machine really offers it; else the single up queue
+// whose name carries the word ("cpu_debug", "debug_gpu"); else refuse, listing what the
+// machine does offer. With no cached listing there is nothing to check against — send the
+// literal and let the scheduler answer, as before.
+func resolveLiteralQueue(label, key, literal string, qs []queue.QueueInfo) (string, error) {
+	up, _ := upQueues(execQueues(qs))
+	if len(up) == 0 {
+		return literal, nil
+	}
+	var names, match []string
+	for _, q := range up {
+		names = append(names, q.Name)
+		if q.Name == literal {
+			return literal, nil
+		}
+		if strings.Contains(strings.ToLower(q.Name), key) {
+			match = append(match, q.Name)
+		}
+	}
+	switch len(match) {
+	case 1:
+		render.Info(fmt.Sprintf("--%s → queue %s (%s has no queue named %q; pin it: submit_queue = { %s = %q })",
+			key, match[0], label, literal, key, match[0]))
+		return match[0], nil
+	case 0:
+		return "", runErr("%s has no %s queue (its queues: %s) — pick one with -q, or set submit_queue = { %s = \"<queue>\" } in config.toml",
+			label, key, strings.Join(names, ", "), key)
+	default:
+		return "", runErr("%d queues on %s look like %s (%s) — pick one with -q, or set submit_queue = { %s = \"<queue>\" }",
+			len(match), label, key, strings.Join(match, ", "), key)
+	}
+}
+
 func classQueues(label, class string, qs []queue.QueueInfo) []string {
 	up, _ := upQueues(execQueues(qs))
 	var names []string
