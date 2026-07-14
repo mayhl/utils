@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -191,5 +192,90 @@ func TestParseSize(t *testing.T) {
 		if _, ok := parseSize(in); ok {
 			t.Errorf("parseSize(%q) ok, want reject", in)
 		}
+	}
+}
+
+// TestNodeOverrides covers the per-machine scope: a DSRC's machines share a domain but
+// not a queue plane, so every submit field falls back node → cluster, the maps merging
+// per KEY (hpc2 overrides only `debug` and still inherits the cluster's `default`). A
+// node block also declares membership, so an override-only machine needn't be listed twice.
+func TestNodeOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[[cluster]]
+name = "dsrc"
+domain = "d.example.mil"
+nodes = ["hpc1", "hpc2"]
+scheduler = "pbs"
+account = "CLUSTER-ALLOC"
+cores_per_node = 128
+queue_class = { odd = "GPU" }
+queue_cores = { odd = 64 }
+submit_queue = { default = "standard", debug = "cluster-debug" }
+
+  [[cluster.node]]
+  name = "hpc2"
+  scheduler = "slurm"
+  account = "NODE-ALLOC"
+  cores_per_node = 192
+  queue_class = { odd = "BigMem" }
+  queue_cores = { odd = 96 }
+  submit_queue = { DEBUG = "node-debug" }
+
+  [[cluster.node]]
+  name = "hpc3"
+  cores_per_node = 48
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	reset()
+
+	// hpc1 has no block → the cluster's values stand.
+	for _, c := range []struct{ got, want string }{
+		{SchedulerFor("hpc1"), "pbs"},
+		{AccountFor("hpc1"), "CLUSTER-ALLOC"},
+		{QueueClassOverride("hpc1", "odd"), "GPU"},
+		{SubmitQueueFor("hpc1", "debug"), "cluster-debug"},
+	} {
+		if c.got != c.want {
+			t.Errorf("hpc1: got %q, want %q", c.got, c.want)
+		}
+	}
+	if got := CoresPerNodeFor("hpc1"); got != 128 {
+		t.Errorf("CoresPerNodeFor(hpc1) = %d, want 128", got)
+	}
+
+	// hpc2's block wins field by field — including the scheduler.
+	for _, c := range []struct{ got, want string }{
+		{SchedulerFor("hpc2"), "slurm"},
+		{AccountFor("hpc2"), "NODE-ALLOC"},
+		{QueueClassOverride("hpc2", "odd"), "BigMem"},
+		{SubmitQueueFor("hpc2", "debug"), "node-debug"}, // key lower-cased, as at cluster level
+		{SubmitQueueFor("hpc2", "default"), "standard"}, // NOT overridden → inherited per key
+	} {
+		if c.got != c.want {
+			t.Errorf("hpc2: got %q, want %q", c.got, c.want)
+		}
+	}
+	if got := CoresPerNodeFor("hpc2"); got != 192 {
+		t.Errorf("CoresPerNodeFor(hpc2) = %d, want 192", got)
+	}
+	if got := QueueCoresOverride("hpc2", "odd"); got != 96 {
+		t.Errorf("QueueCoresOverride(hpc2) = %d, want 96", got)
+	}
+
+	// hpc3 exists ONLY as a node block — it still joins the cluster.
+	defs := ClusterDefs()
+	if len(defs) != 1 || !slices.Equal(defs[0].Nodes, []string{"hpc1", "hpc2", "hpc3"}) {
+		t.Errorf("Nodes = %v, want the node blocks folded in and sorted", defs[0].Nodes)
+	}
+	if got := SchedulerFor("hpc3"); got != "pbs" { // no override → the cluster's
+		t.Errorf("SchedulerFor(hpc3) = %q", got)
+	}
+	if got := CoresPerNodeFor("hpc3"); got != 48 {
+		t.Errorf("CoresPerNodeFor(hpc3) = %d, want 48", got)
 	}
 }

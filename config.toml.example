@@ -59,6 +59,19 @@ root = "~/hpc_sshfs"                  # local parent dir for `mu sshfs` mounts
 #                                  background back the selector flags (--gpu, --vis, …). A
 #                                  missing class entry is resolved from the live queue list;
 #                                  --debug/--background fall back to those standard names.
+#
+# A cluster groups the machines behind one DSRC domain — it is NOT one queue plane. Machines
+# under it differ in cores/node, queue names, allocation, sometimes the scheduler itself, so
+# every field above is a DEFAULT that a [[cluster.node]] block overrides for one machine:
+#
+#   [[cluster.node]]
+#   name           = "node-b"
+#   cores_per_node = 192
+#   submit_queue   = { debug = "debug-b" }
+#
+# Lookups read node-first, cluster-second, and the maps merge PER KEY — node-b above still
+# submits to the cluster's `default` queue. A node named only in a node block joins the
+# cluster (no need to list it in `nodes` as well).
 [[cluster]]
 name      = "dsrc1"
 domain    = "dsrc1.example.hpc.mil"
@@ -69,6 +82,13 @@ cores_per_node = 128
 # queue_class = { "gpu-debug" = "GPU" }
 # queue_cores = { "gpu-debug" = 64 }
 # submit_queue = { default = "standard", gpu = "gpu-debug" }
+
+  # node-b is the odd machine out: fatter nodes, its own debug queue and allocation.
+  [[cluster.node]]
+  name           = "node-b"
+  account        = "ALLOC-5678"
+  cores_per_node = 192
+  submit_queue   = { debug = "debug-b" }
 
 [[cluster]]
 name      = "dsrc2"

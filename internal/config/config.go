@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,11 +21,12 @@ import (
 )
 
 // Cluster is one HPC cluster: its name, FQDN suffix, node list, scheduler, and whether
-// it's in the active set (collate targets active clusters by default).
+// it's in the active set (collate targets active clusters by default). The scheduler and
+// submit fields are CLUSTER-WIDE DEFAULTS — see Node for why each is overridable per machine.
 type Cluster struct {
 	Name         string
 	Domain       string
-	Nodes        []string          // sorted
+	Nodes        []string          // sorted; union of `nodes` and the named node blocks
 	Scheduler    string            // "pbs" | "slurm"; "" if unset
 	Active       bool              // in the default collate set (config `active`, default true)
 	Account      string            // default allocation to charge on submit; "" if unset (mu job sub -A overrides)
@@ -32,6 +34,22 @@ type Cluster struct {
 	QueueClass   map[string]string // queue name → forced node class, overriding the name heuristic
 	QueueCores   map[string]int    // queue name → cores/node override (GPU/specialty nodes)
 	SubmitQueue  map[string]string // submit key → queue name: "default" for bare sub, class/purpose keys (gpu/vis/bigmem/xfer/debug/background) for the selector flags
+	NodeOverride []Node            // per-machine overrides, config order
+}
+
+// Node overrides a cluster's scheduler/submit fields for ONE machine. A DSRC groups
+// machines that share a domain and a login idiom — not a queue plane: within one cluster
+// the machines differ in cores/node, queue names, allocation, and sometimes the scheduler.
+// Every field is optional; an unset one falls back to the cluster's, and the maps merge
+// PER KEY (overriding `debug` still inherits the cluster's `default`).
+type Node struct {
+	Name         string
+	Scheduler    string
+	Account      string
+	CoresPerNode int
+	QueueClass   map[string]string
+	QueueCores   map[string]int
+	SubmitQueue  map[string]string
 }
 
 // MirrorSet is one mirror-set: roots sharing a relative-path namespace, mapped
@@ -83,6 +101,15 @@ type file struct {
 		QueueClass   map[string]string `toml:"queue_class"`    // queue → forced node class; optional
 		QueueCores   map[string]int    `toml:"queue_cores"`    // queue → cores/node override; optional
 		SubmitQueue  map[string]string `toml:"submit_queue"`   // submit key → queue (default + class flags); optional
+		Node         []struct {        // [[cluster.node]] — per-machine overrides of the above
+			Name         string            `toml:"name"`
+			Scheduler    string            `toml:"scheduler"`
+			Account      string            `toml:"account"`
+			CoresPerNode int               `toml:"cores_per_node"`
+			QueueClass   map[string]string `toml:"queue_class"`
+			QueueCores   map[string]int    `toml:"queue_cores"`
+			SubmitQueue  map[string]string `toml:"submit_queue"`
+		} `toml:"node"`
 	} `toml:"cluster"`
 }
 
@@ -155,6 +182,26 @@ func ClusterDefs() []Cluster {
 			continue
 		}
 		nodes := append([]string(nil), c.Nodes...)
+		over := make([]Node, 0, len(c.Node))
+		for _, n := range c.Node {
+			if n.Name == "" {
+				continue
+			}
+			// A node block declares membership too, so a machine that needs overrides
+			// doesn't have to be spelled twice.
+			if !slices.Contains(nodes, n.Name) {
+				nodes = append(nodes, n.Name)
+			}
+			over = append(over, Node{
+				Name:         n.Name,
+				Scheduler:    strings.ToLower(n.Scheduler),
+				Account:      n.Account,
+				CoresPerNode: n.CoresPerNode,
+				QueueClass:   n.QueueClass,
+				QueueCores:   n.QueueCores,
+				SubmitQueue:  lowerKeys(n.SubmitQueue),
+			})
+		}
 		sort.Strings(nodes)
 		out = append(out, Cluster{
 			Name: c.Name, Domain: c.Domain, Nodes: nodes,
@@ -165,6 +212,7 @@ func ClusterDefs() []Cluster {
 			QueueClass:   c.QueueClass,
 			QueueCores:   c.QueueCores,
 			SubmitQueue:  lowerKeys(c.SubmitQueue),
+			NodeOverride: over,
 		})
 	}
 	return out
@@ -183,43 +231,85 @@ func lowerKeys(m map[string]string) map[string]string {
 	return out
 }
 
-// SchedulerFor returns the configured scheduler ("pbs"|"slurm") for the cluster
-// owning node n, or "" if the node or its scheduler is unknown. Used by the live
-// fetch to pick qstat vs squeue.
+// SchedulerFor returns the configured scheduler ("pbs"|"slurm") for node n — its own
+// override, else its cluster's — or "" if the node or its scheduler is unknown. Used by
+// the live fetch to pick qstat vs squeue.
 func SchedulerFor(node string) string {
-	for _, c := range ClusterDefs() {
-		for _, n := range c.Nodes {
-			if n == node {
-				return c.Scheduler
-			}
-		}
+	n, c, _ := siteFor(node)
+	if n.Scheduler != "" {
+		return n.Scheduler
 	}
-	return ""
+	return c.Scheduler
 }
 
-// AccountFor returns the configured default submit allocation for the cluster owning
-// node n, or "" if unset. `mu job sub -A` overrides it; empty falls through to the
-// scheduler / script default.
+// AccountFor returns the configured default submit allocation for node n, or "" if unset.
+// `mu job sub -A` overrides it; empty falls through to the scheduler / script default.
 func AccountFor(node string) string {
-	for _, c := range ClusterDefs() {
-		if c.Name == node {
-			return c.Account
-		}
-		for _, n := range c.Nodes {
-			if n == node {
-				return c.Account
-			}
-		}
+	n, c, _ := siteFor(node)
+	if n.Account != "" {
+		return n.Account
 	}
-	return ""
+	return c.Account
 }
 
-// SubmitQueueFor returns the configured submit queue for a key on the cluster owning
-// node — "default" for a bare `mu job sub`, a class/purpose key (gpu/vis/bigmem/xfer/
-// debug/background) for the selector flags — or "" when unset (callers fall back per key).
+// SubmitQueueFor returns the configured submit queue for a key on node n — "default" for
+// a bare `mu job sub`, a class/purpose key (gpu/vis/bigmem/xfer/debug/background) for the
+// selector flags — or "" when unset (callers fall back per key).
 func SubmitQueueFor(node, key string) string {
-	c, _ := clusterFor(node)
-	return c.SubmitQueue[strings.ToLower(key)]
+	n, c, _ := siteFor(node)
+	key = strings.ToLower(key)
+	if q := n.SubmitQueue[key]; q != "" {
+		return q
+	}
+	return c.SubmitQueue[key]
+}
+
+// CoresPerNodeFor returns node n's cores-per-node (for the MaxNodes column), or 0 if unset
+// — callers render "--" when it's 0.
+func CoresPerNodeFor(node string) int {
+	n, c, _ := siteFor(node)
+	if n.CoresPerNode > 0 {
+		return n.CoresPerNode
+	}
+	return c.CoresPerNode
+}
+
+// QueueClassOverride returns the config-forced node class for a specific queue on node n,
+// or "" when there's no override (caller falls back to the name heuristic).
+func QueueClassOverride(node, queue string) string {
+	n, c, _ := siteFor(node)
+	if cl := n.QueueClass[queue]; cl != "" {
+		return cl
+	}
+	return c.QueueClass[queue]
+}
+
+// QueueCoresOverride returns the per-queue cores/node override on node n, or 0 when there's
+// none (caller falls back to CoresPerNodeFor) — for GPU/specialty queues whose node core
+// count differs from the default.
+func QueueCoresOverride(node, queue string) int {
+	n, c, _ := siteFor(node)
+	if cores := n.QueueCores[queue]; cores > 0 {
+		return cores
+	}
+	return c.QueueCores[queue]
+}
+
+// siteFor resolves the two config scopes a lookup consults: the machine's own override
+// block (zero Node when it has none, or when the name is a CLUSTER — the `mu hpc queues`
+// label can be either) and its cluster. Every accessor above reads node-first, cluster-
+// second, so the maps merge per key rather than wholesale.
+func siteFor(node string) (Node, Cluster, bool) {
+	c, ok := clusterFor(node)
+	if !ok {
+		return Node{}, Cluster{}, false
+	}
+	for _, n := range c.NodeOverride {
+		if n.Name == node {
+			return n, c, true
+		}
+	}
+	return Node{}, c, true
 }
 
 // clusterFor returns the cluster owning node n — matched by cluster name (the `mu hpc
@@ -236,29 +326,6 @@ func clusterFor(node string) (Cluster, bool) {
 		}
 	}
 	return Cluster{}, false
-}
-
-// CoresPerNodeFor returns the cluster's default cores-per-node (for the MaxNodes column),
-// or 0 if unset — callers render "--" when it's 0.
-func CoresPerNodeFor(node string) int {
-	c, _ := clusterFor(node)
-	return c.CoresPerNode
-}
-
-// QueueClassOverride returns the config-forced node class for a specific queue on the
-// cluster owning node, or "" when there's no override (caller falls back to the name
-// heuristic).
-func QueueClassOverride(node, queue string) string {
-	c, _ := clusterFor(node)
-	return c.QueueClass[queue]
-}
-
-// QueueCoresOverride returns the per-queue cores/node override, or 0 when there's none
-// (caller falls back to CoresPerNodeFor) — for GPU/specialty queues whose node core count
-// differs from the cluster default.
-func QueueCoresOverride(node, queue string) int {
-	c, _ := clusterFor(node)
-	return c.QueueCores[queue]
 }
 
 // Fleet is the explicit list of node names `--fleet` queries — one fetch per node, so a
