@@ -10,9 +10,9 @@ import (
 // a LEAF when it carries a Field. Domain-free — the caller builds the tree and reads the
 // Changes back out; the widget knows nothing about config.
 type EditorNode struct {
-	Label string
-	Field *FormField // nil → a section (a heading you expand), else an editable leaf
-	Origin   string  // dim provenance note ("from dsrc1", "unset", …); leaves only
+	Label  string
+	Field  *FormField // nil → a section (a heading you expand), else an editable leaf
+	Origin string     // dim provenance note ("from dsrc1", "unset", …); leaves only
 	// Hue is the palette hue of a SECTION's heading (HueLoc, HueGroup, …), letting the
 	// caller tier its own hierarchy without the widget knowing what a cluster is. "" → the
 	// house header hue. Warm hues are status-reserved — don't pass them.

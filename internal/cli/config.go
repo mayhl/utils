@@ -199,9 +199,9 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 					// point of the panel is making that resolution visible.
 					if cv, cok := doc.Value(ci, k.name); cok {
 						// ↳ marks a value INHERITED from the wider scope — the one thing the
-					// file itself cannot show you. Only inherited values get it; "unset"
-					// came from nowhere.
-					v, origin = tomledit.Unquote(cv), render.Glyph("↳ ", "< ")+"from "+cname
+						// file itself cannot show you. Only inherited values get it; "unset"
+						// came from nowhere.
+						v, origin = tomledit.Unquote(cv), render.Glyph("↳ ", "< ")+"from "+cname
 					} else {
 						v, origin = "", "unset"
 					}
