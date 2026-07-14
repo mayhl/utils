@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -85,12 +86,14 @@ type editorModel struct {
 	spec    EditorSpec
 	rows    []edRow
 	cursor  int // index into rows (always a visible row)
+	top     int // scroll offset, in VISIBLE rows — a fold changes what that counts
+	height  int // terminal rows; a config tree outgrows a short window easily
 	loading bool
 	saved   bool
 }
 
 func newEditorModel(spec EditorSpec) editorModel {
-	m := editorModel{spec: spec, loading: spec.Load != nil}
+	m := editorModel{spec: spec, loading: spec.Load != nil, height: 24}
 	m.rows = flatten(spec.Root, 0, nil)
 	for i := range m.rows {
 		r := &m.rows[i]
@@ -103,7 +106,69 @@ func newEditorModel(spec EditorSpec) editorModel {
 	}
 	m.validateAll()
 	m.cursor = m.firstVisible()
+	m.clampScroll()
 	return m
+}
+
+// pageSize is how many rows fit inside the box: the window minus the chrome around it —
+// title, the border's two rules, and the footer.
+func (m editorModel) pageSize() int {
+	if p := m.height - 4; p > 1 {
+		return p
+	}
+	return 1
+}
+
+// visibleRows is the rows the folds leave on screen, in order — the sequence the scroll
+// window and the cursor both index into.
+func (m editorModel) visibleRows() []int {
+	var out []int
+	for i := range m.rows {
+		if m.visible(i) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// windowEnd is the first visible row that no longer fits a page starting at top. An invalid
+// leaf costs two lines, not one (its complaint renders under it), so the window is filled by
+// cost rather than counted — otherwise a few validation errors push the footer off-screen,
+// which is exactly when you can least afford to lose it.
+func (m editorModel) windowEnd(vis []int, top int) int {
+	page, used := m.pageSize(), 0
+	for i := top; i < len(vis); i++ {
+		cost := 1
+		if m.rows[vis[i]].err != "" {
+			cost = 2
+		}
+		if used+cost > page && i > top { // always show at least the top row
+			return i
+		}
+		used += cost
+	}
+	return len(vis)
+}
+
+// clampScroll scrolls the window the least it can to keep the cursor inside it.
+func (m *editorModel) clampScroll() {
+	vis := m.visibleRows()
+	pos := 0
+	for i, r := range vis {
+		if r == m.cursor {
+			pos = i
+			break
+		}
+	}
+	if pos < m.top {
+		m.top = pos
+	}
+	for m.top < pos && pos >= m.windowEnd(vis, m.top) {
+		m.top++
+	}
+	if m.top < 0 || m.top >= len(vis) {
+		m.top = 0
+	}
 }
 
 // flatten walks the tree depth-first into rows, recording each section's descendant count
@@ -139,12 +204,17 @@ func (m editorModel) Init() tea.Cmd {
 
 func (m editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.clampScroll()
+		return m, nil
 	case editorPatchMsg:
 		m.loading = false
 		for _, p := range msg.patches {
 			m.apply(p)
 		}
 		m.validateAll()
+		m.clampScroll()
 		return m, nil
 	case tea.KeyPressMsg:
 		switch key := msg.String(); key {
@@ -157,6 +227,14 @@ func (m editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.move(-1)
 		case "down", "tab":
 			m.move(1)
+		case "pgup":
+			m.page(-1)
+		case "pgdown":
+			m.page(1)
+		case "home":
+			m.cursor = m.firstVisible()
+		case "end":
+			m.lastVisible()
 		case "enter", "right", "left", " ", "space":
 			// On a section these fold; on a leaf the same keys belong to the field editor
 			// (an enum cycles with ←/→/space), so only sections consume them.
@@ -169,6 +247,7 @@ func (m editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default: // enter/space toggle
 					r.expanded = !r.expanded
 				}
+				m.clampScroll() // a fold resizes the list under the window
 				return m, nil
 			}
 			m.edit(msg)
@@ -177,8 +256,29 @@ func (m editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.edit(msg)
 			}
 		}
+		m.clampScroll() // an edit can raise or clear an error line, changing what fits
 	}
 	return m, nil
+}
+
+// page jumps the cursor a windowful at a time — a config tree is deep enough that stepping
+// through it one row at a time is its own annoyance.
+func (m *editorModel) page(dir int) {
+	for range m.pageSize() {
+		before := m.cursor
+		m.move(dir)
+		if m.cursor == before {
+			return // hit an end
+		}
+	}
+}
+
+// lastVisible parks the cursor on the final unfolded row.
+func (m *editorModel) lastVisible() {
+	vis := m.visibleRows()
+	if len(vis) > 0 {
+		m.cursor = vis[len(vis)-1]
+	}
 }
 
 // move steps the cursor to the next visible row in a direction, skipping the subtrees of
@@ -226,6 +326,7 @@ func (m editorModel) save() (tea.Model, tea.Cmd) {
 			}
 		}
 		m.cursor = i
+		m.clampScroll() // the offender is useless if it's off-screen
 		return m, nil
 	}
 	m.saved = true
@@ -349,11 +450,11 @@ func (m editorModel) View() tea.View {
 			labelW = max(labelW, len(r.label)+2*r.depth)
 		}
 	}
+	vis := m.visibleRows()
+	end := m.windowEnd(vis, m.top)
 	var lines []string
-	for i, r := range m.rows {
-		if !m.visible(i) {
-			continue
-		}
+	for _, i := range vis[min(m.top, len(vis)):end] {
+		r := m.rows[i]
 		cur := i == m.cursor
 		indent := strings.Repeat("  ", r.depth)
 		if r.field == nil {
@@ -410,12 +511,16 @@ func (m editorModel) View() tea.View {
 		box = box.Border(asciiBorder)
 	}
 	dot := glyph(" · ", " - ")
+	title := m.spec.Title
+	if end-m.top < len(vis) {
+		title += dot + fmt.Sprintf("%d%s%d of %d", m.top+1, glyph("–", "-"), end, len(vis))
+	}
 	foot := glyph("↑↓", "u/d") + " move" + dot + "type to edit" + dot +
 		glyph("←→", "l/r") + " fold/cycle" + dot + "ctrl+s save" + dot + "esc cancel"
 	if m.loading && m.spec.LoadNote != "" {
 		foot += dot + m.spec.LoadNote
 	}
-	out := selTitle.Render(m.spec.Title) + "\n" + box.Render(strings.Join(lines, "\n")) +
+	out := selTitle.Render(title) + "\n" + box.Render(strings.Join(lines, "\n")) +
 		"\n" + selFoot.Render(foot)
 	return tea.NewView(out)
 }

@@ -128,4 +128,62 @@ func TestSaveBlocksOnInvalid(t *testing.T) {
 	if !got.visible(4) {
 		t.Error("the offending leaf is still hidden — an error the user can't see")
 	}
+	// And it has to be inside the scroll WINDOW, not merely unfolded — on a short terminal
+	// an unfolded leaf can still sit off-screen, hiding the very thing that refused the save.
+	vis := got.visibleRows()
+	onScreen := false
+	for _, r := range vis[got.top:got.windowEnd(vis, got.top)] {
+		onScreen = onScreen || r == 4
+	}
+	if !onScreen {
+		t.Errorf("the offending leaf scrolled off-screen (top=%d)", got.top)
+	}
+}
+
+// TestScrollWindow covers the short-terminal case: a tree taller than the window renders a
+// page of it, the cursor stays inside that page as it moves, and an invalid leaf's error
+// line is paid for out of the page rather than pushing the footer off-screen.
+func TestScrollWindow(t *testing.T) {
+	var leaves []EditorNode
+	for i := range 20 {
+		leaves = append(leaves, EditorNode{
+			Label: string(rune('a' + i)),
+			Field: &FormField{Label: string(rune('a' + i)), Value: "v"},
+		})
+	}
+	m := newEditorModel(EditorSpec{Title: "t", Root: leaves})
+	m.height = 10 // 6 rows fit: 10 minus title, two rules, footer
+
+	if got := m.pageSize(); got != 6 {
+		t.Fatalf("pageSize = %d, want 6", got)
+	}
+	vis := m.visibleRows()
+	if got := m.windowEnd(vis, 0); got != 6 {
+		t.Errorf("window from the top = %d rows, want 6", got)
+	}
+	// Walking down past the fold scrolls exactly as far as it must, no further.
+	for range 8 {
+		m.move(1)
+		m.clampScroll()
+	}
+	if m.cursor != 8 {
+		t.Fatalf("cursor = %d, want 8", m.cursor)
+	}
+	if m.top != 3 { // rows 3..8 — the cursor sits on the last line of the page
+		t.Errorf("top = %d, want 3 (scrolled the minimum)", m.top)
+	}
+	if end := m.windowEnd(m.visibleRows(), m.top); m.cursor >= end {
+		t.Errorf("cursor %d fell outside the window [%d,%d)", m.cursor, m.top, end)
+	}
+	// An error line costs a second row, so the page holds one fewer leaf.
+	m.rows[3].err = "bad"
+	if got := m.windowEnd(m.visibleRows(), 3); got != 8 {
+		t.Errorf("window over an erroring row = %d, want it to end one row early (8)", got)
+	}
+	// Back at the top the window starts there again.
+	m.cursor = m.firstVisible()
+	m.clampScroll()
+	if m.top != 0 {
+		t.Errorf("top = %d after returning to the first row, want 0", m.top)
+	}
 }
