@@ -50,7 +50,7 @@ func tunnelLsCmd() *cobra.Command {
 						state, left = st, rem
 					}
 				}
-				rows = append(rows, render.TunnelRow{URL: t.URL(), System: t.System, Job: t.Job, Node: t.Host, State: state, WallLeft: left})
+				rows = append(rows, render.TunnelRow{ID: t.ID, URL: t.URL(), System: t.System, Job: t.Job, Node: t.Host, State: state, WallLeft: left})
 			}
 			if len(rows) == 0 {
 				render.Info("no open tunnels")
@@ -120,7 +120,7 @@ func tunnelCloseCmd() *cobra.Command {
 			}
 			if !yes {
 				for _, t := range targets {
-					render.Detail(fmt.Sprintf("%s  %s  job %s", t.URL(), t.System, t.Job))
+					render.Detail(fmt.Sprintf("%-6s %s  %s  job %s", t.ID, t.URL(), t.System, t.Job))
 				}
 				fmt.Fprintf(os.Stderr, "%s %d tunnel(s)? [y/N] ", verb, len(targets))
 				var r string
@@ -162,8 +162,8 @@ func closeTunnel(t tunnelRec, keepJob bool) {
 	_ = os.Remove(t.Sock)
 	forgetTunnel(t)
 	if keepJob {
-		render.OK(fmt.Sprintf("detached tunnel on %s (job %s still running — reattach: `mu job tunnel --job %s -N %s`)", t.System, t.Job, t.Job, t.System))
+		render.OK(fmt.Sprintf("detached tunnel %s on %s (job %s still running — reattach: `mu job tunnel --job %s -N %s`)", t.ID, t.System, t.Job, t.Job, t.System))
 		return
 	}
-	render.OK(fmt.Sprintf("closed tunnel on %s and cancelled job %s", t.System, t.Job))
+	render.OK(fmt.Sprintf("closed tunnel %s on %s and cancelled job %s", t.ID, t.System, t.Job))
 }

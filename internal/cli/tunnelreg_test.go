@@ -11,9 +11,9 @@ import (
 func TestTunnelRegistry(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	a := tunnelRec{System: "alpha", Job: "246791.pbs01", Host: "n1", Target: "u@alpha", Sock: "/tmp/s1", LocalPort: 8888, RemotePort: 8888, Started: time.Unix(100, 0)}
-	b := tunnelRec{System: "beta", Job: "500.slurm", Host: "n2", Target: "u@beta", Sock: "/tmp/s2", LocalPort: 9000, RemotePort: 9000, Started: time.Unix(200, 0)}
-	c := tunnelRec{System: "gamma", Job: "246791.other", Host: "n3", Target: "u@gamma", Sock: "/tmp/s3", LocalPort: 9100, RemotePort: 9100, Started: time.Unix(300, 0)}
+	a := tunnelRec{ID: "aaaa", System: "alpha", Job: "246791.pbs01", Host: "n1", Target: "u@alpha", Sock: "/tmp/s1", LocalPort: 8888, RemotePort: 8888, Started: time.Unix(100, 0)}
+	b := tunnelRec{ID: "bbbb", System: "beta", Job: "500.slurm", Host: "n2", Target: "u@beta", Sock: "/tmp/s2", LocalPort: 9000, RemotePort: 9000, Started: time.Unix(200, 0)}
+	c := tunnelRec{ID: "cccc", System: "gamma", Job: "246791.other", Host: "n3", Target: "u@gamma", Sock: "/tmp/s3", LocalPort: 9100, RemotePort: 9100, Started: time.Unix(300, 0)}
 	for _, r := range []tunnelRec{a, b, c} {
 		if err := saveTunnel(r); err != nil {
 			t.Fatal(err)
@@ -22,8 +22,13 @@ func TestTunnelRegistry(t *testing.T) {
 
 	// Newest first.
 	got := loadTunnels()
-	if len(got) != 3 || got[0].Job != c.Job {
+	if len(got) != 3 || got[0].ID != c.ID {
 		t.Fatalf("loadTunnels order/count wrong: %+v", got)
+	}
+
+	// The mu handle is the intended key.
+	if r, err := findTunnel("aaaa"); err != nil || r.System != "alpha" {
+		t.Errorf("findTunnel by id = %+v, %v", r, err)
 	}
 
 	// A bare number that prefixes exactly one job id resolves (beta's is unambiguous).
@@ -40,7 +45,7 @@ func TestTunnelRegistry(t *testing.T) {
 	}
 
 	forgetTunnel(a)
-	if _, err := findTunnel("alpha/246791.pbs01"); err == nil {
+	if _, err := findTunnel("aaaa"); err == nil {
 		t.Error("forgotten tunnel still found")
 	}
 	if len(loadTunnels()) != 2 {

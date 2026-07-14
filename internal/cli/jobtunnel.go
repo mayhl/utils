@@ -105,7 +105,7 @@ func jobTunnelCmd() *cobra.Command {
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
 	f.StringVarP(&walltime, "walltime", "t", "", "how long to hold the job: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
-	f.StringVarP(&name, "name", "J", "", "job name (default: mu-tun-<port>)")
+	f.StringVarP(&name, "name", "J", "", "job name (default: an opaque mu-<id>)")
 	f.BoolVar(&foreground, "fg", false, "hold the tunnel in the foreground (default: background — mu exits once it's up)")
 	f.BoolVarP(&interactive, "interactive", "i", false, "edit the tunnel in a form (fields pre-seeded from flags + config, live queue list)")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
@@ -229,8 +229,11 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		}
 	}
 	part, qos := submitTarget(node, queue_)
+	id := newTunnelID()
+	// The job wears mu-<id> — no port, no "tunnel" — so a cluster-wide qstat leaks nothing.
+	// -J still overrides for someone who wants a name of their own; the id remains the handle.
 	if name == "" {
-		name = fmt.Sprintf("mu-tun-%d", port)
+		name = jobName(id)
 	}
 	// Hand the job its port so the service and the forward agree by construction — the trap
 	// otherwise is a script that hardcodes one number while -p names another.
@@ -307,7 +310,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	}
 
 	rec := tunnelRec{
-		System: node, Job: jobID, Host: host, Target: target, Sock: mux.sock,
+		ID: id, System: node, Job: jobID, Host: host, Target: target, Sock: mux.sock,
 		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: script, Started: startedAt,
 	}
 	if err := saveTunnel(rec); err != nil {
@@ -316,7 +319,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	}
 
 	if !foreground {
-		render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (background; close with `mu job tunnel close %s`)", rec.URL(), host, port, jobID))
+		render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (background; close with `mu job tunnel close %s`)", rec.URL(), host, port, id))
 		return nil
 	}
 	render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (Ctrl-C to close)", rec.URL(), host, port))
@@ -528,8 +531,11 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 	if nodes < 1 {
 		nodes = 1
 	}
+	// Name it mu-<id>, same as a tunnel — a bland handle in the queue rather than the
+	// scheduler's anonymous default (or a leaked "interactive"). No registry entry: an
+	// interactive shell dies with its terminal, so there's nothing to track or close.
 	icmd := adapter.InteractiveCmd(queue.SubmitOpts{
-		Account: account, Queue: part, QOS: qos, Walltime: wall,
+		Account: account, Queue: part, QOS: qos, Walltime: wall, Name: jobName(newTunnelID()),
 		Nodes: nodes, CoresPerNode: queueCPN(label, queue_),
 	})
 	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))

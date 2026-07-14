@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -21,8 +23,11 @@ import (
 // State, not cache: losing it doesn't cost a re-fetch, it strands a running job and a held
 // port with no handle on either. Hence XDG_STATE_HOME, not XDG_CACHE_HOME.
 
-// tunnelRec is one live tunnel.
+// tunnelRec is one live tunnel. ID is mu's OWN handle, minted at submit — not the scheduler
+// job id, which mu doesn't know until after submit and which is clumsy to type. It's the
+// registry key, the name the job wears in the queue, and what you pass to `close`.
 type tunnelRec struct {
+	ID         string    `json:"id"`          // mu handle, e.g. "3f9a" (job name = mu-3f9a)
 	System     string    `json:"system"`      // the cluster, as config names it
 	Job        string    `json:"job"`         // scheduler job id
 	Host       string    `json:"host"`        // compute node the job landed on
@@ -33,6 +38,22 @@ type tunnelRec struct {
 	Walltime   string    `json:"walltime"`    // as requested; "" when the script decided
 	Script     string    `json:"script"`      // "" in adopt mode
 	Started    time.Time `json:"started"`
+}
+
+// jobName is what mu-created ephemeral jobs (tunnel, shell) wear in the queue: mu-<id>,
+// deliberately saying NOTHING about the type or the port. A job name is visible cluster-wide
+// (qstat/squeue), so "mu-tun-8888" would advertise an open tunnel and its port to every other
+// user — the port and the type belong only in the local registry, never on the scheduler.
+func jobName(id string) string { return "mu-" + id }
+
+// newTunnelID mints a short random handle (2 bytes → 4 hex). Random, not sequential: the
+// name must carry no information — a counter would leak how many tunnels you've opened.
+func newTunnelID() string {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "0000" // vanishingly unlikely; a fixed fallback beats failing a submit
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // URL is where the tunnel answers.
@@ -48,10 +69,11 @@ func tunnelDir() string {
 	return filepath.Join(dir, "mayhl_utils", "tunnels")
 }
 
-// tunnelPath keys a tunnel by system+job: the pair is unique, and it's what you'd type.
-func tunnelPath(system, job string) string {
-	safe := strings.NewReplacer("/", "_", " ", "_").Replace(job)
-	return filepath.Join(tunnelDir(), system+"-"+safe+".json")
+// tunnelPath keys a tunnel by its mu handle — unique by construction, and the string you'd
+// type at `close`.
+func tunnelPath(id string) string {
+	safe := strings.NewReplacer("/", "_", " ", "_").Replace(id)
+	return filepath.Join(tunnelDir(), safe+".json")
 }
 
 // saveTunnel records a live tunnel. A registry mu couldn't write is worth failing over —
@@ -61,7 +83,7 @@ func saveTunnel(t tunnelRec) error {
 	if err != nil {
 		return err
 	}
-	p := tunnelPath(t.System, t.Job)
+	p := tunnelPath(t.ID)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
@@ -93,12 +115,15 @@ func loadTunnels() []tunnelRec {
 	return out
 }
 
-// findTunnel resolves what the user typed — a job id, with or without its system — to one
-// record. An ambiguous id (same job number on two systems) is an error, not a guess.
+// findTunnel resolves what the user typed to one record. The mu handle is the intended key,
+// but the scheduler job id is accepted too (with or without its system) — you might read it
+// off qstat rather than `ls`. An ambiguous match is an error, not a guess.
 func findTunnel(ref string) (tunnelRec, error) {
 	var hits []tunnelRec
 	for _, t := range loadTunnels() {
-		if t.Job == ref || strings.HasPrefix(t.Job, ref+".") || t.System+"/"+t.Job == ref {
+		switch {
+		case t.ID == ref,
+			t.Job == ref, strings.HasPrefix(t.Job, ref+"."), t.System+"/"+t.Job == ref:
 			hits = append(hits, t)
 		}
 	}
@@ -108,11 +133,11 @@ func findTunnel(ref string) (tunnelRec, error) {
 	case 0:
 		return tunnelRec{}, usageErr("no tunnel %q — `mu job tunnel ls` shows the open ones", ref)
 	default:
-		return tunnelRec{}, usageErr("%q matches tunnels on several systems — qualify it as <system>/<job>", ref)
+		return tunnelRec{}, usageErr("%q matches several tunnels — use the id from `mu job tunnel ls`", ref)
 	}
 }
 
-func forgetTunnel(t tunnelRec) { _ = os.Remove(tunnelPath(t.System, t.Job)) }
+func forgetTunnel(t tunnelRec) { _ = os.Remove(tunnelPath(t.ID)) }
 
 // portFree reports whether a local port can be listened on. Binding is the only honest test
 // — /proc and lsof both lie about what a bind will actually do.
