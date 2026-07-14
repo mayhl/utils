@@ -41,10 +41,10 @@ func TestIntField(t *testing.T) {
 	}
 }
 
-// TestSubFormSeed locks the queue-field seeding: config default for a bare form, the
-// literal for -q, config entry (or pending) for class flags, options deduped with the
-// sentinel first.
-func TestSubFormSeed(t *testing.T) {
+// TestQueueSeed locks the queue-field seeding shared by the sub/tunnel/shell forms: config
+// default for a bare sub form, the literal for -q, config entry (or pending) for class
+// flags, options deduped with the sentinel first.
+func TestQueueSeed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	body := `
@@ -62,7 +62,7 @@ submit_queue = { default = "standard", gpu = "gpu_short" }
 	defer config.ResetForTest()
 
 	// bare → config default selected; options = sentinel + configured entries
-	val, pending, opts := subFormSeed("alpha", &queueSel{})
+	val, pending, opts := queueSeed("alpha", &queueSel{}, true)
 	if val != "standard" || pending != "" {
 		t.Errorf("bare seed = %q pending %q", val, pending)
 	}
@@ -71,18 +71,50 @@ submit_queue = { default = "standard", gpu = "gpu_short" }
 	}
 
 	// -q literal wins and joins the options
-	if val, _, opts = subFormSeed("alpha", &queueSel{queue: "special"}); val != "special" || !strings.Contains(strings.Join(opts, ","), "special") {
+	if val, _, opts = queueSeed("alpha", &queueSel{queue: "special"}, true); val != "special" || !strings.Contains(strings.Join(opts, ","), "special") {
 		t.Errorf("-q seed = %q opts %v", val, opts)
 	}
 
 	// class flag with a config entry resolves; debug falls to its literal; vis stays pending
-	if val, pending, _ = subFormSeed("alpha", &queueSel{gpu: true}); val != "gpu_short" || pending != "" {
+	if val, pending, _ = queueSeed("alpha", &queueSel{gpu: true}, true); val != "gpu_short" || pending != "" {
 		t.Errorf("gpu seed = %q pending %q", val, pending)
 	}
-	if val, pending, _ = subFormSeed("alpha", &queueSel{debug: true}); val != "debug" || pending != "" {
+	if val, pending, _ = queueSeed("alpha", &queueSel{debug: true}, true); val != "debug" || pending != "" {
 		t.Errorf("debug seed = %q pending %q", val, pending)
 	}
-	if val, pending, _ = subFormSeed("alpha", &queueSel{vis: true}); val != schedDefault || pending != "vis" {
+	if val, pending, _ = queueSeed("alpha", &queueSel{vis: true}, true); val != schedDefault || pending != "vis" {
 		t.Errorf("vis seed = %q pending %q", val, pending)
+	}
+
+	// tunnel/shell pass bareDefault=false: a flagless form starts on the scheduler default,
+	// NOT submit_queue.default — that entry is where batch work goes. A flag still resolves.
+	if val, _, opts = queueSeed("alpha", &queueSel{}, false); val != schedDefault {
+		t.Errorf("bare interactive seed = %q, want the scheduler default", val)
+	}
+	if got := strings.Join(opts, ","); got != schedDefault+",standard,gpu_short" {
+		t.Errorf("interactive options = %q, want the configured queues offered anyway", got)
+	}
+	if val, _, _ = queueSeed("alpha", &queueSel{gpu: true}, false); val != "gpu_short" {
+		t.Errorf("gpu interactive seed = %q", val)
+	}
+}
+
+// TestEitherScriptOrJob pins the tunnel form's cross-field rule: submit a script or adopt a
+// job, never both, never neither — the check RunE does for the flag path.
+func TestEitherScriptOrJob(t *testing.T) {
+	vals := func(script, job string) []string {
+		return []string{tfScript: script, tfJob: job, tfQueue: "", tfAccount: "", tfPort: "", tfLocal: ""}
+	}
+	if msg := eitherScriptOrJob("", vals("serve.sh", "")); msg != "" {
+		t.Errorf("script alone rejected: %s", msg)
+	}
+	if msg := eitherScriptOrJob("", vals("", "4501")); msg != "" {
+		t.Errorf("job alone rejected: %s", msg)
+	}
+	if msg := eitherScriptOrJob("", vals("serve.sh", "4501")); msg == "" {
+		t.Error("script AND job accepted")
+	}
+	if msg := eitherScriptOrJob("", vals("", "")); msg == "" {
+		t.Error("neither script nor job accepted")
 	}
 }

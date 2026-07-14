@@ -28,13 +28,29 @@ const (
 // submitKeys is the config lookup order for seeding the queue enum's initial options.
 var submitKeys = []string{"default", "gpu", "vis", "bigmem", "xfer", "debug", "background"}
 
+// Field indices of the tunnel form (`mu job tunnel -i`) and the shell form
+// (`mu job shell -i`) — each form's own numbering, like the sub form's.
+const (
+	tfScript = iota
+	tfJob
+	tfQueue
+	tfAccount
+	tfPort
+	tfLocal
+)
+
+const (
+	shQueue = iota
+	shAccount
+)
+
 // subForm runs the `mu job sub -i` form and maps its values to SubmitOpts. Fields are
 // pre-seeded from the flags and the cluster's config; a Load fetch enriches the queue
 // enum with the live queue list and arms the walltime/nodes limit validation once it
 // lands. ok=false means the user cancelled. The form only gathers — the caller runs
 // the usual preview + confirm + submit.
 func subForm(node, label, script, account string, sel *queueSel, walltime string, nodes int, name string) (string, queue.SubmitOpts, bool, error) {
-	queueVal, pendingKey, options := subFormSeed(label, sel)
+	queueVal, pendingKey, options := queueSeed(label, sel, true)
 
 	nodesVal := ""
 	if nodes > 0 {
@@ -49,9 +65,11 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 		{Label: "name", Value: name},
 	}
 	vals, ok, err := render.Form(render.FormSpec{
-		Title:    "Submit to " + label,
-		Fields:   fields,
-		Load:     func() []render.FieldPatch { return subFormPatches(node, label, pendingKey) },
+		Title:  "Submit to " + label,
+		Fields: fields,
+		Load: func() []render.FieldPatch {
+			return queuePatches(node, label, pendingKey, queueFields{queue: sfQueue, walltime: sfWalltime, nodes: sfNodes})
+		},
 		LoadNote: "fetching queues...",
 	})
 	if err != nil || !ok {
@@ -73,13 +91,14 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 	return vals[sfScript], opts, true, nil
 }
 
-// subFormSeed builds the queue field's initial value and enum options from the flags
-// and config alone (no fetch — the live list arrives via the Load patch). The value:
-// -q literal, a class flag via config (or its standard literal), else the cluster's
-// bare-sub default; a class flag with NO config entry stays pending — the Load patch
-// selects the single live class match. Options: the sentinel + the seed + every
-// configured submit_queue entry, deduped.
-func subFormSeed(label string, sel *queueSel) (queueVal, pendingKey string, options []string) {
+// queueSeed builds the queue field's initial value and enum options from the flags and
+// config alone (no fetch — the list arrives via the Load patch). The value: -q literal, a
+// class flag via config (or its standard literal), else the cluster's bare default; a class
+// flag with NO config entry stays pending — the Load patch selects the single class match.
+// Options: the sentinel + the seed + every configured submit_queue entry, deduped.
+// bareDefault mirrors queueSel.resolve: only `sub` seeds a flagless form with
+// submit_queue.default; tunnel/shell start on the scheduler default.
+func queueSeed(label string, sel *queueSel, bareDefault bool) (queueVal, pendingKey string, options []string) {
 	switch key := sel.key(); {
 	case sel.queue != "":
 		queueVal = sel.queue
@@ -91,7 +110,7 @@ func subFormSeed(label string, sel *queueSel) (queueVal, pendingKey string, opti
 				pendingKey = key
 			}
 		}
-	default:
+	case bareDefault:
 		queueVal = config.SubmitQueueFor(label, "default")
 	}
 	options = []string{schedDefault}
@@ -112,12 +131,17 @@ func subFormSeed(label string, sel *queueSel) (queueVal, pendingKey string, opti
 	return queueVal, pendingKey, options
 }
 
-// subFormPatches is the form's Load: read the queue list QUIETLY (cachedQueues renders
-// nothing — we're under the TUI; the ticket was ensured before the form opened) and turn
-// it into patches: real names for the queue enum, the pending class flag's single match
-// selected, and walltime/nodes validated against the selected queue's limits. A failed
-// read returns nil — the form just stays on its config seed.
-func subFormPatches(node, label, pendingKey string) []render.FieldPatch {
+// queueFields tells queuePatches which of a form's fields the queue list feeds. Each form
+// numbers its own fields, and the shell/tunnel forms have no walltime or nodes — an absent
+// field is -1 and gets no patch.
+type queueFields struct{ queue, walltime, nodes int }
+
+// queuePatches is the queue-backed forms' Load: read the queue list QUIETLY (cachedQueues
+// renders nothing — we're under the TUI; the ticket was ensured before the form opened) and
+// turn it into patches: real names for the queue enum, the pending class flag's single match
+// selected, and walltime/nodes (where the form has them) validated against the selected
+// queue's limits. A failed read returns nil — the form just stays on its config seed.
+func queuePatches(node, label, pendingKey string, ix queueFields) []render.FieldPatch {
 	_, qs, err := cachedQueues(node)
 	if err != nil {
 		return nil
@@ -132,32 +156,34 @@ func subFormPatches(node, label, pendingKey string) []render.FieldPatch {
 		names = append(names, q.Name)
 		limits[q.Name] = q
 	}
-	qPatch := render.FieldPatch{Index: sfQueue, Options: names}
+	qPatch := render.FieldPatch{Index: ix.queue, Options: names}
 	if pendingKey != "" {
 		if match := classQueues(label, submitClasses[pendingKey], qs); len(match) == 1 {
 			qPatch.Value = match[0]
 		}
 	}
-	return []render.FieldPatch{
-		qPatch,
-		{Index: sfWalltime, Validate: func(v string, all []string) string {
+	patches := []render.FieldPatch{qPatch}
+	if ix.walltime >= 0 {
+		patches = append(patches, render.FieldPatch{Index: ix.walltime, Validate: func(v string, all []string) string {
 			if msg := walltimeField(v, all); msg != "" || v == "" {
 				return msg
 			}
-			q, ok := limits[all[sfQueue]]
+			q, ok := limits[all[ix.queue]]
 			if !ok || q.MaxWalltime == "" {
 				return ""
 			}
 			if wallSeconds(v) > wallSeconds(q.MaxWalltime) {
-				return "over the " + all[sfQueue] + " max " + q.MaxWalltime
+				return "over the " + all[ix.queue] + " max " + q.MaxWalltime
 			}
 			return ""
-		}},
-		{Index: sfNodes, Validate: func(v string, all []string) string {
+		}})
+	}
+	if ix.nodes >= 0 {
+		patches = append(patches, render.FieldPatch{Index: ix.nodes, Validate: func(v string, all []string) string {
 			if msg := intField(v, all); msg != "" || v == "" {
 				return msg
 			}
-			q, ok := limits[all[sfQueue]]
+			q, ok := limits[all[ix.queue]]
 			if !ok {
 				return ""
 			}
@@ -167,11 +193,121 @@ func subFormPatches(node, label, pendingKey string) []render.FieldPatch {
 			}
 			n, _ := strconv.Atoi(v)
 			if mx, err := strconv.Atoi(maxN); err == nil && n > mx {
-				return fmt.Sprintf("over the %s max %s nodes", all[sfQueue], maxN)
+				return fmt.Sprintf("over the %s max %s nodes", all[ix.queue], maxN)
 			}
 			return ""
-		}},
+		}})
 	}
+	return patches
+}
+
+// tunnelFields is what `mu job tunnel -i` gathers: the same knobs the flags set. Queue ""
+// means the scheduler default (the form's sentinel), as with the flags.
+type tunnelFields struct {
+	Script, JobID, Account, Queue string
+	Port, LocalPort               int
+}
+
+// tunnelForm runs the `mu job tunnel -i` form. Fields are pre-seeded from the flags and
+// config, and the queue enum is enriched by the same Load as the sub form. The script /
+// --job exclusivity that the flag path checks in RunE is a cross-field rule here, so the
+// form itself refuses to submit until exactly one of them is set. Gathers only — the
+// caller runs the usual preview + confirm and holds the connection.
+func tunnelForm(node, label, script, jobID, account string, sel *queueSel, port, localPort int) (tunnelFields, bool, error) {
+	queueVal, pendingKey, options := queueSeed(label, sel, false)
+	fields := []render.FormField{
+		{Label: "script", Value: script, Hint: "the service to submit, path resolved on " + label, Validate: eitherScriptOrJob},
+		{Label: "job", Value: jobID, Hint: "adopt an already-submitted job instead", Validate: eitherScriptOrJob},
+		{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
+		{Label: "account", Value: account},
+		{Label: "port", Value: intOrBlank(port), Hint: "service port ON the compute node", Validate: requiredPort},
+		{Label: "local", Value: intOrBlank(localPort), Hint: "local port to listen on (blank: same)", Validate: intField},
+	}
+	vals, ok, err := render.Form(render.FormSpec{
+		Title:  "Tunnel to " + label,
+		Fields: fields,
+		Load: func() []render.FieldPatch {
+			return queuePatches(node, label, pendingKey, queueFields{queue: tfQueue, walltime: -1, nodes: -1})
+		},
+		LoadNote: "fetching queues...",
+	})
+	if err != nil || !ok {
+		return tunnelFields{}, false, err
+	}
+	out := tunnelFields{
+		Script: vals[tfScript], JobID: vals[tfJob], Account: vals[tfAccount],
+		Queue: vals[tfQueue], Port: atoiOr(vals[tfPort], 0), LocalPort: atoiOr(vals[tfLocal], 0),
+	}
+	if out.Queue == schedDefault {
+		out.Queue = ""
+	}
+	if out.LocalPort == 0 {
+		out.LocalPort = out.Port
+	}
+	return out, true, nil
+}
+
+// shellForm runs the `mu job shell -i` form: the two knobs an interactive allocation takes,
+// with the queue enum backed by the live list — which is the point, since the class flags
+// can't name a queue you didn't know existed.
+func shellForm(node, label, account string, sel *queueSel) (queueName, acct string, ok bool, err error) {
+	queueVal, pendingKey, options := queueSeed(label, sel, false)
+	vals, ok, err := render.Form(render.FormSpec{
+		Title: "Interactive allocation on " + label,
+		Fields: []render.FormField{
+			{Label: "queue", Value: queueVal, Kind: render.FieldEnum, Options: options},
+			{Label: "account", Value: account},
+		},
+		Load: func() []render.FieldPatch {
+			return queuePatches(node, label, pendingKey, queueFields{queue: shQueue, walltime: -1, nodes: -1})
+		},
+		LoadNote: "fetching queues...",
+	})
+	if err != nil || !ok {
+		return "", "", false, err
+	}
+	queueName = vals[shQueue]
+	if queueName == schedDefault {
+		queueName = ""
+	}
+	return queueName, vals[shAccount], true, nil
+}
+
+// eitherScriptOrJob is the tunnel form's cross-field rule, on both fields so the message
+// lands wherever the cursor is: submit a script OR adopt a job id, never both, never neither.
+func eitherScriptOrJob(_ string, all []string) string {
+	switch {
+	case all[tfScript] != "" && all[tfJob] != "":
+		return "script and job are exclusive — submit one or adopt the other"
+	case all[tfScript] == "" && all[tfJob] == "":
+		return "need a script to submit, or a job id to adopt"
+	}
+	return ""
+}
+
+// requiredPort is the tunnel's one non-optional number: without it there is nothing to
+// forward.
+func requiredPort(v string, all []string) string {
+	if v == "" {
+		return "the service port on the compute node"
+	}
+	return intField(v, all)
+}
+
+// intOrBlank renders a flag's int back into a form field: 0 (unset) shows as empty, not "0".
+func intOrBlank(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}
+
+// atoiOr parses a validated int field, falling back for the empty/unset case.
+func atoiOr(s string, fallback int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return fallback
 }
 
 var wallRe = regexp.MustCompile(`^\d+:[0-5]\d:[0-5]\d$`)

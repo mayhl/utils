@@ -29,7 +29,7 @@ func jobTunnelCmd() *cobra.Command {
 	var node, jobID, account string
 	var sel queueSel
 	var port, localPort int
-	var yes bool
+	var yes, interactive bool
 	var wait, poll time.Duration
 	c := &cobra.Command{
 		Use:   "tunnel [script]",
@@ -41,6 +41,9 @@ func jobTunnelCmd() *cobra.Command {
 			"with --job <id>, which also adopts any already-submitted job instead of\n" +
 			"submitting. One held connection carries the whole flow. For an interactive\n" +
 			"shell on a compute node see `mu job shell`. Front-door: `mtunnel`.\n\n" +
+			"-i opens the tunnel form instead: script/job, queue, account and the ports as\n" +
+			"editable fields, pre-seeded from the flags and config, with the queue enum\n" +
+			"backed by the cluster's queue list. The usual preview + confirm still follows.\n\n" +
 			"    mu job tunnel ~/serve.sh -N hpc1 -p 8888\n" +
 			"    mu job tunnel --job 4501 -N hpc1 -p 8888 -l 9999",
 		Args: cobra.MaximumNArgs(1),
@@ -49,8 +52,36 @@ func jobTunnelCmd() *cobra.Command {
 			if len(args) == 1 {
 				script = args[0]
 			}
+			if interactive {
+				if !render.Interactive() {
+					return usageErr("mu job tunnel -i needs a terminal (stdin is not a tty)")
+				}
+				if node == "" {
+					return usageErr("needs -N <cluster> — the tunnel runs from the workstation")
+				}
+				// The form's queue fetch is remote — get the ticket BEFORE the TUI owns the terminal.
+				if err := hpc.EnsureTicket(); err != nil {
+					return runErr("%s", err)
+				}
+				if account == "" {
+					account = config.AccountFor(node)
+				}
+				f, ok, err := tunnelForm(node, node, script, jobID, account, &sel, port, localPort)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					render.Info("aborted")
+					return nil
+				}
+				// The form validated the exclusivity and the port; its queue is now literal.
+				script, jobID, account = f.Script, f.JobID, f.Account
+				port, localPort = f.Port, f.LocalPort
+				sel = queueSel{queue: f.Queue}
+				return jobTunnel(node, script, jobID, account, &sel, port, localPort, yes, wait, poll)
+			}
 			if script == "" && jobID == "" {
-				return usageErr("tunnel needs a <script> to submit or --job <id>")
+				return usageErr("tunnel needs a <script> to submit or --job <id> (or -i for the form)")
 			}
 			if script != "" && jobID != "" {
 				return usageErr("<script> and --job are exclusive — submit or adopt, not both")
@@ -72,6 +103,7 @@ func jobTunnelCmd() *cobra.Command {
 	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: same as --port)")
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
+	f.BoolVarP(&interactive, "interactive", "i", false, "edit the tunnel in a form (fields pre-seeded from flags + config, live queue list)")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.DurationVar(&wait, "wait", 15*time.Minute, "give up if the job isn't running by then")
 	f.DurationVar(&poll, "poll", 5*time.Second, "scheduler poll interval while waiting")
@@ -89,6 +121,7 @@ func jobTunnelCmd() *cobra.Command {
 func jobShellCmd() *cobra.Command {
 	var node, account string
 	var sel queueSel
+	var interactive bool
 	c := &cobra.Command{
 		Use:   "shell",
 		Short: "Open an interactive allocation on a compute node (qsub -I / salloc).",
@@ -96,15 +129,45 @@ func jobShellCmd() *cobra.Command {
 			"the shell on the compute node, tty and all. Exiting the shell releases the\n" +
 			"allocation. For tunnelling a service's port instead, see `mu job tunnel`.\n" +
 			"Front-door: `mshell`.\n\n" +
+			"-i picks the queue and account in a form, its queue enum backed by the\n" +
+			"cluster's queue list — the way to see what you can actually allocate on.\n\n" +
 			"    mu job shell -N hpc1 --debug",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if interactive {
+				if !render.Interactive() {
+					return usageErr("mu job shell -i needs a terminal (stdin is not a tty)")
+				}
+				label, _, _, _, _, err := queueTargetCtx(node, userSel{})
+				if err != nil {
+					return err
+				}
+				if node != "" { // the form's queue fetch is remote — ticket BEFORE the TUI takes the terminal
+					if err := hpc.EnsureTicket(); err != nil {
+						return runErr("%s", err)
+					}
+				}
+				if account == "" {
+					account = config.AccountFor(label)
+				}
+				q, acct, ok, err := shellForm(node, label, account, &sel)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					render.Info("aborted")
+					return nil
+				}
+				account = acct
+				sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
+			}
 			return jobInteractive(node, account, &sel)
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
+	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick the queue and account in a form (queue enum from the cluster's queue list)")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
