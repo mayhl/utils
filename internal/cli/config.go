@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -84,6 +85,23 @@ var (
 	}
 )
 
+// acctKey specializes the `account` key against a cluster's cached subprojects: with a
+// cache it becomes a picker — `show_usage` IS the list of allocations you can charge, so
+// there is nothing to type — and without one it stays free text, which is also what happens
+// on a machine mu has never fetched usage from. A node's account may always be cleared back
+// to the cluster's, so its picker leads with the blank.
+func acctKey(k cfgKey, accts []string, node bool) cfgKey {
+	if k.name != "account" || len(accts) == 0 {
+		return k
+	}
+	k.kind, k.hint = render.FieldEnum, "from show_usage"
+	k.options = accts
+	if node {
+		k.options = append([]string{""}, accts...)
+	}
+	return k
+}
+
 // target is where a tree leaf writes back to: a table in the document, and the key in it.
 type target struct {
 	table  int
@@ -104,6 +122,8 @@ func configCmd() *cobra.Command {
 			"Edits are surgical: mu rewrites only the lines you changed, so comments, ordering\n" +
 			"and alignment survive. Declaring a NEW cluster or machine stays a hand-edit; so do\n" +
 			"the inline maps (submit_queue, queue_class) and the fleet list.\n\n" +
+			"`account` becomes a picker once `mu hpc usage` has listed your subprojects — it\n" +
+			"caches their names, so the panel itself never needs a ticket.\n\n" +
 			"    mu config          # the resolved view\n" +
 			"    mu config -i       # the panel",
 		Args: cobra.NoArgs,
@@ -176,8 +196,10 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 
 	for _, ci := range doc.Tables("cluster") {
 		cname := tableValue(doc, ci, "name")
+		accts := clusterAccounts(cname, time.Now())
 		var kids []render.EditorNode
 		for _, k := range clusterKeys {
+			k = acctKey(k, accts, false)
 			v, origin := value(ci, k)
 			kids = append(kids, leaf([]string{cname, k.name}, target{ci, k.name, k.quoted}, k, v, origin))
 		}
@@ -189,6 +211,7 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 			nname := tableValue(doc, ni, "name")
 			var nkids []render.EditorNode
 			for _, k := range nodeKeys {
+				k = acctKey(k, accts, true)
 				v, ok := doc.Value(ni, k.name)
 				origin := ""
 				switch {

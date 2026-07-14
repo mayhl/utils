@@ -69,6 +69,7 @@ func hpcUsageCmd() *cobra.Command {
 					}
 					return infos[i].System < infos[j].System
 				})
+				cacheCollatedAccounts(infos)
 				if jsonOut {
 					return writeJSON(infos)
 				}
@@ -81,18 +82,22 @@ func hpcUsageCmd() *cobra.Command {
 			var (
 				label, out string
 				err        error
+				live       bool // a real machine answered — a piped listing has no cluster to cache under
 			)
 			switch {
 			case node != "":
 				label, out, err = fetchSite(node, showUsageCmd)
+				live = true
 			case local:
 				label, out, err = fetchSiteLocal(showUsageCmd)
+				live = true
 			case !term.IsTerminal(os.Stdin.Fd()):
 				var data []byte
 				data, err = io.ReadAll(os.Stdin)
 				label, out = "usage", string(data)
 			default:
 				label, out, err = fetchSiteLocal(showUsageCmd)
+				live = true
 			}
 			if err != nil {
 				return err
@@ -102,6 +107,11 @@ func hpcUsageCmd() *cobra.Command {
 				return nil
 			}
 			infos := parseUsageWithFY(out)
+			if live {
+				// The view is the refresh: every live listing restocks `mu config -i`'s
+				// account picker (names only — see acctcache.go).
+				writeAcctCache(label, infos)
+			}
 			if len(infos) == 0 {
 				if out != "" {
 					render.Warn("no usage rows parsed — is this `show_usage` output?")
@@ -141,6 +151,18 @@ func parseUsageWithFY(out string) []queue.UsageInfo {
 		rows[i].FYLeft = fy
 	}
 	return rows
+}
+
+// cacheCollatedAccounts restocks the account picker of every system a collate reached — the
+// rows already carry their System tag, so one fan-out refreshes the whole fleet at once.
+func cacheCollatedAccounts(infos []queue.UsageInfo) {
+	bySystem := map[string][]queue.UsageInfo{}
+	for _, in := range infos {
+		bySystem[in.System] = append(bySystem[in.System], in)
+	}
+	for label, rows := range bySystem {
+		writeAcctCache(label, rows)
+	}
 }
 
 // toUsageRows maps parsed UsageInfo to render's plain UsageRow: hour figures thinned to
