@@ -158,3 +158,18 @@ func submitTarget(label, queueName string) (queue_, qos string) {
 	}
 	return queueName, ""
 }
+
+// wallLeft is requested-minus-elapsed, as a human duration — the answer to "how much longer
+// does this tunnel have". "" when either side didn't parse (the scheduler left a field blank
+// or gave a form ParseWalltime doesn't read), so the column degrades rather than lying.
+func wallLeft(reqWall, elapsed string) string {
+	req, ok1 := queue.ParseWalltime(strings.TrimSpace(reqWall))
+	el, ok2 := queue.ParseWalltime(strings.TrimSpace(elapsed))
+	if !ok1 || !ok2 {
+		return ""
+	}
+	if el >= req {
+		return "0s"
+	}
+	return queue.FormatWalltime(req - el)
+}

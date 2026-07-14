@@ -494,3 +494,28 @@ func truncRight(s string, maxLen int) string {
 	}
 	return string(r[:i]) + "…"
 }
+
+// TunnelRow is one open tunnel in the TunnelsTable — a background `mu job tunnel`, its URL,
+// the job behind it, and how much walltime is left.
+type TunnelRow struct {
+	URL, System, Job, Node, State, WallLeft string
+}
+
+// TunnelsTable renders the open background tunnels. Domain-shaped like the other house
+// tables (JobsTable et al.): the caller hands rows, render owns the frame and accents.
+func TunnelsTable(rows []TunnelRow) {
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	applyStyle(t)
+	t.Style().Title.Colors = text.Colors{text.FgCyan, text.Bold}
+	t.Style().Color.Header = text.Colors{text.FgCyan}
+	t.Style().Color.Border = text.Colors{text.FgHiBlack}
+	t.Style().Color.Separator = text.Colors{text.FgHiBlack}
+	t.SetTitle("Open tunnels")
+	t.AppendHeader(table.Row{"URL", "System", "Job", "Node", "State", "Wall left"})
+	for _, r := range rows {
+		t.AppendRow(table.Row{r.URL, r.System, r.Job, r.Node, r.State, r.WallLeft})
+	}
+	t.SetColumnConfigs([]table.ColumnConfig{{Name: "URL", Colors: text.Colors{text.FgCyan}}})
+	t.Render()
+}
