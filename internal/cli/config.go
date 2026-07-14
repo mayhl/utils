@@ -191,7 +191,7 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 			v, origin := value(ts[0], k)
 			kids = append(kids, leaf([]string{name, k.name}, target{ts[0], k.name, k.quoted}, k, v, origin))
 		}
-		root = append(root, render.EditorNode{Label: "[" + name + "]", Hue: render.HueGroup, Children: kids})
+		root = append(root, render.EditorNode{Label: "[" + name + "]", Key: name, Hue: render.HueGroup, Children: kids})
 	}
 
 	for _, ci := range doc.Tables("cluster") {
@@ -233,7 +233,7 @@ func buildTree(doc *tomledit.Doc) ([]render.EditorNode, map[string]target) {
 			}
 			kids = append(kids, render.EditorNode{Label: nname, Hue: render.HueLoc, Children: nkids})
 		}
-		root = append(root, render.EditorNode{Label: "[[cluster]] " + cname, Hue: render.HueLoc, Children: kids})
+		root = append(root, render.EditorNode{Label: "[[cluster]] " + cname, Key: cname, Hue: render.HueLoc, Children: kids})
 	}
 	return root, targets
 }

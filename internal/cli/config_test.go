@@ -120,6 +120,42 @@ func TestApplyChanges(t *testing.T) {
 	}
 }
 
+// TestEveryLeafHasATarget is the invariant a save rests on: the panel hands back a Change
+// keyed by the leaf's PATH, and configEdit looks that path up in targets — so a leaf whose
+// path isn't a key there is one the user can edit and watch vanish, with no error and no
+// diff, indistinguishable from a cancel. The paths here are built exactly as the widget
+// builds them (Key, falling back to Label), which is what the hand-written paths in
+// TestApplyChanges could not catch: section labels are DECORATED ("[[cluster]] dsrc1"), and
+// for a while the decoration leaked into the path and missed every target.
+func TestEveryLeafHasATarget(t *testing.T) {
+	doc := tomledit.Parse(cfgSample)
+	root, targets := buildTree(doc)
+
+	leaves := 0
+	var walk func(nodes []render.EditorNode, prefix []string)
+	walk = func(nodes []render.EditorNode, prefix []string) {
+		for _, n := range nodes {
+			key := n.Key
+			if key == "" {
+				key = n.Label
+			}
+			path := append(append([]string(nil), prefix...), key)
+			if n.Field == nil {
+				walk(n.Children, path)
+				continue
+			}
+			leaves++
+			if _, ok := targets[strings.Join(path, "\x00")]; !ok {
+				t.Errorf("leaf %v has no write-back target — an edit to it would silently vanish", path)
+			}
+		}
+	}
+	walk(root, nil)
+	if leaves == 0 {
+		t.Fatal("no leaves built — the sample config isn't exercising the tree")
+	}
+}
+
 func TestIntOrEmpty(t *testing.T) {
 	for _, ok := range []string{"", "0", "128", " 192 "} {
 		if msg := intOrEmpty(ok, nil); msg != "" {

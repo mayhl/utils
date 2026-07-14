@@ -11,7 +11,13 @@ import (
 // a LEAF when it carries a Field. Domain-free — the caller builds the tree and reads the
 // Changes back out; the widget knows nothing about config.
 type EditorNode struct {
-	Label  string
+	Label string
+	// Key is this node's IDENTITY in a path — what Change.Path and EditorPatch.Path are
+	// built from — defaulting to Label. Set it whenever the label is decorated for display
+	// ("[[cluster]] alpha" for the cluster `alpha`): a caller keys its write-back targets by
+	// the real name, and if the path carried the decoration instead, every lookup would miss
+	// and the edit would vanish with no error.
+	Key    string
 	Field  *FormField // nil → a section (a heading you expand), else an editable leaf
 	Origin string     // dim provenance note ("from dsrc1", "unset", …); leaves only
 	// Hue is the palette hue of a SECTION's heading (HueLoc, HueGroup, …), letting the
@@ -176,7 +182,11 @@ func (m *editorModel) clampScroll() {
 func flatten(nodes []EditorNode, depth int, prefix []string) []edRow {
 	var out []edRow
 	for _, n := range nodes {
-		path := append(append([]string(nil), prefix...), n.Label)
+		key := n.Key
+		if key == "" {
+			key = n.Label
+		}
+		path := append(append([]string(nil), prefix...), key)
 		row := edRow{label: n.Label, depth: depth, path: path, origin: n.Origin, hue: n.Hue, expanded: true}
 		if n.Field != nil {
 			f := *n.Field // copy: the widget edits its own state, never the caller's spec
