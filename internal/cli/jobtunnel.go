@@ -363,7 +363,10 @@ func startMux(target string) (*sshMux, error) {
 		target: target,
 		death:  make(chan error, 1),
 	}
-	m.master = exec.Command(m.bin, "-M", "-S", m.sock, "-N",
+	// -x: no X11 forwarding. A tunnel never needs it, and a ~/.ssh/config that turns it on
+	// makes every channel print "No xauth data; using fake authentication data" — noise on a
+	// path whose whole output is three status lines.
+	m.master = exec.Command(m.bin, "-x", "-M", "-S", m.sock, "-N",
 		"-o", "ConnectTimeout=10", target)
 	m.master.Stdin, m.master.Stderr = os.Stdin, os.Stderr // Kerberos/host-key prompts stay answerable
 	if err := m.master.Start(); err != nil {
@@ -391,7 +394,7 @@ func startMux(target string) (*sshMux, error) {
 // run executes one remote command as a channel on the held connection — no new
 // auth, no new session on the far side.
 func (m *sshMux) run(remoteCmd string) (string, error) {
-	cmd := exec.Command(m.bin, "-q", "-S", m.sock, m.target, "bash -lc "+shell.Quote(remoteCmd))
+	cmd := exec.Command(m.bin, "-q", "-x", "-S", m.sock, m.target, "bash -lc "+shell.Quote(remoteCmd))
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -407,7 +410,7 @@ func (m *sshMux) run(remoteCmd string) (string, error) {
 // forward adds -L localPort:host:port to the LIVE master — the tunnel joins
 // the connection that has been open since submit.
 func (m *sshMux) forward(localPort int, host string, port int) error {
-	return exec.Command(m.bin, "-q", "-S", m.sock, "-O", "forward",
+	return exec.Command(m.bin, "-q", "-x", "-S", m.sock, "-O", "forward",
 		"-L", fmt.Sprintf("%d:%s:%d", localPort, host, port), m.target).Run()
 }
 
