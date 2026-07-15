@@ -30,7 +30,7 @@ func projectCmd() *cobra.Command {
 
 func projectSubmitCmd() *cobra.Command {
 	var node, script, account, queue_ string
-	var yes, dryRun, keep, clean, force bool
+	var yes, dryRun, keep, clean, force, noSync bool
 	c := &cobra.Command{
 		Use:   "submit <case-dir>",
 		Short: "Push a case to a cluster's $WORK staging and submit it.",
@@ -43,10 +43,12 @@ func projectSubmitCmd() *cobra.Command {
 			"--clean, the study phase: refuse a dirty tree, push the branch through the\n" +
 			"per-node remote (updateInstead refreshes the $HOME clone; `mu project clone`\n" +
 			"bootstraps it), stage $HOME→$WORK on the node, submit — every run.toml then\n" +
-			"carries a real reproducible sha. Pre-flight refuses a diverged remote.",
+			"carries a real reproducible sha. Pre-flight refuses a diverged remote. --clean\n" +
+			"also syncs the shared input data (simulations/data) to the node first, additively,\n" +
+			"so the run has its dependencies; --no-sync skips it when they're already staged.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, render.IsVerbose(), keep, clean, force)
+			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, render.IsVerbose(), keep, clean, force, noSync)
 		},
 	}
 	setHelpArgs(c, [2]string{"<case-dir>", "case directory to push and run (under $HOME, inside a git project)"})
@@ -61,6 +63,7 @@ func projectSubmitCmd() *cobra.Command {
 	f.BoolVar(&keep, "keep-extra", false, "keep staging files the case dir no longer has (skip rsync --delete)")
 	f.BoolVar(&clean, "clean", false, "commit-gated study mode: push via the per-node remote, stage $HOME→$WORK on the node")
 	f.BoolVarP(&force, "force", "f", false, "override a case's node-lock (submit to a node other than its .mu-node marker)")
+	f.BoolVar(&noSync, "no-sync", false, "skip the --clean SHARED-data sync (simulations/data already staged)")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -80,7 +83,7 @@ var stageProtect = []string{
 // projectSubmit is the push-and-run pipeline: resolve → preview+confirm → get
 // the case into $WORK staging (iterate: laptop rsync; clean: git push + node-side
 // copy) → stamp + submit.
-func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep, clean, force bool) error {
+func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep, clean, force, noSync bool) error {
 	caseAbs, err := filepath.Abs(caseDir)
 	if err != nil {
 		return usageErr("%s", err)
@@ -168,6 +171,9 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 		render.Detail("applies: (scheduler defaults / script directives)")
 	}
 	render.Detail("command: " + submitCmd)
+	if clean && !noSync {
+		render.Detail("data:    sync simulations/data → $WORKDIR (add-only; --no-sync to skip)")
+	}
 	if dryRun {
 		render.Info("dry run — nothing pushed or submitted")
 		return nil
@@ -183,6 +189,16 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	}
 	if err := hpc.EnsureTicket(); err != nil {
 		return runErr("%s", err)
+	}
+
+	// --clean data leg: ensure the run's SHARED input data (simulations/data) is on the
+	// node before the job runs. Additive + add-only — a no-op when already present, and a
+	// differing input is skipped+warned, never overwritten. yes=true: the submit confirm
+	// above already covered it. --no-sync opts out (data staged by hand).
+	if clean && !noSync {
+		if err := syncShared(root, projSyncOpts{node: node, yes: true, verbose: verbose}); err != nil {
+			return err
+		}
 	}
 
 	// Leg 1: create staging and resolve $WORKDIR remotely (the laptop can't know it).

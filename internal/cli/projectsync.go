@@ -226,7 +226,13 @@ func projectSync(o projSyncOpts) error {
 	if err != nil {
 		return usageErr("%s", err)
 	}
+	return syncShared(root, o)
+}
 
+// syncShared pushes the project's SHARED-zone tiers for an already-resolved root — the
+// callable core behind `mu project sync` (root from cwd) and submit --clean's data leg
+// (root from the case's project). Additive + add-only, identical on both paths.
+func syncShared(root string, o projSyncOpts) error {
 	// A path argument narrows to one subtree (mutually exclusive with --tier, which
 	// selects whole tiers); otherwise take every selected tier that exists locally.
 	var tiers []syncTier
