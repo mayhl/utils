@@ -99,10 +99,47 @@ type syncTier struct{ rel, localAbs, remoteRoot string }
 // projSyncOpts carries one `mu project sync` invocation's resolved flags and args.
 type projSyncOpts struct {
 	node    string
+	path    string // optional subtree to narrow to (relative to cwd); "" = whole tiers
 	tierSel []string
 	yes     bool
 	dryRun  bool
 	verbose bool
+}
+
+// narrowTier resolves an optional path argument to a single tier. The path (relative to
+// cwd) must live under one of the syncable tiers, whose remoteRoot it inherits — this is
+// how a sync targets one dataset/subtree instead of a whole tier. The mirror model does
+// the rest: HomeRel names the subtree's position, so it lands at the same relative spot.
+func narrowTier(root, path string) (syncTier, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return syncTier{}, err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return syncTier{}, err
+	}
+	if !fi.IsDir() {
+		return syncTier{}, fmt.Errorf("%s is not a directory (narrow to a dataset/subtree)", path)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return syncTier{}, fmt.Errorf("%s is outside the project (%s)", path, root)
+	}
+	for _, t := range syncTiers {
+		if rel == t.rel || strings.HasPrefix(rel, t.rel+string(os.PathSeparator)) {
+			hrel, herr := project.HomeRel(abs)
+			if herr != nil {
+				return syncTier{}, herr
+			}
+			return syncTier{rel: hrel, localAbs: abs, remoteRoot: t.remoteRoot}, nil
+		}
+	}
+	rels := make([]string, len(syncTiers))
+	for i, t := range syncTiers {
+		rels[i] = t.rel
+	}
+	return syncTier{}, fmt.Errorf("%s is not under a syncable tier (%s)", rel, strings.Join(rels, ", "))
 }
 
 // projectSyncCmd is `mu project sync <node>`: the production-run data path. It pushes
@@ -114,32 +151,45 @@ func projectSyncCmd() *cobra.Command {
 	var yes, dryRun bool
 	var tierSel []string
 	c := &cobra.Command{
-		Use:   "sync <node>",
+		Use:   "sync <node> [path]",
 		Short: "Push shared run-dependency data (simulations/data) to a cluster's $WORKDIR.",
 		Long: "Push the project's shared-zone data — simulations/data, the sim-ready\n" +
 			"model-format inputs runs depend on — to the target's $WORKDIR at the same\n" +
 			"$HOME-relative path. The production-run data path, distinct from submit's\n" +
 			"disposable case staging.\n\n" +
+			"An optional path narrows the push to one dataset/subtree under a tier; without\n" +
+			"one, every selected --tier that exists locally is pushed.\n\n" +
 			"Additive and add-only: a dry itemized pass classifies each file as new (dest\n" +
 			"absent), identical, or differing (size or mtime); the real transfer pushes only\n" +
 			"the new ones (rsync --ignore-existing). Differing files are listed and SKIPPED —\n" +
 			"shared data is never silently overwritten. Detection is cheap size + mtime, not\n" +
 			"a full checksum. Shows the plan and confirms before transferring.",
-		Args: cobra.ExactArgs(1),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSync(projSyncOpts{node: args[0], tierSel: tierSel, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
+			var path string
+			if len(args) > 1 {
+				path = args[1]
+			}
+			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
 		},
 	}
-	setHelpArgs(c, [2]string{"<node>", "cluster to push shared data to"})
+	setHelpArgs(c,
+		[2]string{"<node>", "cluster to push shared data to"},
+		[2]string{"[path]", "narrow the push to one dataset/subtree under a tier"},
+	)
 	f := c.Flags()
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "classify and show the plan without transferring")
 	f.StringSliceVar(&tierSel, "tier", nil, "tiers to sync: sim, processed, raw (default: sim; raw → $HOME)")
 	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
-		if len(args) > 0 {
+		switch len(args) {
+		case 0:
+			return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+		case 1:
+			return nil, cobra.ShellCompDirectiveDefault // path arg: default file completion
+		default:
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
-		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	}
 	return c
 }
@@ -153,37 +203,50 @@ func projectSync(o projSyncOpts) error {
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	specs, err := resolveTiers(o.tierSel)
-	if err != nil {
-		return usageErr("%s", err)
+
+	// A path argument narrows to one subtree (mutually exclusive with --tier, which
+	// selects whole tiers); otherwise take every selected tier that exists locally.
+	var tiers []syncTier
+	if o.path != "" {
+		if len(o.tierSel) > 0 {
+			return usageErr("--tier and a path argument are mutually exclusive")
+		}
+		t, nerr := narrowTier(root, o.path)
+		if nerr != nil {
+			return usageErr("%s", nerr)
+		}
+		tiers = []syncTier{t}
+	} else {
+		specs, serr := resolveTiers(o.tierSel)
+		if serr != nil {
+			return usageErr("%s", serr)
+		}
+		// rel is the $HOME-relative path (the mirror position under $WORKDIR/$HOME);
+		// t.rel is where the tier sits under the project root.
+		for _, t := range specs {
+			abs := filepath.Join(root, t.rel)
+			if fi, e := os.Stat(abs); e != nil || !fi.IsDir() {
+				continue
+			}
+			rel, rerr := project.HomeRel(abs)
+			if rerr != nil {
+				return usageErr("%s", rerr)
+			}
+			tiers = append(tiers, syncTier{rel: rel, localAbs: abs, remoteRoot: t.remoteRoot})
+		}
+		if len(tiers) == 0 {
+			looked := make([]string, len(specs))
+			for i, t := range specs {
+				looked[i] = t.rel
+			}
+			render.Info("no shared-zone data to sync under " + root + " (looked for: " + strings.Join(looked, ", ") + ")")
+			return nil
+		}
 	}
+
 	target, err := hpc.Resolve(o.node)
 	if err != nil {
 		return usageErr("%s", err)
-	}
-
-	// Which selected tiers actually exist locally (a project may hold only some).
-	// rel is the $HOME-relative path (the mirror position under $WORKDIR/$HOME);
-	// t.rel is where the tier sits under the project root.
-	var tiers []syncTier
-	for _, t := range specs {
-		abs := filepath.Join(root, t.rel)
-		if fi, serr := os.Stat(abs); serr != nil || !fi.IsDir() {
-			continue
-		}
-		rel, rerr := project.HomeRel(abs)
-		if rerr != nil {
-			return usageErr("%s", rerr)
-		}
-		tiers = append(tiers, syncTier{rel: rel, localAbs: abs, remoteRoot: t.remoteRoot})
-	}
-	if len(tiers) == 0 {
-		looked := make([]string, len(specs))
-		for i, t := range specs {
-			looked[i] = t.rel
-		}
-		render.Info("no shared-zone data to sync under " + root + " (looked for: " + strings.Join(looked, ", ") + ")")
-		return nil
 	}
 
 	render.Info("Sync shared data → " + o.node)
