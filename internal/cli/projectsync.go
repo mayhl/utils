@@ -77,8 +77,8 @@ func resolveTiers(sel []string) ([]tierSpec, error) {
 // mtimeWindowSec is the mtime skew tolerance for the differs check: files matching
 // on size and within this many seconds count as identical, absorbing FS-granularity
 // and timezone-second noise between the laptop and the cluster. The coarse hours/days
-// "dest ~3d older" hint is a later phase; here the check is just cheap size + mtime,
-// never a full checksum (impractical on 10-50 GB scientific outputs).
+// "dest ~3d older" hint is a later phase; the default check is just cheap size + mtime
+// (--checksum opts into a full compare, impractical by default on 10-50 GB data).
 const mtimeWindowSec = 2
 
 // syncResult is one tier's classification: what a push would create (new) vs the
@@ -98,13 +98,30 @@ type syncTier struct{ rel, localAbs, remoteRoot string }
 
 // projSyncOpts carries one `mu project sync` invocation's resolved flags and args.
 type projSyncOpts struct {
-	node    string
-	path    string // optional subtree to narrow to (relative to cwd); "" = whole tiers
-	tierSel []string
-	force   bool // overwrite differing files (loud) instead of skipping them
-	yes     bool
-	dryRun  bool
-	verbose bool
+	node     string
+	path     string // optional subtree to narrow to (relative to cwd); "" = whole tiers
+	tierSel  []string
+	force    bool     // overwrite differing files (loud) instead of skipping them
+	checksum bool     // classify by full checksum, not size+mtime (opt-in, expensive)
+	exclude  []string // extra excludes, stacked on the built-in junk set
+	yes      bool
+	dryRun   bool
+	verbose  bool
+}
+
+// builtinExcludes are the junk patterns `mu project sync` always drops — editor and OS
+// cruft, rsync's own partial dir, transient temp/lock files — so they never count as
+// syncable data. This layer operates on the gitignored data tiers; it is independent of
+// .gitignore.
+var builtinExcludes = []string{".DS_Store", ".rsync-partial", "*.swp", "*.tmp", "*.lock"}
+
+// syncExcludes stacks the caller's --exclude patterns on the built-in junk set. Classify
+// and transfer must pass the identical list, or classify would count an excluded file as
+// new while the transfer skips it.
+func syncExcludes(user []string) []string {
+	out := make([]string, 0, len(builtinExcludes)+len(user))
+	out = append(out, builtinExcludes...)
+	return append(out, user...)
 }
 
 // narrowTier resolves an optional path argument to a single tier. The path (relative to
@@ -149,8 +166,8 @@ func narrowTier(root, path string) (syncTier, error) {
 // files are never overwritten (add-only house rule). Differing files are reported and
 // skipped, not resolved. Distinct from submit-iterate's disposable case staging.
 func projectSyncCmd() *cobra.Command {
-	var yes, dryRun, force bool
-	var tierSel []string
+	var yes, dryRun, force, checksum bool
+	var tierSel, exclude []string
 	c := &cobra.Command{
 		Use:   "sync <node> [path]",
 		Short: "Push shared run-dependency data (simulations/data) to a cluster's $WORKDIR.",
@@ -171,10 +188,11 @@ func projectSyncCmd() *cobra.Command {
 			if len(args) > 1 {
 				path = args[1]
 			}
-			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, force: force, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
+			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, force: force, checksum: checksum, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
 		},
 	}
-	setHelpArgs(c,
+	setHelpArgs(
+		c,
 		[2]string{"<node>", "cluster to push shared data to"},
 		[2]string{"[path]", "narrow the push to one dataset/subtree under a tier"},
 	)
@@ -183,6 +201,8 @@ func projectSyncCmd() *cobra.Command {
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "classify and show the plan without transferring")
 	f.StringSliceVar(&tierSel, "tier", nil, "tiers to sync: sim, processed, raw (default: sim; raw → $HOME)")
 	f.BoolVarP(&force, "force", "f", false, "overwrite differing files instead of skipping them (loud)")
+	f.BoolVarP(&checksum, "checksum", "c", false, "compare by full checksum, not size+mtime (opt-in; reads both ends)")
+	f.StringArrayVar(&exclude, "exclude", nil, "extra rsync exclude pattern (repeatable; stacks on the built-in junk set)")
 	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
 		switch len(args) {
 		case 0:
@@ -267,7 +287,7 @@ func projectSync(o projSyncOpts) error {
 		if derr != nil {
 			return derr
 		}
-		newN, updates, cerr := classifySync(target, t.localAbs, dest)
+		newN, updates, cerr := classifySync(target, t.localAbs, dest, o.checksum, syncExcludes(o.exclude))
 		if cerr != nil {
 			return runErr("%s: classify %s: %s", o.node, t.rel, cerr)
 		}
@@ -366,14 +386,22 @@ func pushTier(target string, res syncResult, o projSyncOpts) error {
 	dst := target + ":" + dest + "/"
 	label := "sync " + o.node + " " + res.rel
 
+	excludes := syncExcludes(o.exclude)
 	var args []string
 	if o.force {
 		transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
 		// -a only (no -u): overwrite regardless of transfer direction. --partial-dir
 		// matches rsync.partialDir, keeping resumable partials out of the dest tree.
-		args = []string{"-a", "--partial-dir=.rsync-partial", "-e", transport, src, dst}
+		args = []string{"-a", "--partial-dir=.rsync-partial"}
+		if o.checksum {
+			args = append(args, "-c")
+		}
+		for _, ex := range excludes {
+			args = append(args, "--exclude", ex)
+		}
+		args = append(args, "-e", transport, src, dst)
 	} else {
-		args = rsync.BuildArgs(src, dst, rsync.Opts{PartialDir: true, Ropt: []string{"--ignore-existing"}})
+		args = rsync.BuildArgs(src, dst, rsync.Opts{PartialDir: true, Checksum: o.checksum, Exclude: excludes, Ropt: []string{"--ignore-existing"}})
 	}
 	code, _ := rsync.Run(args, label, o.verbose)
 	if code != 0 {
@@ -417,19 +445,24 @@ func ensureRemoteDir(target, node, remoteRoot, rel string) (string, error) {
 	return dest, nil
 }
 
-// classifySync runs a dry itemized compare (size + mtime quick-check, never -c) of
-// srcAbs against the remote destAbs and splits the would-transfer files into new
-// (dest absent) and update (dest exists, differs). Identical files never itemize.
-// It builds the rsync args directly rather than via BuildArgs so the env layer's -u
-// (skip files newer on the receiver) can't hide a remote-newer file from the differs
-// report; the real transfer, which does inherit the env layer, only ever pushes new
-// files anyway.
-func classifySync(target, srcAbs, destAbs string) (newN int, updates []string, err error) {
+// classifySync runs a dry itemized compare of srcAbs against the remote destAbs and
+// splits the would-transfer files into new (dest absent) and update (dest exists,
+// differs). Identical files never itemize. The compare is a cheap size + mtime quick-
+// check by default; checksum=true opts into a full both-ends checksum (expensive on
+// 10-50 GB data). It builds the rsync args directly rather than via BuildArgs so the env
+// layer's -u (skip files newer on the receiver) can't hide a remote-newer file from the
+// differs report; the real transfer, which does inherit the env layer, only ever pushes
+// new files anyway (unless --force, which bypasses the env layer too).
+func classifySync(target, srcAbs, destAbs string, checksum bool, excludes []string) (newN int, updates []string, err error) {
 	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
-	args := []string{
-		"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec),
-		"-e", transport, srcAbs + "/", target + ":" + destAbs + "/",
+	args := []string{"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec)}
+	if checksum {
+		args = append(args, "-c") // full checksum compare, not size+mtime (opt-in, expensive)
 	}
+	for _, ex := range excludes {
+		args = append(args, "--exclude", ex)
+	}
+	args = append(args, "-e", transport, srcAbs+"/", target+":"+destAbs+"/")
 	cmd := exec.Command("rsync", args...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
