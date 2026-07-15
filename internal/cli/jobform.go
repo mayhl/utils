@@ -37,6 +37,7 @@ const (
 	tfWalltime
 	tfPort
 	tfLocal
+	tfMode
 )
 
 const (
@@ -220,11 +221,16 @@ func queuePatches(node, label, pendingKey string, ix queueFields) []render.Field
 	return patches
 }
 
+// tunnelModes are the two run modes the form's mode field cycles — background (mu exits once
+// the tunnel is up) or foreground (holds until Ctrl-C). Background first: it's the default.
+var tunnelModes = []string{"background", "foreground"}
+
 // tunnelFields is what `mu job tunnel -i` gathers: the same knobs the flags set. Queue ""
 // means the scheduler default (the form's sentinel), as with the flags.
 type tunnelFields struct {
 	Script, JobID, Account, Queue, Walltime string
 	Port, LocalPort                         int
+	Foreground                              bool
 }
 
 // tunnelForm runs the `mu job tunnel -i` form. Fields are pre-seeded from the flags and
@@ -232,9 +238,13 @@ type tunnelFields struct {
 // --job exclusivity that the flag path checks in RunE is a cross-field rule here, so the
 // form itself refuses to submit until exactly one of them is set. Gathers only — the
 // caller runs the usual preview + confirm and holds the connection.
-func tunnelForm(node, label, script, jobID, account, walltime string, sel *queueSel, port, localPort int) (tunnelFields, bool, error) {
+func tunnelForm(node, label, script, jobID, account, walltime string, sel *queueSel, port, localPort int, foreground bool) (tunnelFields, bool, error) {
 	queueVal, pendingKey, options := queueSeed(label, sel, false)
 	walltime = seedWalltime(node, label, script, walltime, queueVal, sel)
+	mode := tunnelModes[0]
+	if foreground {
+		mode = "foreground"
+	}
 	fields := []render.FormField{
 		{Label: "script", Value: script, Hint: "the service to submit, path resolved on " + label, Validate: eitherScriptOrJob},
 		{Label: "job", Value: jobID, Hint: "adopt an already-submitted job instead", Validate: eitherScriptOrJob},
@@ -243,6 +253,7 @@ func tunnelForm(node, label, script, jobID, account, walltime string, sel *queue
 		{Label: "walltime", Value: walltime, Hint: wallHint, Validate: walltimeField},
 		{Label: "port", Value: intOrBlank(port), Hint: "service port ON the compute node", Validate: requiredPort},
 		{Label: "local", Value: intOrBlank(localPort), Hint: "local port to listen on (blank: same)", Validate: intField},
+		{Label: "mode", Value: mode, Kind: render.FieldEnum, Options: tunnelModes, Hint: "background: mu exits once it's up; foreground: hold until Ctrl-C"},
 	}
 	vals, ok, err := render.Form(render.FormSpec{
 		Title:  "Tunnel to " + label,
@@ -259,6 +270,7 @@ func tunnelForm(node, label, script, jobID, account, walltime string, sel *queue
 		Script: vals[tfScript], JobID: vals[tfJob], Account: vals[tfAccount],
 		Queue: vals[tfQueue], Walltime: vals[tfWalltime],
 		Port: atoiOr(vals[tfPort], 0), LocalPort: atoiOr(vals[tfLocal], 0),
+		Foreground: vals[tfMode] == "foreground",
 	}
 	if out.Queue == schedDefault {
 		out.Queue = ""

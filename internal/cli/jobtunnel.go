@@ -42,9 +42,10 @@ func jobTunnelCmd() *cobra.Command {
 			"with --job <id>, which also adopts any already-submitted job instead of\n" +
 			"submitting. One held connection carries the whole flow. For an interactive\n" +
 			"shell on a compute node see `mu job shell`. Front-door: `mtunnel`.\n\n" +
-			"-i opens the tunnel form instead: script/job, queue, account and the ports as\n" +
-			"editable fields, pre-seeded from the flags and config, with the queue enum\n" +
-			"backed by the cluster's queue list. The usual preview + confirm still follows.\n\n" +
+			"-i opens the tunnel form instead: script/job, queue, account, the ports and\n" +
+			"the run mode (background/foreground) as editable fields, pre-seeded from the\n" +
+			"flags and config, with the queue enum backed by the cluster's queue list. The\n" +
+			"usual preview + confirm still follows.\n\n" +
 			"    mu job tunnel ~/serve.sh -N hpc1 -p 8888\n" +
 			"    mu job tunnel --job 4501 -N hpc1 -p 8888 -l 9999",
 		Args: cobra.MaximumNArgs(1),
@@ -67,7 +68,7 @@ func jobTunnelCmd() *cobra.Command {
 				if account == "" {
 					account = config.AccountFor(node)
 				}
-				f, ok, err := tunnelForm(node, node, script, jobID, account, walltime, &sel, port, localPort)
+				f, ok, err := tunnelForm(node, node, script, jobID, account, walltime, &sel, port, localPort, foreground)
 				if err != nil {
 					return err
 				}
@@ -78,6 +79,7 @@ func jobTunnelCmd() *cobra.Command {
 				// The form validated the exclusivity and the port; its queue is now literal.
 				script, jobID, account, walltime = f.Script, f.JobID, f.Account, f.Walltime
 				port, localPort = f.Port, f.LocalPort
+				foreground = f.Foreground
 				sel = queueSel{queue: f.Queue}
 				return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, name, foreground, yes, wait, poll)
 			}
