@@ -29,7 +29,38 @@ func jobCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobWatchCmd(), jobTunnelCmd(), jobShellCmd())
+	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobWatchCmd(), jobTunnelCmd(), jobShellCmd(), jobCleanCmd())
+	return c
+}
+
+// jobCleanCmd is `mu job clean`: reap the pushed `mu job sub` scripts on one cluster whose
+// job has finished. Each `mu job sub` already does this for its own target in passing; this
+// is the manual sweep for a cluster you haven't submitted to lately.
+func jobCleanCmd() *cobra.Command {
+	var node string
+	c := &cobra.Command{
+		Use:   "clean",
+		Short: "Remove pushed job scripts whose job has ended.",
+		Long: "`mu job sub` pushes a local script to the cluster and remembers it; this reaps\n" +
+			"those staged copies once their job has left the queue (each `mu job sub` also\n" +
+			"does this for its own cluster as it goes). Targets one cluster: -N <cluster>\n" +
+			"off an HPC login node, else the current one.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			label, _, snapshot, _, capture, err := queueTargetCtx(node, userSel{})
+			if err != nil {
+				return err
+			}
+			if n := sweepStagedOn(node, label, snapshot, capture, true); n == 0 {
+				render.Info("no staged scripts to reap on " + label)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
 	return c
 }
 
@@ -121,7 +152,7 @@ func jobSubCmd() *cobra.Command {
 			if len(args) == 1 {
 				script = args[0]
 			}
-			label, scheduler, _, run, capture, err := queueTargetCtx(node, userSel{})
+			label, scheduler, snapshot, run, capture, err := queueTargetCtx(node, userSel{})
 			if err != nil {
 				return err
 			}
@@ -217,12 +248,35 @@ func jobSubCmd() *cobra.Command {
 				}
 				render.OK("pushed " + script + " → " + remoteScript)
 			}
-			if err := run(cmd); err != nil {
+			// A pushed script has to outlive its job (the scheduler may reread it at run time),
+			// so mu records it and a later sweep reaps it once the job ends — which needs the
+			// job id, so submit via capture here and parse it, rather than the fire-and-forget
+			// run. A bare (non-pushed) submit leaves nothing behind, so it stays on run.
+			if push {
+				out, cerr := capture(cmd)
+				if cerr != nil {
+					return runErr("%s: submit failed: %v", label, cerr)
+				}
+				if s := strings.TrimSpace(out); s != "" {
+					render.Detail(s)
+				}
+				if jobID := queue.ParseSubmitID(scheduler, out); jobID != "" {
+					if err := saveStaged(stagedRec{ID: stageID, Node: node, System: label, Job: jobID, Started: time.Now()}); err != nil {
+						render.Warn(fmt.Sprintf("couldn't record the staged script for cleanup: %v", err))
+					}
+				} else {
+					render.Warn("couldn't read the job id from submit output — staged script " + remoteScript + " won't be auto-reaped; remove it by hand if unneeded")
+				}
+			} else if err := run(cmd); err != nil {
 				return err
 			}
 			msg := "submitted " + script + " → " + label
 			render.OK(msg)
 			render.EventOK("job", msg)
+			// Opportunistic cleanup: reap earlier pushes to THIS cluster whose job has ended,
+			// reusing the connection we already hold. Silent and best-effort — never fail a
+			// submit over a cleanup miss.
+			sweepStagedOn(node, label, snapshot, capture, false)
 			return nil
 		},
 	}
