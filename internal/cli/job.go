@@ -242,21 +242,22 @@ func jobSubCmd() *cobra.Command {
 					return nil
 				}
 			}
-			if push {
-				if _, err := writeStaged(capture, script, stageID); err != nil {
-					return runErr("%s", err)
-				}
-				render.OK("pushed " + script + " → " + remoteScript)
-			}
 			// A pushed script has to outlive its job (the scheduler may reread it at run time),
 			// so mu records it and a later sweep reaps it once the job ends — which needs the
-			// job id, so submit via capture here and parse it, rather than the fire-and-forget
-			// run. A bare (non-pushed) submit leaves nothing behind, so it stays on run.
+			// job id, so the push path submits via capture and parses it, rather than the
+			// fire-and-forget run. Staging and submit chain into ONE remote call (`stage && sbatch`)
+			// so a push-sub opens a single connection, not one to write and one to submit. A bare
+			// (non-pushed) submit leaves nothing behind, so it stays on run.
 			if push {
-				out, cerr := capture(cmd)
+				stageCmd, serr := stageScriptCmd(script, stageID)
+				if serr != nil {
+					return runErr("%s", serr)
+				}
+				out, cerr := capture(stageCmd + " && " + cmd)
 				if cerr != nil {
 					return runErr("%s: submit failed: %v", label, cerr)
 				}
+				render.OK("pushed " + script + " → " + remoteScript)
 				if s := strings.TrimSpace(out); s != "" {
 					render.Detail(s)
 				}

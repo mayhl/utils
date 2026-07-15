@@ -28,18 +28,30 @@ func isLocalScript(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// writeStaged pushes a local script's contents to stagedPath(id) on the cluster and returns that
-// remote path. run executes one remote command under `bash -lc` (so $HOME resolves there); the
-// content rides as a shell-quoted printf argument — the house idiom for writing a small remote
-// file over a connection we already hold, rather than opening a second rsync/scp channel.
-func writeStaged(run func(string) (string, error), localPath, id string) (string, error) {
+// stageScriptCmd builds the remote command that writes a local script's contents to
+// stagedPath(id) and marks it executable — a mkdir+printf+chmod chain run under `bash -lc` so
+// $HOME resolves on the far side, the content riding as a shell-quoted printf argument (the
+// house idiom for a small remote file, no second rsync/scp channel). Returned as a string, not
+// executed, so the caller can run it on a connection it already holds OR chain it onto the
+// submit with `&&` so staging and submit share ONE connection.
+func stageScriptCmd(localPath, id string) (string, error) {
 	data, err := os.ReadFile(localPath)
 	if err != nil {
 		return "", err
 	}
 	file := fmt.Sprintf(`"$HOME/.local/state/mayhl_utils/jobs/%s.sh"`, id)
-	cmd := fmt.Sprintf(`mkdir -p "$HOME/.local/state/mayhl_utils/jobs" && printf '%%s' %s > %s && chmod +x %s`,
-		shell.Quote(string(data)), file, file)
+	return fmt.Sprintf(`mkdir -p "$HOME/.local/state/mayhl_utils/jobs" && printf '%%s' %s > %s && chmod +x %s`,
+		shell.Quote(string(data)), file, file), nil
+}
+
+// writeStaged pushes a local script to stagedPath(id) over run and returns that remote path —
+// for callers that already hold a reused connection (the tunnel mux), where a separate write
+// costs nothing. The sub path instead chains stageScriptCmd onto its submit, see job.go.
+func writeStaged(run func(string) (string, error), localPath, id string) (string, error) {
+	cmd, err := stageScriptCmd(localPath, id)
+	if err != nil {
+		return "", err
+	}
 	if _, err := run(cmd); err != nil {
 		return "", fmt.Errorf("staging %s: %w", localPath, err)
 	}
