@@ -30,7 +30,7 @@ func projectCmd() *cobra.Command {
 
 func projectSubmitCmd() *cobra.Command {
 	var node, script, account, queue_ string
-	var yes, dryRun, keep, clean bool
+	var yes, dryRun, keep, clean, force bool
 	c := &cobra.Command{
 		Use:   "submit <case-dir>",
 		Short: "Push a case to a cluster's $WORK staging and submit it.",
@@ -46,7 +46,7 @@ func projectSubmitCmd() *cobra.Command {
 			"carries a real reproducible sha. Pre-flight refuses a diverged remote.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, render.IsVerbose(), keep, clean)
+			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, render.IsVerbose(), keep, clean, force)
 		},
 	}
 	setHelpArgs(c, [2]string{"<case-dir>", "case directory to push and run (under $HOME, inside a git project)"})
@@ -60,6 +60,7 @@ func projectSubmitCmd() *cobra.Command {
 	// per-file rsync output (vs the aggregate bar) rides the global -v now; no local flag
 	f.BoolVar(&keep, "keep-extra", false, "keep staging files the case dir no longer has (skip rsync --delete)")
 	f.BoolVar(&clean, "clean", false, "commit-gated study mode: push via the per-node remote, stage $HOME→$WORK on the node")
+	f.BoolVarP(&force, "force", "f", false, "override a case's node-lock (submit to a node other than its .mu-node marker)")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -79,7 +80,7 @@ var stageProtect = []string{
 // projectSubmit is the push-and-run pipeline: resolve → preview+confirm → get
 // the case into $WORK staging (iterate: laptop rsync; clean: git push + node-side
 // copy) → stamp + submit.
-func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep, clean bool) error {
+func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, verbose, keep, clean, force bool) error {
 	caseAbs, err := filepath.Abs(caseDir)
 	if err != nil {
 		return usageErr("%s", err)
@@ -87,19 +88,36 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 	if fi, err := os.Stat(caseAbs); err != nil || !fi.IsDir() {
 		return usageErr("%s is not a directory", caseDir)
 	}
-	if _, err := os.Stat(filepath.Join(caseAbs, script)); err != nil {
-		return usageErr("script %s not found in %s", script, caseDir)
+	if node == "" {
+		return usageErr("needs --node <cluster> — submit runs from the authoring machine")
 	}
 	root, err := project.FindRoot(caseAbs)
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	rel, err := project.HomeRel(caseAbs)
+	// Node-lock guard (nearest-ancestor .mu-node): a declared case belongs to one
+	// node/system — refuse another, --force to override. Node-specific, NOT DSRC-wide:
+	// each machine is its own $WORKDIR/scheduler, so a sibling node in the same DSRC is
+	// still refused. guard-not-whitelist, like `mu node`. Checked ahead of the script
+	// gate so a wrong-node submit is refused on declared intent, not deflected by an
+	// unrelated setup error.
+	lock, marker, locked, err := project.Affinity(caseAbs)
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	if node == "" {
-		return usageErr("needs --node <cluster> — submit runs from the authoring machine")
+	if locked && lock != node {
+		if !force {
+			rel, _ := filepath.Rel(root, marker)
+			return usageErr("case is locked to %s (%s) — submitting to %s is refused; --force to override or edit the marker", lock, rel, node)
+		}
+		render.Warn(fmt.Sprintf("overriding node-lock: %s marks this case for %s, submitting to %s", project.AffinityFile, lock, node))
+	}
+	if _, err := os.Stat(filepath.Join(caseAbs, script)); err != nil {
+		return usageErr("script %s not found in %s", script, caseDir)
+	}
+	rel, err := project.HomeRel(caseAbs)
+	if err != nil {
+		return usageErr("%s", err)
 	}
 	target, err := hpc.Resolve(node)
 	if err != nil {

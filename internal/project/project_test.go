@@ -51,6 +51,39 @@ func TestFindRoot(t *testing.T) {
 	}
 }
 
+func TestAffinity(t *testing.T) {
+	_, caseDir := repo(t)
+	study := filepath.Dir(caseDir) // simulations/funwave
+	write := func(dir, body string) {
+		if err := os.WriteFile(filepath.Join(dir, AffinityFile), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Unmarked subtree submits anywhere.
+	if _, _, ok, err := Affinity(caseDir); err != nil || ok {
+		t.Errorf("unmarked: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	// A study-dir marker locks the whole sweep — comments and blank lines skipped.
+	write(study, "# locked to one node\n\nhpc1\n")
+	if c, _, ok, err := Affinity(caseDir); err != nil || !ok || c != "hpc1" {
+		t.Errorf("study lock: c=%q ok=%v err=%v, want hpc1", c, ok, err)
+	}
+
+	// A per-case marker is deeper, so it wins — splitting the sweep.
+	write(caseDir, "hpc2\n")
+	if c, _, ok, err := Affinity(caseDir); err != nil || !ok || c != "hpc2" {
+		t.Errorf("nearest-ancestor: c=%q ok=%v err=%v, want hpc2", c, ok, err)
+	}
+
+	// An empty marker is a malformed lock, not silently unlocked.
+	write(caseDir, "\n#only a comment\n")
+	if _, _, _, err := Affinity(caseDir); err == nil {
+		t.Error("empty marker: want error, got nil")
+	}
+}
+
 func TestHomeRel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

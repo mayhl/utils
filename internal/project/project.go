@@ -19,6 +19,12 @@ import (
 // staging; `mu job prep` folds it into run.toml when staging has no git.
 const StampFile = ".mu-origin.toml"
 
+// AffinityFile marks a subtree's node lock — the node/system a case (or a whole
+// study dir) belongs to. Nearest-ancestor wins: a per-case marker splits a sweep
+// across nodes, a study-dir marker locks the sweep whole. This is the DECLARED
+// intent (enforced on submit); run.toml's `cluster` is the OBSERVED record.
+const AffinityFile = ".mu-node"
+
 // FindRoot walks up from path to the enclosing git repo root — the project root
 // per the structure contract (no project.toml marker until the sim manager needs
 // one).
@@ -37,6 +43,61 @@ func FindRoot(path string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// Affinity resolves dir's declared node lock by walking up to the project root
+// (inclusive) and returning the nearest (deepest) AffinityFile's node — the same
+// longest-prefix idiom as FindRoot / mirror_set. ok=false when no marker lies
+// between dir and the root: an unlocked subtree submits anywhere. The marker value
+// is a node token, compared directly to --node; an empty marker is an error, not
+// silently unlocked.
+func Affinity(dir string) (node, marker string, ok bool, err error) {
+	root, err := FindRoot(dir)
+	if err != nil {
+		return "", "", false, err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", false, err
+	}
+	for {
+		path := filepath.Join(abs, AffinityFile)
+		c, found, err := readAffinity(path)
+		if err != nil {
+			return "", "", false, err
+		}
+		if found {
+			return c, path, true, nil
+		}
+		if abs == root {
+			return "", "", false, nil
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", "", false, nil
+		}
+		abs = parent
+	}
+}
+
+// readAffinity reads the first non-blank, non-comment line of an AffinityFile;
+// found=false when the file is absent (an unmarked dir), an error when it exists
+// but declares no node (a malformed lock we refuse to ignore).
+func readAffinity(path string) (node string, found bool, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return line, true, nil
+	}
+	return "", false, fmt.Errorf("%s declares no node", path)
 }
 
 // HomeRel names path in the shared relative namespace: its path relative to
