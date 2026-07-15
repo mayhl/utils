@@ -213,6 +213,7 @@ func projectSyncCmd() *cobra.Command {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 	}
+	c.AddCommand(projectSyncPullCmd())
 	return c
 }
 
@@ -411,6 +412,275 @@ func pushTier(target string, res syncResult, o projSyncOpts) error {
 	return nil
 }
 
+// pullRel is the sole pull tier: run output lives under results/, rooted remotely at
+// $WORKDIR (the case's cluster owns it), pulled back to the same $HOME-relative path.
+const pullRel = "results"
+
+// projectSyncPullCmd is `mu project sync pull <node> [path]`: the reverse of the push. It
+// brings a project's run output (results/) back from a cluster's $WORKDIR to the same
+// $HOME-relative path locally. The conflict model flips — the remote is authoritative, so
+// a differing file overwrites the local copy, EXCEPT one that is newer locally, which is
+// listed and skipped (--force pulls it anyway); local work is never silently discarded.
+func projectSyncPullCmd() *cobra.Command {
+	var yes, dryRun, force, checksum bool
+	var exclude []string
+	c := &cobra.Command{
+		Use:   "pull <node> [path]",
+		Short: "Pull run output (results/) back from a cluster's $WORKDIR.",
+		Long: "Bring the project's results/ — run output computed on the cluster — back from\n" +
+			"the target's $WORKDIR to the same $HOME-relative path locally. The reverse of\n" +
+			"the push data path.\n\n" +
+			"An optional path narrows the pull to one subtree of results/.\n\n" +
+			"The remote is authoritative: new files are pulled and files newer on the cluster\n" +
+			"overwrite the local copy. A file that is NEWER locally is listed and SKIPPED —\n" +
+			"local work is never silently discarded; --force pulls it anyway. Detection is\n" +
+			"cheap size + mtime, not a full checksum. Shows the plan and confirms first.",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			var path string
+			if len(args) > 1 {
+				path = args[1]
+			}
+			return projectSyncPull(projSyncOpts{node: args[0], path: path, force: force, checksum: checksum, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
+		},
+	}
+	setHelpArgs(
+		c,
+		[2]string{"<node>", "cluster to pull results from"},
+		[2]string{"[path]", "narrow the pull to one subtree of results/"},
+	)
+	f := c.Flags()
+	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
+	f.BoolVarP(&dryRun, "dry-run", "n", false, "classify and show the plan without transferring")
+	f.BoolVarP(&force, "force", "f", false, "overwrite local-newer files instead of skipping them (loud)")
+	f.BoolVarP(&checksum, "checksum", "c", false, "compare by full checksum, not size+mtime (opt-in; reads both ends)")
+	f.StringArrayVar(&exclude, "exclude", nil, "extra rsync exclude pattern (repeatable; stacks on the built-in junk set)")
+	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+		switch len(args) {
+		case 0:
+			return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+		case 1:
+			return nil, cobra.ShellCompDirectiveDefault
+		default:
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+	}
+	return c
+}
+
+// projectSyncPull resolves the pull target (results/ or a subtree, whose local dir need
+// not exist yet), verifies the remote has data, classifies by direction, presents the
+// plan, and — after a confirm — pulls the new and remote-newer files. Local-newer files
+// are skipped unless --force. Classify and transfer share the same explicit -u policy, so
+// the report and the write never disagree.
+func projectSyncPull(o projSyncOpts) error {
+	root, err := project.FindRoot(".")
+	if err != nil {
+		return usageErr("%s", err)
+	}
+
+	// The pull tier is results/ (or a subtree of it); the local dir need not exist yet.
+	rel := pullRel
+	localAbs := filepath.Join(root, pullRel)
+	if o.path != "" {
+		abs, aerr := filepath.Abs(o.path)
+		if aerr != nil {
+			return usageErr("%s", aerr)
+		}
+		r, rerr := filepath.Rel(root, abs)
+		if rerr != nil || r == ".." || strings.HasPrefix(r, ".."+string(os.PathSeparator)) {
+			return usageErr("%s is outside the project (%s)", o.path, root)
+		}
+		if r != pullRel && !strings.HasPrefix(r, pullRel+string(os.PathSeparator)) {
+			return usageErr("%s is not under results/ (pull is results-only)", r)
+		}
+		rel, localAbs = r, abs
+	}
+	hrel, herr := project.HomeRel(localAbs)
+	if herr != nil {
+		return usageErr("%s", herr)
+	}
+
+	target, err := hpc.Resolve(o.node)
+	if err != nil {
+		return usageErr("%s", err)
+	}
+
+	render.Info("Pull results ← " + o.node)
+	render.Detail("project: " + root)
+
+	if err := hpc.EnsureTicket(); err != nil {
+		return runErr("%s", err)
+	}
+
+	src, serr := resolveRemoteDir(target, o.node, "$WORKDIR", hrel)
+	if serr != nil {
+		return serr
+	}
+	exists, eerr := remoteDirExists(target, src)
+	if eerr != nil {
+		return runErr("%s: check remote results: %s", o.node, eerr)
+	}
+	if !exists {
+		render.Info(fmt.Sprintf("nothing to pull — %s not present on %s", rel, o.node))
+		return nil
+	}
+
+	newN, overwrite, localNewer, cerr := classifyPull(target, src, localAbs, o.checksum, syncExcludes(o.exclude))
+	if cerr != nil {
+		return runErr("%s: classify %s: %s", o.node, rel, cerr)
+	}
+	render.Detail(fmt.Sprintf("tier:    %s ← $WORKDIR/%s  (%d new, %d overwrite, %d local-newer)", rel, hrel, newN, len(overwrite), len(localNewer)))
+
+	if len(localNewer) > 0 {
+		if o.force {
+			render.Warn(fmt.Sprintf("%d file(s) are newer locally than on %s and will be OVERWRITTEN (--force)", len(localNewer), o.node))
+		} else {
+			render.Warn(fmt.Sprintf("%d file(s) are newer locally than on %s and will be SKIPPED (--force to pull and overwrite)", len(localNewer), o.node))
+		}
+		listPaths("local-newer", localNewer)
+	}
+
+	pullN := newN + len(overwrite)
+	if o.force {
+		pullN += len(localNewer)
+	}
+	if pullN == 0 {
+		if len(localNewer) == 0 {
+			render.OK(o.node + ": already in sync")
+		} else {
+			render.Info("nothing to pull (local-newer files skipped)")
+		}
+		return nil
+	}
+	if o.force {
+		render.Detail(fmt.Sprintf("plan:    pull %d new, overwrite %d remote-newer + %d local-newer", newN, len(overwrite), len(localNewer)))
+	} else {
+		render.Detail(fmt.Sprintf("plan:    pull %d new, overwrite %d (remote authoritative), skip %d local-newer", newN, len(overwrite), len(localNewer)))
+	}
+
+	if o.dryRun {
+		render.Info("dry run — nothing transferred")
+		return nil
+	}
+	if !o.yes {
+		fmt.Fprintf(os.Stderr, "pull %d file(s) from %s? [y/N] ", pullN, o.node)
+		var r string
+		_, _ = fmt.Scanln(&r)
+		if strings.ToLower(strings.TrimSpace(r)) != "y" {
+			render.Info("aborted")
+			return nil
+		}
+	}
+
+	label := "pull " + o.node + " " + rel
+	if err := pullResults(target, src, localAbs, label, o); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("pulled %d file(s) ← %s", pullN, o.node)
+	render.OK(msg)
+	render.EventOK("project", msg)
+	return nil
+}
+
+// remoteDirExists reports whether abs is a directory on target, using a shell test that
+// exits 0 either way so a "not a dir" answer isn't mistaken for a connection failure.
+func remoteDirExists(target, abs string) (bool, error) {
+	out, err := hpc.RemoteExec(target, fmt.Sprintf(`[ -d %s ] && printf yes || printf no`, shell.Quote(abs)))
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "yes", nil
+}
+
+// classifyPull runs two dry itemized pulls (remote → local) to split the differences by
+// direction, which a single itemize can't reveal. Pass A (no -u) lists every would-pull
+// file; pass B (-u) lists those the receiver isn't newer for — new files and remote-newer
+// differs (the overwrite set). Paths in A but not B are the ones newer locally. Both passes
+// hand-build args with an explicit -u toggle, so the split never depends on the user-
+// overridable env rsync opts.
+func classifyPull(target, srcAbs, destLocal string, checksum bool, excludes []string) (newN int, overwrite, localNewer []string, err error) {
+	_, diffA, err := pullItemize(target, srcAbs, destLocal, false, checksum, excludes)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	newN, diffB, err := pullItemize(target, srcAbs, destLocal, true, checksum, excludes)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	overwrite = diffB
+	inB := make(map[string]bool, len(diffB))
+	for _, p := range diffB {
+		inB[p] = true
+	}
+	for _, p := range diffA {
+		if !inB[p] {
+			localNewer = append(localNewer, p)
+		}
+	}
+	return newN, overwrite, localNewer, nil
+}
+
+// pullItemize runs one dry itemized pull (remote srcAbs → local destLocal) and returns the
+// new-file count and the differing-file paths. update adds -u (skip receiver-newer);
+// checksum swaps the size+mtime quick-check for a full compare. Args are hand-built (not
+// BuildArgs) so -u is explicit, never inherited from the env opts.
+func pullItemize(target, srcAbs, destLocal string, update, checksum bool, excludes []string) (newN int, differs []string, err error) {
+	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	args := []string{"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec)}
+	if update {
+		args = append(args, "-u")
+	}
+	if checksum {
+		args = append(args, "-c")
+	}
+	for _, ex := range excludes {
+		args = append(args, "--exclude", ex)
+	}
+	args = append(args, "-e", transport, target+":"+srcAbs+"/", destLocal+"/")
+	cmd := exec.Command("rsync", args...)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	out, rerr := cmd.Output()
+	if rerr != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = rerr.Error()
+		}
+		return 0, nil, fmt.Errorf("%s", msg)
+	}
+	n, d := classifyItemize(out)
+	return n, d, nil
+}
+
+// pullResults transfers results/ from the remote src to the local dst, creating the local
+// dir first. Args are hand-built with an explicit -u (dropped under --force) so local-newer
+// files are protected regardless of the env opts — the classify report and this write must
+// agree. --force overwrites them.
+func pullResults(target, remoteSrc, localDst, label string, o projSyncOpts) error {
+	if err := os.MkdirAll(localDst, 0o755); err != nil {
+		return runErr("staging local dir: %s", err)
+	}
+	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	args := []string{"-a", "--partial-dir=.rsync-partial"}
+	if !o.force {
+		args = append(args, "-u")
+	}
+	if o.checksum {
+		args = append(args, "-c")
+	}
+	for _, ex := range syncExcludes(o.exclude) {
+		args = append(args, "--exclude", ex)
+	}
+	args = append(args, "-e", transport, target+":"+remoteSrc+"/", localDst+"/")
+	code, _ := rsync.Run(args, label, o.verbose)
+	if code != 0 {
+		render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
+		return codeErr(code)
+	}
+	return nil
+}
+
 // resolveRemoteDir returns the absolute path of <remoteRoot>/<rel> on target (remoteRoot
 // is a shell var ref, "$WORKDIR" or "$HOME") without creating it — the classify pass
 // needs the path, not the directory (rsync's dry compare against a missing dest reports
@@ -539,4 +809,17 @@ func countUpdates(results []syncResult) int {
 		n += len(res.updates)
 	}
 	return n
+}
+
+// listPaths prints a capped, labelled list of paths so a skip/overwrite is auditable, not
+// silent — the same "refuse + list" rule the push side applies to differing files.
+func listPaths(label string, paths []string) {
+	const cap_ = 20
+	for i, p := range paths {
+		if i >= cap_ {
+			render.Detail(fmt.Sprintf("  ... and %d more", len(paths)-cap_))
+			return
+		}
+		render.Detail("  " + label + ": " + p)
+	}
 }
