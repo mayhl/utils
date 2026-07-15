@@ -119,25 +119,35 @@ func sweepStagedOn(node, label string, snapshot func() ([]queue.Job, error), cap
 		live[j.ID] = true
 		live[j.ShortID] = true
 	}
-	reaped := 0
+	// Collect every record whose job has left the queue, then remove them all in ONE `rm -f`
+	// rather than a connection per file.
+	var dead []stagedRec
+	var files []string
 	for _, r := range group {
 		// The stored id can carry a different host suffix than the listing echoes, so match
 		// on the suffix-free segment too (jobShort) — same drift the tunnel sweep guards.
 		if live[r.Job] || live[jobShort(r.Job)] {
 			continue // still queued or running — the script must survive until the job ends
 		}
-		rm := fmt.Sprintf(`rm -f "$HOME/.local/state/mayhl_utils/jobs/%s.sh"`, r.ID)
-		if _, err := capture(rm); err != nil {
-			if verbose {
-				render.Warn(fmt.Sprintf("%s: couldn't remove staged script %s: %v", label, r.ID, err))
-			}
-			continue
+		dead = append(dead, r)
+		files = append(files, fmt.Sprintf(`"$HOME/.local/state/mayhl_utils/jobs/%s.sh"`, r.ID))
+	}
+	if len(dead) == 0 {
+		return 0
+	}
+	// rm -f never fails on a missing file, so an error here is the connection, not the files —
+	// forget nothing (a lost record beats a phantom "reaped" for a file still on disk).
+	if _, err := capture("rm -f " + strings.Join(files, " ")); err != nil {
+		if verbose {
+			render.Warn(fmt.Sprintf("%s: couldn't remove staged scripts: %v", label, err))
 		}
+		return 0
+	}
+	for _, r := range dead {
 		forgetStaged(r)
-		reaped++
 		if verbose {
 			render.OK(fmt.Sprintf("reaped staged script %s (job %s ended)", r.ID, r.Job))
 		}
 	}
-	return reaped
+	return len(dead)
 }
