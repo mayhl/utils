@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,11 +20,59 @@ import (
 	"github.com/mayhl/mayhl_utils/internal/shell"
 )
 
-// syncTiers are the SHARED-zone tiers `mu project sync` pushes by default: the
-// sim-ready model-format data runs depend on, cross-cluster consistent. Pushed to
-// $WORKDIR at the same $HOME-relative path. data/processed (transient staging) and
-// data/raw (→ $HOME, opt-in) join via the tier selector in a later phase.
-var syncTiers = []string{"simulations/data"}
+// tierSpec is one syncable SHARED-zone tier: its path under the project root and the
+// remote root it lands under. Placement is reproducibility-driven: irreproducible
+// source-of-truth (raw) → $HOME; bulky-reproducible data (sim-ready, processed) →
+// $WORKDIR, purge-tolerant because rebuildable.
+type tierSpec struct {
+	name       string // --tier selector token
+	rel        string // path under the project root
+	remoteRoot string // "$WORKDIR" or "$HOME" — resolved on the target before rsync
+}
+
+// syncTiers is the registry of selectable tiers. Default (no --tier) ships only the
+// sim-ready data — cross-cluster consistent, the daily 80%. processed and raw are
+// opt-in via --tier (raw never auto-ships: local source-of-truth by default).
+var syncTiers = []tierSpec{
+	{name: "sim", rel: "simulations/data", remoteRoot: "$WORKDIR"},
+	{name: "processed", rel: "data/processed", remoteRoot: "$WORKDIR"},
+	{name: "raw", rel: "data/raw", remoteRoot: "$HOME"},
+}
+
+// defaultTiers names the tiers shipped when --tier is omitted.
+var defaultTiers = []string{"sim"}
+
+// resolveTiers maps --tier selector tokens to their specs in registry order, rejecting
+// unknown tokens. An empty selection falls back to defaultTiers.
+func resolveTiers(sel []string) ([]tierSpec, error) {
+	if len(sel) == 0 {
+		sel = defaultTiers
+	}
+	want := map[string]bool{}
+	for _, s := range sel {
+		want[s] = true
+	}
+	var out []tierSpec
+	for _, t := range syncTiers {
+		if want[t.name] {
+			out = append(out, t)
+			delete(want, t.name)
+		}
+	}
+	if len(want) > 0 {
+		bad := make([]string, 0, len(want))
+		for s := range want {
+			bad = append(bad, s)
+		}
+		sort.Strings(bad)
+		valid := make([]string, len(syncTiers))
+		for i, t := range syncTiers {
+			valid[i] = t.name
+		}
+		return nil, fmt.Errorf("unknown tier(s): %s (valid: %s)", strings.Join(bad, ", "), strings.Join(valid, ", "))
+	}
+	return out, nil
+}
 
 // mtimeWindowSec is the mtime skew tolerance for the differs check: files matching
 // on size and within this many seconds count as identical, absorbing FS-granularity
@@ -35,10 +84,11 @@ const mtimeWindowSec = 2
 // syncResult is one tier's classification: what a push would create (new) vs the
 // existing files that differ (update — skipped by the additive default).
 type syncResult struct {
-	rel      string
-	localAbs string
-	newN     int
-	updates  []string
+	rel        string
+	localAbs   string
+	remoteRoot string
+	newN       int
+	updates    []string
 }
 
 // projectSyncCmd is `mu project sync <node>`: the production-run data path. It pushes
@@ -48,6 +98,7 @@ type syncResult struct {
 // skipped, not resolved. Distinct from submit-iterate's disposable case staging.
 func projectSyncCmd() *cobra.Command {
 	var yes, dryRun bool
+	var tierSel []string
 	c := &cobra.Command{
 		Use:   "sync <node>",
 		Short: "Push shared run-dependency data (simulations/data) to a cluster's $WORKDIR.",
@@ -62,13 +113,14 @@ func projectSyncCmd() *cobra.Command {
 			"a full checksum. Shows the plan and confirms before transferring.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSync(args[0], yes, dryRun, render.IsVerbose())
+			return projectSync(args[0], tierSel, yes, dryRun, render.IsVerbose())
 		},
 	}
 	setHelpArgs(c, [2]string{"<node>", "cluster to push shared data to"})
 	f := c.Flags()
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "classify and show the plan without transferring")
+	f.StringSliceVar(&tierSel, "tier", nil, "tiers to sync: sim, processed, raw (default: sim; raw → $HOME)")
 	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
 		if len(args) > 0 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
@@ -82,8 +134,12 @@ func projectSyncCmd() *cobra.Command {
 // exists locally, presents one combined plan, and — unless a dry run, and after a
 // single confirm — pushes the new files additively. One pass classifies, a separate
 // additive pass transfers, so the report and the write never disagree.
-func projectSync(node string, yes, dryRun, verbose bool) error {
+func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error {
 	root, err := project.FindRoot(".")
+	if err != nil {
+		return usageErr("%s", err)
+	}
+	specs, err := resolveTiers(tierSel)
 	if err != nil {
 		return usageErr("%s", err)
 	}
@@ -92,11 +148,13 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 		return usageErr("%s", err)
 	}
 
-	// Which shared tiers actually exist locally (a project may hold only some).
-	type tier struct{ rel, localAbs string }
+	// Which selected tiers actually exist locally (a project may hold only some).
+	// rel is the $HOME-relative path (the mirror position under $WORKDIR/$HOME);
+	// t.rel is where the tier sits under the project root.
+	type tier struct{ rel, localAbs, remoteRoot string }
 	var tiers []tier
-	for _, t := range syncTiers {
-		abs := filepath.Join(root, t)
+	for _, t := range specs {
+		abs := filepath.Join(root, t.rel)
 		if fi, serr := os.Stat(abs); serr != nil || !fi.IsDir() {
 			continue
 		}
@@ -104,10 +162,14 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 		if rerr != nil {
 			return usageErr("%s", rerr)
 		}
-		tiers = append(tiers, tier{rel: rel, localAbs: abs})
+		tiers = append(tiers, tier{rel: rel, localAbs: abs, remoteRoot: t.remoteRoot})
 	}
 	if len(tiers) == 0 {
-		render.Info("no shared-zone data to sync under " + root + " (looked for: " + strings.Join(syncTiers, ", ") + ")")
+		looked := make([]string, len(specs))
+		for i, t := range specs {
+			looked[i] = t.rel
+		}
+		render.Info("no shared-zone data to sync under " + root + " (looked for: " + strings.Join(looked, ", ") + ")")
 		return nil
 	}
 
@@ -123,7 +185,7 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 	results := make([]syncResult, 0, len(tiers))
 	totalNew, totalUpd := 0, 0
 	for _, t := range tiers {
-		dest, derr := resolveRemoteDir(target, node, t.rel)
+		dest, derr := resolveRemoteDir(target, node, t.remoteRoot, t.rel)
 		if derr != nil {
 			return derr
 		}
@@ -131,10 +193,10 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 		if cerr != nil {
 			return runErr("%s: classify %s: %s", node, t.rel, cerr)
 		}
-		results = append(results, syncResult{rel: t.rel, localAbs: t.localAbs, newN: newN, updates: updates})
+		results = append(results, syncResult{rel: t.rel, localAbs: t.localAbs, remoteRoot: t.remoteRoot, newN: newN, updates: updates})
 		totalNew += newN
 		totalUpd += len(updates)
-		render.Detail(fmt.Sprintf("tier:    %s → $WORKDIR/%s  (%d new, %d differ)", t.rel, t.rel, newN, len(updates)))
+		render.Detail(fmt.Sprintf("tier:    %s → %s/%s  (%d new, %d differ)", t.rel, t.remoteRoot, t.rel, newN, len(updates)))
 	}
 
 	if totalUpd > 0 {
@@ -170,7 +232,7 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 		if res.newN == 0 {
 			continue
 		}
-		dest, derr := ensureRemoteDir(target, node, res.rel)
+		dest, derr := ensureRemoteDir(target, node, res.remoteRoot, res.rel)
 		if derr != nil {
 			return derr
 		}
@@ -188,36 +250,36 @@ func projectSync(node string, yes, dryRun, verbose bool) error {
 	return nil
 }
 
-// resolveRemoteDir returns the absolute path of $WORKDIR/<rel> on target without
-// creating it — the classify pass needs the path, not the directory (rsync's dry
-// compare against a missing dest reports every file as new, which is correct).
-// Resolving to an absolute path here keeps $WORKDIR out of rsync's remote arg, where
-// shell-expansion is fragile.
-func resolveRemoteDir(target, node, rel string) (string, error) {
+// resolveRemoteDir returns the absolute path of <remoteRoot>/<rel> on target (remoteRoot
+// is a shell var ref, "$WORKDIR" or "$HOME") without creating it — the classify pass
+// needs the path, not the directory (rsync's dry compare against a missing dest reports
+// every file as new, which is correct). Resolving to an absolute path here keeps the
+// root var out of rsync's remote arg, where shell-expansion is fragile.
+func resolveRemoteDir(target, node, remoteRoot, rel string) (string, error) {
 	qrel := shell.Quote(rel)
-	out, err := hpc.RemoteExec(target, fmt.Sprintf(`printf '%%s' "$WORKDIR"/%s`, qrel))
+	out, err := hpc.RemoteExec(target, fmt.Sprintf(`printf '%%s' "%s"/%s`, remoteRoot, qrel))
 	if err != nil {
-		return "", runErr("%s: resolve $WORKDIR: %s", node, err)
+		return "", runErr("%s: resolve %s: %s", node, remoteRoot, err)
 	}
 	dest := strings.TrimSpace(out)
 	if dest == "" || dest == "/"+rel {
-		return "", runErr("%s: $WORKDIR is unset on the target", node)
+		return "", runErr("%s: %s is unset on the target", node, remoteRoot)
 	}
 	return dest, nil
 }
 
-// ensureRemoteDir resolves $WORKDIR/<rel> and mkdir -p's it, returning the absolute
-// path — rsync creates only the final dest dir, not a missing chain, so the parent
-// must exist before the transfer.
-func ensureRemoteDir(target, node, rel string) (string, error) {
+// ensureRemoteDir resolves <remoteRoot>/<rel> and mkdir -p's it, returning the absolute
+// path — rsync creates only the final dest dir, not a missing chain, so the parent must
+// exist before the transfer.
+func ensureRemoteDir(target, node, remoteRoot, rel string) (string, error) {
 	qrel := shell.Quote(rel)
-	out, err := hpc.RemoteExec(target, fmt.Sprintf(`mkdir -p "$WORKDIR"/%s && cd "$WORKDIR"/%s && pwd`, qrel, qrel))
+	out, err := hpc.RemoteExec(target, fmt.Sprintf(`mkdir -p "%s"/%s && cd "%s"/%s && pwd`, remoteRoot, qrel, remoteRoot, qrel))
 	if err != nil {
 		return "", runErr("%s: staging dir: %s", node, err)
 	}
 	dest := strings.TrimSpace(out)
 	if dest == "" {
-		return "", runErr("%s: staging dir: empty $WORKDIR resolution", node)
+		return "", runErr("%s: staging dir: empty %s resolution", node, remoteRoot)
 	}
 	return dest, nil
 }
