@@ -86,6 +86,18 @@ func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error
 		return runErr("%s", err)
 	}
 
+	// Ride a single held ssh master so the transfer authenticates once — and so the seam is
+	// ready for the flows that do more than one op over it (rsync-push then submit). If the
+	// master can't open, fall back to rsync's own ssh so cp never regresses; a real
+	// connection failure surfaces from rsync itself with a clearer message.
+	if sess, serr := hpc.OpenSession(target, hpc.SessionOpts{}); serr == nil {
+		o.Transport = sess.RsyncTransport()
+		defer sess.Close()
+		render.Verbose("riding a held ssh master to " + node)
+	} else {
+		render.Verbose(fmt.Sprintf("no held master (%v); rsync will open its own connection", serr))
+	}
+
 	src, dst, label := a, target+":"+b, "push "+node
 	if !push {
 		src, dst, label = target+":"+a, b, "pull "+node
