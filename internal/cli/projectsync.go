@@ -101,6 +101,7 @@ type projSyncOpts struct {
 	node    string
 	path    string // optional subtree to narrow to (relative to cwd); "" = whole tiers
 	tierSel []string
+	force   bool // overwrite differing files (loud) instead of skipping them
 	yes     bool
 	dryRun  bool
 	verbose bool
@@ -148,7 +149,7 @@ func narrowTier(root, path string) (syncTier, error) {
 // files are never overwritten (add-only house rule). Differing files are reported and
 // skipped, not resolved. Distinct from submit-iterate's disposable case staging.
 func projectSyncCmd() *cobra.Command {
-	var yes, dryRun bool
+	var yes, dryRun, force bool
 	var tierSel []string
 	c := &cobra.Command{
 		Use:   "sync <node> [path]",
@@ -170,7 +171,7 @@ func projectSyncCmd() *cobra.Command {
 			if len(args) > 1 {
 				path = args[1]
 			}
-			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
+			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, force: force, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
 		},
 	}
 	setHelpArgs(c,
@@ -181,6 +182,7 @@ func projectSyncCmd() *cobra.Command {
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "classify and show the plan without transferring")
 	f.StringSliceVar(&tierSel, "tier", nil, "tiers to sync: sim, processed, raw (default: sim; raw → $HOME)")
+	f.BoolVarP(&force, "force", "f", false, "overwrite differing files instead of skipping them (loud)")
 	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
 		switch len(args) {
 		case 0:
@@ -276,10 +278,29 @@ func projectSync(o projSyncOpts) error {
 	}
 
 	if totalUpd > 0 {
-		render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be SKIPPED (add-only — new version = new filename)", totalUpd, o.node))
+		if o.force {
+			render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be OVERWRITTEN (--force)", totalUpd, o.node))
+		} else {
+			render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be SKIPPED (add-only — new version = new filename; --force to overwrite)", totalUpd, o.node))
+		}
 		listUpdates(results)
+		// raw is the strictest tier (acquired source-of-truth): flag an overwrite of it
+		// extra loud. It is the sole $HOME-rooted tier, so the root identifies it.
+		if o.force {
+			for _, res := range results {
+				if res.remoteRoot == "$HOME" && len(res.updates) > 0 {
+					render.Warn("--force is overwriting data/raw, the acquired source-of-truth — the strictest tier")
+					break
+				}
+			}
+		}
 	}
-	if totalNew == 0 {
+
+	pushN := totalNew
+	if o.force {
+		pushN += totalUpd
+	}
+	if pushN == 0 {
 		if totalUpd == 0 {
 			render.OK(o.node + ": already in sync")
 		} else {
@@ -287,14 +308,22 @@ func projectSync(o projSyncOpts) error {
 		}
 		return nil
 	}
-	render.Detail(fmt.Sprintf("plan:    push %d new file(s), skip %d differing", totalNew, totalUpd))
+	if o.force {
+		render.Detail(fmt.Sprintf("plan:    push %d new, overwrite %d differing", totalNew, totalUpd))
+	} else {
+		render.Detail(fmt.Sprintf("plan:    push %d new file(s), skip %d differing", totalNew, totalUpd))
+	}
 
 	if o.dryRun {
 		render.Info("dry run — nothing transferred")
 		return nil
 	}
 	if !o.yes {
-		fmt.Fprintf(os.Stderr, "push %d new file(s) to %s? [y/N] ", totalNew, o.node)
+		prompt := fmt.Sprintf("push %d new file(s) to %s? [y/N] ", totalNew, o.node)
+		if o.force && totalUpd > 0 {
+			prompt = fmt.Sprintf("push %d new + OVERWRITE %d differing file(s) on %s? [y/N] ", totalNew, totalUpd, o.node)
+		}
+		fmt.Fprint(os.Stderr, prompt)
 		var r string
 		_, _ = fmt.Scanln(&r)
 		if strings.ToLower(strings.TrimSpace(r)) != "y" {
@@ -303,26 +332,54 @@ func projectSync(o projSyncOpts) error {
 		}
 	}
 
-	// Transfer pass: additive push (rsync --ignore-existing) per tier with new files.
+	// Transfer pass: one push per tier that has files to move — new files always,
+	// plus the differs when --force is set.
 	for _, res := range results {
-		if res.newN == 0 {
+		move := res.newN
+		if o.force {
+			move += len(res.updates)
+		}
+		if move == 0 {
 			continue
 		}
-		dest, derr := ensureRemoteDir(target, o.node, res.remoteRoot, res.rel)
-		if derr != nil {
-			return derr
-		}
-		ro := rsync.Opts{PartialDir: true, Ropt: []string{"--ignore-existing"}}
-		label := "sync " + o.node + " " + res.rel
-		code, _ := rsync.Run(rsync.BuildArgs(res.localAbs+"/", target+":"+dest+"/", ro), label, o.verbose)
-		if code != 0 {
-			render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
-			return codeErr(code)
+		if err := pushTier(target, res, o); err != nil {
+			return err
 		}
 	}
-	msg := fmt.Sprintf("synced %d file(s) → %s", totalNew, o.node)
+	msg := fmt.Sprintf("synced %d file(s) → %s", pushN, o.node)
 	render.OK(msg)
 	render.EventOK("project", msg)
+	return nil
+}
+
+// pushTier transfers one tier to its remote dest. The default is additive — only new
+// files move (rsync --ignore-existing). With --force it also overwrites differing files;
+// that path builds the rsync args by hand so the env layer's -u (skip receiver-newer)
+// can't leave a flagged differ in place — force must overwrite everything classify
+// reported, including a remote-newer file, so the report and the write never disagree.
+func pushTier(target string, res syncResult, o projSyncOpts) error {
+	dest, err := ensureRemoteDir(target, o.node, res.remoteRoot, res.rel)
+	if err != nil {
+		return err
+	}
+	src := res.localAbs + "/"
+	dst := target + ":" + dest + "/"
+	label := "sync " + o.node + " " + res.rel
+
+	var args []string
+	if o.force {
+		transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+		// -a only (no -u): overwrite regardless of transfer direction. --partial-dir
+		// matches rsync.partialDir, keeping resumable partials out of the dest tree.
+		args = []string{"-a", "--partial-dir=.rsync-partial", "-e", transport, src, dst}
+	} else {
+		args = rsync.BuildArgs(src, dst, rsync.Opts{PartialDir: true, Ropt: []string{"--ignore-existing"}})
+	}
+	code, _ := rsync.Run(args, label, o.verbose)
+	if code != 0 {
+		render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
+		return codeErr(code)
+	}
 	return nil
 }
 
