@@ -1216,3 +1216,83 @@ func mustOut(t *testing.T, name string, args ...string) []byte {
 	}
 	return out
 }
+
+// TestProjectSync drives `mu project sync` end-to-end against the box: a project's
+// shared-zone data (simulations/data) under the real $HOME is pushed additively to
+// $WORKDIR at the same $HOME-relative path (no HOME override — HomeRel is $HOME-relative
+// and the ssh config must stay intact). A second run with a changed file plus a new file
+// proves the add-only contract: the new file transfers, the differing file is reported
+// and SKIPPED, and its remote copy is left untouched.
+func TestProjectSync(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-sync-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+
+	proj := filepath.Join(base, "proj_s")
+	dataDir := filepath.Join(proj, "simulations", "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, body := range map[string]string{"bathy.nc": "AAAA\n", "forcing.nc": "BBBB\n"} {
+		if err := os.WriteFile(filepath.Join(dataDir, f), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitOut(t, proj, "init", "-q")
+	gitOut(t, proj, "add", "-A")
+	gitOut(t, proj, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "-m", "data")
+
+	rel, err := filepath.Rel(home, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := "workdir/" + rel
+	_ = exec.Command("ssh", "sandbox", "rm -rf "+stage).Run()
+
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).Output()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v", cmd, err)
+		}
+		return string(out)
+	}
+	// sync resolves the project from cwd (Phase 1 has no path arg), so run from inside it.
+	run := func() string {
+		cmd := exec.Command(muBin, "project", "sync", "sandbox", "-y")
+		cmd.Dir = dataDir
+		cmd.Env = append(muEnv(), "MU_MODULES=project")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mu project sync: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+
+	// First sync: both files are new → pushed.
+	mustContain(t, run(), "synced 2 file(s)")
+	mustContain(t, box("ls -A "+stage), "bathy.nc", "forcing.nc")
+
+	// Mutate: change one file (size differs) and add a new one.
+	if err := os.WriteFile(filepath.Join(dataDir, "bathy.nc"), []byte("AAAA-CHANGED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "new.nc"), []byte("CCCC\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second sync: new.nc pushed; bathy.nc reported differing + SKIPPED (add-only).
+	out := run()
+	mustContain(t, out, "differs: bathy.nc", "SKIPPED", "synced 1 file(s)")
+	mustContain(t, box("ls -A "+stage), "new.nc")
+	if got := strings.TrimSpace(box("cat " + stage + "/bathy.nc")); got != "AAAA" {
+		t.Fatalf("remote bathy.nc was overwritten: got %q, want %q", got, "AAAA")
+	}
+}
