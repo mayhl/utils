@@ -91,6 +91,20 @@ type syncResult struct {
 	updates    []string
 }
 
+// syncTier is one tier resolved for this run: rel is the $HOME-relative mirror path
+// (its position under $WORKDIR/$HOME), localAbs the local source dir, remoteRoot the
+// shell-var root ("$WORKDIR"/"$HOME") the tier lands under.
+type syncTier struct{ rel, localAbs, remoteRoot string }
+
+// projSyncOpts carries one `mu project sync` invocation's resolved flags and args.
+type projSyncOpts struct {
+	node    string
+	tierSel []string
+	yes     bool
+	dryRun  bool
+	verbose bool
+}
+
 // projectSyncCmd is `mu project sync <node>`: the production-run data path. It pushes
 // the project's SHARED-zone run-dependency data (simulations/data) to a cluster's
 // $WORKDIR at the same $HOME-relative path, additively — new files transfer, existing
@@ -113,7 +127,7 @@ func projectSyncCmd() *cobra.Command {
 			"a full checksum. Shows the plan and confirms before transferring.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSync(args[0], tierSel, yes, dryRun, render.IsVerbose())
+			return projectSync(projSyncOpts{node: args[0], tierSel: tierSel, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
 		},
 	}
 	setHelpArgs(c, [2]string{"<node>", "cluster to push shared data to"})
@@ -134,16 +148,16 @@ func projectSyncCmd() *cobra.Command {
 // exists locally, presents one combined plan, and — unless a dry run, and after a
 // single confirm — pushes the new files additively. One pass classifies, a separate
 // additive pass transfers, so the report and the write never disagree.
-func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error {
+func projectSync(o projSyncOpts) error {
 	root, err := project.FindRoot(".")
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	specs, err := resolveTiers(tierSel)
+	specs, err := resolveTiers(o.tierSel)
 	if err != nil {
 		return usageErr("%s", err)
 	}
-	target, err := hpc.Resolve(node)
+	target, err := hpc.Resolve(o.node)
 	if err != nil {
 		return usageErr("%s", err)
 	}
@@ -151,8 +165,7 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 	// Which selected tiers actually exist locally (a project may hold only some).
 	// rel is the $HOME-relative path (the mirror position under $WORKDIR/$HOME);
 	// t.rel is where the tier sits under the project root.
-	type tier struct{ rel, localAbs, remoteRoot string }
-	var tiers []tier
+	var tiers []syncTier
 	for _, t := range specs {
 		abs := filepath.Join(root, t.rel)
 		if fi, serr := os.Stat(abs); serr != nil || !fi.IsDir() {
@@ -162,7 +175,7 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 		if rerr != nil {
 			return usageErr("%s", rerr)
 		}
-		tiers = append(tiers, tier{rel: rel, localAbs: abs, remoteRoot: t.remoteRoot})
+		tiers = append(tiers, syncTier{rel: rel, localAbs: abs, remoteRoot: t.remoteRoot})
 	}
 	if len(tiers) == 0 {
 		looked := make([]string, len(specs))
@@ -173,7 +186,7 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 		return nil
 	}
 
-	render.Info("Sync shared data → " + node)
+	render.Info("Sync shared data → " + o.node)
 	render.Detail("project: " + root)
 
 	if err := hpc.EnsureTicket(); err != nil {
@@ -185,13 +198,13 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 	results := make([]syncResult, 0, len(tiers))
 	totalNew, totalUpd := 0, 0
 	for _, t := range tiers {
-		dest, derr := resolveRemoteDir(target, node, t.remoteRoot, t.rel)
+		dest, derr := resolveRemoteDir(target, o.node, t.remoteRoot, t.rel)
 		if derr != nil {
 			return derr
 		}
 		newN, updates, cerr := classifySync(target, t.localAbs, dest)
 		if cerr != nil {
-			return runErr("%s: classify %s: %s", node, t.rel, cerr)
+			return runErr("%s: classify %s: %s", o.node, t.rel, cerr)
 		}
 		results = append(results, syncResult{rel: t.rel, localAbs: t.localAbs, remoteRoot: t.remoteRoot, newN: newN, updates: updates})
 		totalNew += newN
@@ -200,12 +213,12 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 	}
 
 	if totalUpd > 0 {
-		render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be SKIPPED (add-only — new version = new filename)", totalUpd, node))
+		render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be SKIPPED (add-only — new version = new filename)", totalUpd, o.node))
 		listUpdates(results)
 	}
 	if totalNew == 0 {
 		if totalUpd == 0 {
-			render.OK(node + ": already in sync")
+			render.OK(o.node + ": already in sync")
 		} else {
 			render.Info("nothing new to push (differing files skipped)")
 		}
@@ -213,12 +226,12 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 	}
 	render.Detail(fmt.Sprintf("plan:    push %d new file(s), skip %d differing", totalNew, totalUpd))
 
-	if dryRun {
+	if o.dryRun {
 		render.Info("dry run — nothing transferred")
 		return nil
 	}
-	if !yes {
-		fmt.Fprintf(os.Stderr, "push %d new file(s) to %s? [y/N] ", totalNew, node)
+	if !o.yes {
+		fmt.Fprintf(os.Stderr, "push %d new file(s) to %s? [y/N] ", totalNew, o.node)
 		var r string
 		_, _ = fmt.Scanln(&r)
 		if strings.ToLower(strings.TrimSpace(r)) != "y" {
@@ -232,19 +245,19 @@ func projectSync(node string, tierSel []string, yes, dryRun, verbose bool) error
 		if res.newN == 0 {
 			continue
 		}
-		dest, derr := ensureRemoteDir(target, node, res.remoteRoot, res.rel)
+		dest, derr := ensureRemoteDir(target, o.node, res.remoteRoot, res.rel)
 		if derr != nil {
 			return derr
 		}
-		o := rsync.Opts{PartialDir: true, Ropt: []string{"--ignore-existing"}}
-		label := "sync " + node + " " + res.rel
-		code, _ := rsync.Run(rsync.BuildArgs(res.localAbs+"/", target+":"+dest+"/", o), label, verbose)
+		ro := rsync.Opts{PartialDir: true, Ropt: []string{"--ignore-existing"}}
+		label := "sync " + o.node + " " + res.rel
+		code, _ := rsync.Run(rsync.BuildArgs(res.localAbs+"/", target+":"+dest+"/", ro), label, o.verbose)
 		if code != 0 {
 			render.EventErr("project", fmt.Sprintf("%s FAILED (rsync exit %d)", label, code))
 			return codeErr(code)
 		}
 	}
-	msg := fmt.Sprintf("synced %d file(s) → %s", totalNew, node)
+	msg := fmt.Sprintf("synced %d file(s) → %s", totalNew, o.node)
 	render.OK(msg)
 	render.EventOK("project", msg)
 	return nil
