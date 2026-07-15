@@ -271,11 +271,17 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	if err != nil {
 		return runErr("%s: connect: %s", node, err)
 	}
-	// A backgrounded master must SURVIVE mu's exit — that's the point — so only tear it down
-	// on the foreground path. On success below, the background path returns without closing.
-	if foreground {
-		defer mux.close()
-	}
+	// A backgrounded master must SURVIVE mu's exit — that's the point. But it must NOT survive a
+	// FAILED setup: an error after the master is up (bad submit, never-runs, forward refused)
+	// would otherwise orphan the master + its control socket, and the next run trips over the
+	// stale socket. So tear it down on every exit EXCEPT the successful background return, which
+	// arms keepMux just before it returns. Foreground always closes here.
+	keepMux := false
+	defer func() {
+		if !keepMux {
+			mux.close()
+		}
+	}()
 	// Ctrl-C anywhere in the flow: closing the mux collapses whatever leg is
 	// in flight (its channel dies with the master) — flows unwind naturally.
 	sig := make(chan os.Signal, 1)
@@ -319,6 +325,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	}
 
 	if !foreground {
+		keepMux = true // setup succeeded — the master now outlives mu; `close` tears it down later
 		render.OK(fmt.Sprintf("tunnel up: %s → %s:%d (background; close with `mu job tunnel close %s`)", rec.URL(), host, port, id))
 		return nil
 	}
@@ -418,6 +425,17 @@ func startMux(target string, persist bool, id string) (*sshMux, error) {
 		target: target,
 		death:  make(chan error, 1),
 	}
+	// A socket left by a crashed, force-killed, or older-mu master makes ssh refuse to open a
+	// new one ("ControlSocket ... already exists, disabling multiplexing"). If nothing live
+	// answers it, it's a corpse — reap it so a retry isn't wedged. Only the persist path names
+	// the socket for the target (so it can collide); the pid-named path never does.
+	if persist {
+		if _, err := os.Stat(sock); err == nil {
+			if exec.Command(m.bin, "-q", "-S", sock, "-O", "check", target).Run() != nil {
+				_ = os.Remove(sock)
+			}
+		}
+	}
 	// -x: no X11 forwarding. A tunnel never needs it, and a ~/.ssh/config that turns it on
 	// makes every channel print "No xauth data; using fake authentication data" — noise on a
 	// path whose whole output is three status lines.
@@ -483,7 +501,9 @@ func (m *sshMux) forward(localPort int, host string, port int) error {
 // reaps it; the process kill is the belt for a wedged master.
 func (m *sshMux) close() {
 	_ = exec.Command(m.bin, "-q", "-S", m.sock, "-O", "exit", m.target).Run()
-	if m.master.Process != nil {
+	// The persist path forks the real master away and nils m.master, so `-O exit` above is what
+	// actually tears it down; the Kill is only the belt for a non-persist (foreground) master.
+	if m.master != nil && m.master.Process != nil {
 		_ = m.master.Process.Kill()
 	}
 }
