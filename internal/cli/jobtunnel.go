@@ -436,10 +436,11 @@ func startMux(target string, persist bool, id string) (*sshMux, error) {
 			}
 		}
 	}
-	// -x: no X11 forwarding. A tunnel never needs it, and a ~/.ssh/config that turns it on
-	// makes every channel print "No xauth data; using fake authentication data" — noise on a
-	// path whose whole output is three status lines.
-	args := []string{"-x", "-M", "-S", m.sock, "-N", "-o", "ConnectTimeout=10"}
+	// -q: quiet the login banner the server prints on connect — every other ssh call in this
+	// path already passes it; the master was the lone leak. -x: no X11 forwarding. A tunnel
+	// never needs it, and a ~/.ssh/config that turns it on makes every channel print "No xauth
+	// data; using fake authentication data" — noise on a path whose whole output is three lines.
+	args := []string{"-q", "-x", "-M", "-S", m.sock, "-N", "-o", "ConnectTimeout=10"}
 	if persist {
 		args = append(args, "-f", "-o", "ControlPersist=yes")
 	}
