@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -50,7 +51,7 @@ func tunnelLsCmd() *cobra.Command {
 						state, left = st, rem
 					}
 				}
-				rows = append(rows, render.TunnelRow{ID: t.ID, URL: t.URL(), System: t.System, Job: t.Job, Node: t.Host, State: state, WallLeft: left})
+				rows = append(rows, render.TunnelRow{ID: t.ID, Port: strconv.Itoa(t.LocalPort), System: t.System, Job: t.Job, Node: t.Host, State: state, WallLeft: left})
 			}
 			if len(rows) == 0 {
 				render.Info("no open tunnels")

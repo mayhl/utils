@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -495,15 +496,35 @@ func truncRight(s string, maxLen int) string {
 	return string(r[:i]) + "…"
 }
 
-// TunnelRow is one open tunnel in the TunnelsTable — a background `mu job tunnel`, its URL,
-// the job behind it, and how much walltime is left.
+// TunnelRow is one open tunnel in the TunnelsTable — a background `mu job tunnel`, its local
+// Port (what you point a browser at), the job behind it, and how much walltime is left.
 type TunnelRow struct {
-	ID, URL, System, Job, Node, State, WallLeft string
+	ID, Port, System, Job, Node, State, WallLeft string
+}
+
+// tunnelCol is one TunnelsTable column: its header and how to pull the cell from a row.
+type tunnelCol struct {
+	name string
+	cell func(TunnelRow) string
 }
 
 // TunnelsTable renders the open background tunnels. Domain-shaped like the other house
-// tables (JobsTable et al.): the caller hands rows, render owns the frame and accents.
+// tables (JobsTable et al.): the caller hands rows, render owns the frame and accents. When
+// the terminal is too narrow for every column, the least useful ones are dropped in order
+// (Node, then Job) until it fits; piped output (unknown width) keeps them all so nothing is
+// lost downstream.
 func TunnelsTable(rows []TunnelRow) {
+	cols := []tunnelCol{
+		{"ID", func(r TunnelRow) string { return r.ID }},
+		{"PORT", func(r TunnelRow) string { return r.Port }},
+		{"System", func(r TunnelRow) string { return r.System }},
+		{"Job", func(r TunnelRow) string { return r.Job }},
+		{"Node", func(r TunnelRow) string { return r.Node }},
+		{"State", func(r TunnelRow) string { return r.State }},
+		{"Wall left", func(r TunnelRow) string { return r.WallLeft }},
+	}
+	keep := fitTunnelColumns(cols, rows, []string{"Node", "Job"}, termWidth())
+
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	applyStyle(t)
@@ -512,13 +533,66 @@ func TunnelsTable(rows []TunnelRow) {
 	t.Style().Color.Border = text.Colors{text.FgHiBlack}
 	t.Style().Color.Separator = text.Colors{text.FgHiBlack}
 	t.SetTitle("Open tunnels")
-	t.AppendHeader(table.Row{"ID", "URL", "System", "Job", "Node", "State", "Wall left"})
+
+	header := table.Row{}
+	for _, c := range cols {
+		if keep[c.name] {
+			header = append(header, c.name)
+		}
+	}
+	t.AppendHeader(header)
 	for _, r := range rows {
-		t.AppendRow(table.Row{r.ID, r.URL, r.System, r.Job, r.Node, r.State, r.WallLeft})
+		row := table.Row{}
+		for _, c := range cols {
+			if keep[c.name] {
+				row = append(row, c.cell(r))
+			}
+		}
+		t.AppendRow(row)
 	}
 	t.SetColumnConfigs([]table.ColumnConfig{
 		{Name: "ID", Colors: text.Colors{text.FgMagenta, text.Bold}}, // the handle you close by
-		{Name: "URL", Colors: text.Colors{text.FgCyan}},
+		{Name: "PORT", Colors: text.Colors{text.FgCyan}},
 	})
 	t.Render()
+}
+
+// fitTunnelColumns decides which columns fit the terminal width, dropping the named columns in
+// order (lowest value first) only as needed. Unknown width (piped, avail <= 0) keeps everything.
+// The width model matches go-pretty's rounded style: each column costs its widest cell plus 3
+// (separator + two padding spaces), plus one closing border.
+func fitTunnelColumns(cols []tunnelCol, rows []TunnelRow, dropOrder []string, avail int) map[string]bool {
+	keep := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		keep[c.name] = true
+	}
+	if avail <= 0 {
+		return keep
+	}
+	natural := make(map[string]int, len(cols))
+	for _, c := range cols {
+		w := utf8.RuneCountInString(c.name)
+		for _, r := range rows {
+			if n := utf8.RuneCountInString(c.cell(r)); n > w {
+				w = n
+			}
+		}
+		natural[c.name] = w
+	}
+	fits := func() bool {
+		total := 1 // closing border
+		for _, c := range cols {
+			if keep[c.name] {
+				total += natural[c.name] + 3
+			}
+		}
+		return total <= avail
+	}
+	for _, d := range dropOrder {
+		if fits() {
+			break
+		}
+		keep[d] = false
+	}
+	return keep
 }
