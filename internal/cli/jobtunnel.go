@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -282,7 +281,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		return runErr("%s", err)
 	}
 
-	mux, err := startMux(target, !foreground, fmt.Sprintf("%s-%d", node, localPort))
+	mux, err := hpc.OpenSession(target, hpc.SessionOpts{Persist: !foreground, ID: fmt.Sprintf("%s-%d", node, localPort)})
 	if err != nil {
 		return runErr("%s: connect: %s", node, err)
 	}
@@ -294,7 +293,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	keepMux := false
 	defer func() {
 		if !keepMux {
-			mux.close()
+			mux.Close()
 		}
 	}()
 	// Ctrl-C anywhere in the flow: closing the mux collapses whatever leg is
@@ -306,20 +305,20 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	go func() {
 		<-sig
 		close(aborted)
-		mux.close()
+		mux.Close()
 	}()
 
 	if push {
 		// Write the local script to its staged path over the master we already hold — before
 		// submit, so a failed push aborts cleanly (keepMux stays false → the master is torn down).
-		if _, err := writeStaged(mux.run, script, id); err != nil {
+		if _, err := writeStaged(mux.Run, script, id); err != nil {
 			return tunnelErr(aborted, "%s: %s", node, err)
 		}
 		render.OK("pushed " + script + " → " + remoteScript)
 	}
 
 	if jobID == "" {
-		out, err := mux.run(submitCmd)
+		out, err := mux.Run(submitCmd)
 		if err != nil {
 			return tunnelErr(aborted, "%s: submit: %s", node, err)
 		}
@@ -329,18 +328,18 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		render.OK("submitted " + jobID)
 	}
 
-	host, err := waitRunning(mux.run, adapter, scheduler, jobID, wait, poll)
+	host, err := waitRunning(mux.Run, adapter, scheduler, jobID, wait, poll)
 	if err != nil {
 		return tunnelErr(aborted, "%s", err)
 	}
 	render.OK(fmt.Sprintf("job %s running on %s", jobID, host))
 
-	if err := mux.forward(localPort, host, port); err != nil {
+	if err := mux.Forward(localPort, host, port); err != nil {
 		return runErr("adding the forward: %s", err)
 	}
 
 	rec := tunnelRec{
-		ID: id, System: node, Job: jobID, Host: host, Target: target, Sock: mux.sock,
+		ID: id, System: node, Job: jobID, Host: host, Target: target, Sock: mux.Sock(),
 		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: remoteScript, Staged: push, Started: startedAt,
 	}
 	if err := saveTunnel(rec); err != nil {
@@ -359,7 +358,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	case <-aborted:
 		render.Info("tunnel closed")
 		return nil
-	case err := <-mux.death:
+	case err := <-mux.Death():
 		return runErr("connection to %s dropped: %v — resume with --job %s", node, err, jobID)
 	}
 }
@@ -418,119 +417,6 @@ func waitRunning(capture func(string) (string, error), a queue.Adapter, schedule
 		}
 	}
 	return "", runErr("job %s: could not read a running state from the scheduler detail", jobID)
-}
-
-// sshMux is one held ssh connection (OpenSSH ControlMaster): mu owns the
-// master process, every leg (submit, wait, forward) is a channel on it — one
-// auth handshake, one session on the login node for the whole flow.
-type sshMux struct {
-	bin, sock, target string
-	master            *exec.Cmd
-	death             chan error // master exit (connection drop / teardown)
-}
-
-// startMux opens the master (auth prompts pass through) and waits until the
-// control socket answers. The socket lives in the temp dir — short enough for
-// the unix-socket path limit.
-//
-// persist detaches it: ssh forks into the background (-f) and stays alive after mu exits
-// (ControlPersist), which is what makes a BACKGROUNDED tunnel possible at all — the forward
-// belongs to the master, so the master has to outlive the process that asked for it. The
-// socket is then named for the target and port rather than mu's pid: a pid that no longer
-// exists is a poor handle for something you want to close tomorrow.
-func startMux(target string, persist bool, id string) (*sshMux, error) {
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("mu-tun-%d", os.Getpid()))
-	if persist {
-		sock = filepath.Join(os.TempDir(), "mu-tun-"+id)
-	}
-	m := &sshMux{
-		bin:    config.SSHCommand(),
-		sock:   sock,
-		target: target,
-		death:  make(chan error, 1),
-	}
-	// A socket left by a crashed, force-killed, or older-mu master makes ssh refuse to open a
-	// new one ("ControlSocket ... already exists, disabling multiplexing"). If nothing live
-	// answers it, it's a corpse — reap it so a retry isn't wedged. Only the persist path names
-	// the socket for the target (so it can collide); the pid-named path never does.
-	if persist {
-		if _, err := os.Stat(sock); err == nil {
-			if exec.Command(m.bin, "-q", "-S", sock, "-O", "check", target).Run() != nil {
-				_ = os.Remove(sock)
-			}
-		}
-	}
-	// -q: quiet the login banner the server prints on connect — every other ssh call in this
-	// path already passes it; the master was the lone leak. -x: no X11 forwarding. A tunnel
-	// never needs it, and a ~/.ssh/config that turns it on makes every channel print "No xauth
-	// data; using fake authentication data" — noise on a path whose whole output is three lines.
-	args := []string{"-q", "-x", "-M", "-S", m.sock, "-N", "-o", "ConnectTimeout=10"}
-	if persist {
-		args = append(args, "-f", "-o", "ControlPersist=yes")
-	}
-	m.master = exec.Command(m.bin, append(args, target)...)
-	m.master.Stdin, m.master.Stderr = os.Stdin, os.Stderr // Kerberos/host-key prompts stay answerable
-	if err := m.master.Start(); err != nil {
-		return nil, err
-	}
-	if persist {
-		// -f means the process we started EXITS once the real master has forked away, so its
-		// exit is success, not death. Nothing to watch: the socket check below is the test.
-		_ = m.master.Wait()
-		m.master = nil
-	} else {
-		go func() { m.death <- m.master.Wait() }()
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if exec.Command(m.bin, "-q", "-S", m.sock, "-O", "check", target).Run() == nil {
-			return m, nil
-		}
-		select {
-		case err := <-m.death:
-			return nil, fmt.Errorf("connection failed: %v", err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			m.close()
-			return nil, fmt.Errorf("control socket not ready after 30s")
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-}
-
-// run executes one remote command as a channel on the held connection — no new
-// auth, no new session on the far side.
-func (m *sshMux) run(remoteCmd string) (string, error) {
-	cmd := exec.Command(m.bin, "-q", "-x", "-S", m.sock, m.target, "bash -lc "+shell.Quote(remoteCmd))
-	var stdout, stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return stdout.String(), fmt.Errorf("%s", msg)
-	}
-	return stdout.String(), nil
-}
-
-// forward adds -L localPort:host:port to the LIVE master — the tunnel joins
-// the connection that has been open since submit.
-func (m *sshMux) forward(localPort int, host string, port int) error {
-	return exec.Command(m.bin, "-q", "-x", "-S", m.sock, "-O", "forward",
-		"-L", fmt.Sprintf("%d:%s:%d", localPort, host, port), m.target).Run()
-}
-
-// close asks the master to exit (which drops every channel and forward) and
-// reaps it; the process kill is the belt for a wedged master.
-func (m *sshMux) close() {
-	_ = exec.Command(m.bin, "-q", "-S", m.sock, "-O", "exit", m.target).Run()
-	// The persist path forks the real master away and nils m.master, so `-O exit` above is what
-	// actually tears it down; the Kill is only the belt for a non-persist (foreground) master.
-	if m.master != nil && m.master.Process != nil {
-		_ = m.master.Process.Kill()
-	}
 }
 
 // jobInteractive replaces mu with `ssh -t <login> <qsub -I|salloc>` — the
