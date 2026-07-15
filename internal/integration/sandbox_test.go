@@ -1296,3 +1296,213 @@ func TestProjectSync(t *testing.T) {
 		t.Fatalf("remote bathy.nc was overwritten: got %q, want %q", got, "AAAA")
 	}
 }
+
+// TestProjectSyncForce proves --force overwrites a differing remote file (loud), where the
+// additive default skips it — the report and the write agree in both modes.
+func TestProjectSyncForce(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-syncf-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+
+	proj := filepath.Join(base, "proj_f")
+	dataDir := filepath.Join(proj, "simulations", "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "bathy.nc"), []byte("AAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, proj, "init", "-q")
+
+	rel, err := filepath.Rel(home, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := "workdir/" + rel
+	_ = exec.Command("ssh", "sandbox", "rm -rf "+stage).Run()
+
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).Output()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v", cmd, err)
+		}
+		return string(out)
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command(muBin, append([]string{"project", "sync", "sandbox"}, args...)...)
+		cmd.Dir = dataDir
+		cmd.Env = append(muEnv(), "MU_MODULES=project")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mu project sync %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	// Seed the remote, then change the file so it differs.
+	mustContain(t, run("-y"), "synced 1 file(s)")
+	if err := os.WriteFile(filepath.Join(dataDir, "bathy.nc"), []byte("AAAA-CHANGED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: differ skipped, remote untouched.
+	mustContain(t, run("-y"), "SKIPPED")
+	if got := strings.TrimSpace(box("cat " + stage + "/bathy.nc")); got != "AAAA" {
+		t.Fatalf("remote overwritten without --force: got %q", got)
+	}
+
+	// --force: differ overwritten (loud), remote updated.
+	mustContain(t, run("-y", "-f"), "OVERWRITTEN", "--force")
+	if got := strings.TrimSpace(box("cat " + stage + "/bathy.nc")); got != "AAAA-CHANGED" {
+		t.Fatalf("--force did not overwrite: got %q, want %q", got, "AAAA-CHANGED")
+	}
+}
+
+// TestProjectSyncExclude proves a built-in junk exclude (.DS_Store) and a user --exclude
+// pattern keep files off the remote, and that classify and transfer agree on the set
+// (the reported count matches what lands).
+func TestProjectSyncExclude(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-syncx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+
+	proj := filepath.Join(base, "proj_x")
+	dataDir := filepath.Join(proj, "simulations", "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, b := range map[string]string{"keep.nc": "K\n", ".DS_Store": "junk\n", "run.log": "L\n"} {
+		if err := os.WriteFile(filepath.Join(dataDir, f), []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitOut(t, proj, "init", "-q")
+
+	rel, err := filepath.Rel(home, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := "workdir/" + rel
+	_ = exec.Command("ssh", "sandbox", "rm -rf "+stage).Run()
+
+	cmd := exec.Command(muBin, "project", "sync", "sandbox", "-y", "--exclude", "*.log")
+	cmd.Dir = dataDir
+	cmd.Env = append(muEnv(), "MU_MODULES=project")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mu project sync: %v\n%s", err, out)
+	}
+	mustContain(t, string(out), "synced 1 file(s)")
+
+	listing, lerr := exec.Command("ssh", "sandbox", "ls -A "+stage).Output()
+	if lerr != nil {
+		t.Fatalf("ssh sandbox ls: %v", lerr)
+	}
+	mustContain(t, string(listing), "keep.nc")
+	for _, junk := range []string{".DS_Store", "run.log"} {
+		if strings.Contains(string(listing), junk) {
+			t.Errorf("%s should have been excluded; remote listing:\n%s", junk, listing)
+		}
+	}
+}
+
+// TestProjectSyncPull drives `mu project sync pull`: it seeds results/ on the box under
+// $WORKDIR, pulls it, then exercises the flipped conflict model — a remote-newer file
+// overwrites the local copy, a local-newer file is SKIPPED (never silently discarded),
+// and --force pulls it anyway.
+func TestProjectSyncPull(t *testing.T) {
+	requireSandbox(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(home, ".mu-sandbox-pull-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+
+	proj := filepath.Join(base, "proj_p")
+	resDir := filepath.Join(proj, "results")
+	if err := os.MkdirAll(resDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, proj, "init", "-q")
+
+	rel, err := filepath.Rel(home, resDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := "workdir/" + rel
+
+	box := func(cmd string) string {
+		out, err := exec.Command("ssh", "sandbox", cmd).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ssh sandbox %q: %v\n%s", cmd, err, out)
+		}
+		return string(out)
+	}
+	rd := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		return string(b)
+	}
+	pull := func(args ...string) string {
+		cmd := exec.Command(muBin, append([]string{"project", "sync", "pull", "sandbox"}, args...)...)
+		cmd.Dir = proj
+		cmd.Env = append(muEnv(), "MU_MODULES=project")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mu project sync pull %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	// Seed remote results/ with two files.
+	box("rm -rf " + stage + " && mkdir -p " + stage + " && printf 'R1\\n' > " + stage + "/a.nc && printf 'R2\\n' > " + stage + "/b.nc")
+
+	// First pull: both new → local gets them.
+	mustContain(t, pull("-y"), "pulled 2 file(s)")
+	if got := rd(filepath.Join(resDir, "a.nc")); got != "R1\n" {
+		t.Fatalf("a.nc = %q, want R1", got)
+	}
+
+	// Remote-newer: bump a.nc on the box → pull overwrites local (remote authoritative).
+	box("sleep 1 && printf 'R1-NEW\\n' > " + stage + "/a.nc")
+	mustContain(t, pull("-y"), "pulled 1 file(s)")
+	if got := rd(filepath.Join(resDir, "a.nc")); got != "R1-NEW\n" {
+		t.Fatalf("remote-newer not pulled: a.nc = %q", got)
+	}
+
+	// Local-newer: rewrite b.nc locally newer than remote → SKIPPED, not clobbered.
+	time.Sleep(1 * time.Second)
+	if err := os.WriteFile(filepath.Join(resDir, "b.nc"), []byte("R2-LOCAL\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, pull("-y"), "local-newer", "SKIPPED")
+	if got := rd(filepath.Join(resDir, "b.nc")); got != "R2-LOCAL\n" {
+		t.Fatalf("local-newer clobbered without --force: b.nc = %q", got)
+	}
+
+	// --force: local-newer overwritten by the remote copy.
+	mustContain(t, pull("-y", "-f"), "OVERWRITTEN")
+	if got := rd(filepath.Join(resDir, "b.nc")); got != "R2\n" {
+		t.Fatalf("--force did not overwrite local-newer: b.nc = %q, want R2", got)
+	}
+}
