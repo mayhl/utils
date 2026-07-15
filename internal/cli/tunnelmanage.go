@@ -155,6 +155,14 @@ func closeTunnel(t tunnelRec, keepJob bool) {
 				render.Warn(fmt.Sprintf("%s: cancel job %s failed: %v (cancel it with `mdel %s`)", t.System, t.Job, err, t.Job))
 			}
 		}
+		// mu pushed this script, and the cancelled job no longer needs it — reap the staged copy.
+		// Only on a real cancel: --keep-job leaves the allocation running, which is still reading it.
+		if t.Staged {
+			rm := fmt.Sprintf(`rm -f "$HOME/.local/state/mayhl_utils/jobs/%s.sh"`, t.ID)
+			if _, err := hpc.RemoteExec(t.Target, rm); err != nil {
+				render.Warn(fmt.Sprintf("%s: couldn't remove the staged script for %s: %v", t.System, t.ID, err))
+			}
+		}
 	}
 	// -O exit stops the master; the forward is a channel on it, so it dies too, and the local
 	// port is free the instant the socket closes.

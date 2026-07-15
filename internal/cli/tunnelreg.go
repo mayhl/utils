@@ -36,7 +36,8 @@ type tunnelRec struct {
 	LocalPort  int       `json:"local_port"`  // what you point a browser at
 	RemotePort int       `json:"remote_port"` // what the service listens on, ON the node
 	Walltime   string    `json:"walltime"`    // as requested; "" when the script decided
-	Script     string    `json:"script"`      // "" in adopt mode
+	Script     string    `json:"script"`      // "" in adopt mode; the staged path when Staged
+	Staged     bool      `json:"staged"`      // mu pushed Script here, so `close` removes it
 	Started    time.Time `json:"started"`
 }
 

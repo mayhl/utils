@@ -96,7 +96,7 @@ func jobTunnelCmd() *cobra.Command {
 			return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, name, foreground, yes, wait, poll)
 		},
 	}
-	setHelpArgs(c, [2]string{"[script]", "service script to submit, path resolved ON the target"})
+	setHelpArgs(c, [2]string{"[script]", "service script: a local path is pushed, a remote path submitted as-is"})
 	f := c.Flags()
 	f.StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	f.StringVar(&jobID, "job", "", "adopt this already-submitted job instead of submitting")
@@ -241,11 +241,24 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		Account: account, Queue: part, QOS: qos, Walltime: wall, Name: name,
 		Env: map[string]string{"MU_PORT": strconv.Itoa(port)},
 	}
-	submitCmd := adapter.SubmitCmd(script, opts)
+	// A LOCAL script is pushed to the cluster and submitted from there — so `~/serve.sh` names
+	// the file on YOUR disk, the way tab-completion already resolved it — while a bare remote
+	// path is submitted as-is. The staged path is deterministic from the id, so the submit
+	// command below is honest before the file is actually written (which needs the mux).
+	push := jobID == "" && isLocalScript(script)
+	remoteScript := script
+	if push {
+		remoteScript = stagedPath(id)
+	}
+	submitCmd := adapter.SubmitCmd(remoteScript, opts)
 
 	render.Info(fmt.Sprintf("Tunnel job → %s (%s)", node, scheduler))
 	if jobID == "" {
-		render.Detail("script:  " + script)
+		if push {
+			render.Detail(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
+		} else {
+			render.Detail("script:  " + remoteScript)
+		}
 		render.Detail("command: " + submitCmd)
 	} else {
 		render.Detail("job:     " + jobID)
@@ -294,6 +307,15 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		mux.close()
 	}()
 
+	if push {
+		// Write the local script to its staged path over the master we already hold — before
+		// submit, so a failed push aborts cleanly (keepMux stays false → the master is torn down).
+		if _, err := writeStaged(mux.run, script, id); err != nil {
+			return tunnelErr(aborted, "%s: %s", node, err)
+		}
+		render.OK("pushed " + script + " → " + remoteScript)
+	}
+
 	if jobID == "" {
 		out, err := mux.run(submitCmd)
 		if err != nil {
@@ -317,7 +339,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 
 	rec := tunnelRec{
 		ID: id, System: node, Job: jobID, Host: host, Target: target, Sock: mux.sock,
-		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: script, Started: startedAt,
+		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: remoteScript, Staged: push, Started: startedAt,
 	}
 	if err := saveTunnel(rec); err != nil {
 		// The tunnel is up; we just can't track it. Say so rather than tear down working work.

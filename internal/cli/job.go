@@ -102,8 +102,10 @@ func jobSubCmd() *cobra.Command {
 		Short: "Submit a batch script to one cluster (qsub/sbatch) — preview + confirm.",
 		Long: "Submit a job script to one cluster, mapping -A/-q to the scheduler's flags\n" +
 			"(PBS qsub / SLURM sbatch). Target: -N <cluster> off an HPC login node, else the\n" +
-			"current cluster. The script path is resolved ON the target. -A overrides the\n" +
-			"cluster's config default; empty falls through to the script's own directives.\n\n" +
+			"current cluster. A LOCAL script is pushed to the cluster and submitted from there;\n" +
+			"a path that only exists ON the target is submitted as-is (mu says which it did).\n" +
+			"-A overrides the cluster's config default; empty falls through to the script's own\n" +
+			"directives.\n\n" +
 			"The class flags pick the queue by node class instead of by name: --gpu/--vis/\n" +
 			"--bigmem/--xfer use the cluster's config `submit_queue` entry, else resolve it\n" +
 			"from the live queue list (exactly one queue of that class); --debug/--background\n" +
@@ -119,7 +121,7 @@ func jobSubCmd() *cobra.Command {
 			if len(args) == 1 {
 				script = args[0]
 			}
-			label, scheduler, _, run, _, err := queueTargetCtx(node, userSel{})
+			label, scheduler, _, run, capture, err := queueTargetCtx(node, userSel{})
 			if err != nil {
 				return err
 			}
@@ -172,10 +174,24 @@ func jobSubCmd() *cobra.Command {
 					CoresPerNode: queueCPN(label, queueName),
 				}
 			}
-			cmd := adapter.SubmitCmd(script, opts)
+			// A LOCAL script is pushed to the cluster and submitted from there — so the path names
+			// the file on YOUR disk (tab-completion resolves it) — while a bare remote path is
+			// submitted as-is. The staged path is deterministic from the id, so `command:` below
+			// is honest before the file is written; the write itself waits until after confirm.
+			push := isLocalScript(script)
+			stageID, remoteScript := "", script
+			if push {
+				stageID = newTunnelID()
+				remoteScript = stagedPath(stageID)
+			}
+			cmd := adapter.SubmitCmd(remoteScript, opts)
 
 			render.Info(fmt.Sprintf("Submit to %s (%s)", label, scheduler))
-			render.Detail("script:  " + script)
+			if push {
+				render.Detail(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
+			} else {
+				render.Detail("script:  " + remoteScript)
+			}
 			if d := adapter.Directives(opts); len(d) > 0 {
 				render.Detail("applies: " + strings.Join(d, "  "))
 			} else {
@@ -195,6 +211,12 @@ func jobSubCmd() *cobra.Command {
 					return nil
 				}
 			}
+			if push {
+				if _, err := writeStaged(capture, script, stageID); err != nil {
+					return runErr("%s", err)
+				}
+				render.OK("pushed " + script + " → " + remoteScript)
+			}
 			if err := run(cmd); err != nil {
 				return err
 			}
@@ -204,7 +226,7 @@ func jobSubCmd() *cobra.Command {
 			return nil
 		},
 	}
-	setHelpArgs(c, [2]string{"[script]", "job script path, resolved ON the target cluster (optional with -i)"})
+	setHelpArgs(c, [2]string{"[script]", "job script: a local path is pushed, a remote path submitted as-is (optional with -i)"})
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
