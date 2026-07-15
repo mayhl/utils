@@ -32,6 +32,11 @@ type Opts struct {
 	Timeout       int
 	PartialDir    bool
 	Ropt          []string
+	// Transport overrides the ssh command rsync's -e uses. Empty = the default (config ssh +
+	// transfer opts, a fresh authenticated connection). Set it to an hpc.Session's
+	// RsyncTransport() to ride a held ControlMaster, so the transfer reuses one auth (and a
+	// later op on the same session reuses it too).
+	Transport string
 }
 
 // partialDir keeps rsync's cross-run partials out of the destination tree.
@@ -61,7 +66,10 @@ var (
 // base (MU_HPC_RSYNC_OPTS) → named flags → --ropt, then the ssh transport and
 // src/dst.
 func BuildArgs(src, dst string, o Opts) []string {
-	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	transport := o.Transport
+	if transport == "" {
+		transport = strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	}
 
 	env := sanitize(shellSplit(config.RsyncOpts()), "MU_HPC_RSYNC_OPTS")
 
