@@ -163,8 +163,25 @@ func pbsOpts(o SubmitOpts) string {
 	return s
 }
 
+// quoteScriptPath shell-quotes a submit script path but keeps a leading ~ / $HOME EXPANDABLE:
+// the path resolves ON the target under `bash -lc`, so `~/run.pbs` has to reach the far shell
+// as "$HOME"/run.pbs — a single-quoted literal ~ is a path qsub/sbatch then can't open (the
+// footgun that made every ~ / $HOME submit fail until you spelled out the absolute path).
+func quoteScriptPath(s string) string {
+	switch {
+	case s == "~" || s == "$HOME":
+		return `"$HOME"`
+	case strings.HasPrefix(s, "~/"):
+		return `"$HOME"/` + shell.Quote(s[2:])
+	case strings.HasPrefix(s, "$HOME/"):
+		return `"$HOME"/` + shell.Quote(s[len("$HOME/"):])
+	default:
+		return shell.Quote(s)
+	}
+}
+
 func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
-	return "qsub" + pbsOpts(o) + " " + shell.Quote(script)
+	return "qsub" + pbsOpts(o) + " " + quoteScriptPath(script)
 }
 
 func (pbsAdapter) InteractiveCmd(o SubmitOpts) string { return "qsub -I" + pbsOpts(o) }
@@ -266,7 +283,7 @@ func slurmOpts(o SubmitOpts) string {
 }
 
 func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
-	return "sbatch" + slurmOpts(o) + " " + shell.Quote(script)
+	return "sbatch" + slurmOpts(o) + " " + quoteScriptPath(script)
 }
 
 func (slurmAdapter) InteractiveCmd(o SubmitOpts) string { return "salloc" + slurmOpts(o) }

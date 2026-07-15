@@ -29,6 +29,11 @@ func TestAdapterCmds(t *testing.T) {
 		{"pbs submit", For("pbs").SubmitCmd("run.pbs", SubmitOpts{Account: "PROJ1", Queue: "standard"}), `qsub -A 'PROJ1' -q 'standard' 'run.pbs'`},
 		{"slurm submit", For("slurm").SubmitCmd("run.slurm", SubmitOpts{Account: "PROJ1"}), `sbatch -A 'PROJ1' 'run.slurm'`},
 		{"pbs submit bare", For("pbs").SubmitCmd("run.pbs", SubmitOpts{}), `qsub 'run.pbs'`},
+		{"pbs submit tilde", For("pbs").SubmitCmd("~/run.pbs", SubmitOpts{}), `qsub "$HOME"/'run.pbs'`},
+		{"slurm submit tilde", For("slurm").SubmitCmd("~/dir/run.slurm", SubmitOpts{}), `sbatch "$HOME"/'dir/run.slurm'`},
+		{"pbs submit HOME", For("pbs").SubmitCmd("$HOME/run.pbs", SubmitOpts{}), `qsub "$HOME"/'run.pbs'`},
+		{"pbs submit bare tilde", For("pbs").SubmitCmd("~", SubmitOpts{}), `qsub "$HOME"`},
+		{"pbs submit absolute", For("pbs").SubmitCmd("/p/home/u/run.pbs", SubmitOpts{}), `qsub '/p/home/u/run.pbs'`},
 		{
 			"pbs submit full",
 			For("pbs").SubmitCmd("run.pbs", SubmitOpts{Account: "PROJ1", Queue: "standard", Walltime: "12:00:00", Nodes: 2, CoresPerNode: 128, Name: "wave"}),
