@@ -9,6 +9,46 @@ import (
 	"time"
 )
 
+// TestControlArgs: ambient multiplexing is on by default (ControlMaster=auto + a socket +
+// the default persist), tunable via MU_SSH_CONTROL_PERSIST, and fully off at 0.
+func TestControlArgs(t *testing.T) {
+	t.Setenv("MU_SSH_CONTROL_PERSIST", "") // treated as unset → the default window
+	joined := strings.Join(controlArgs("u@host"), " ")
+	for _, want := range []string{"ControlMaster=auto", "ControlPath=", "ControlPersist=" + strconv.Itoa(controlPersist)} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("controlArgs() = %q, missing %q", joined, want)
+		}
+	}
+
+	t.Setenv("MU_SSH_CONTROL_PERSIST", "5")
+	if got := strings.Join(controlArgs("u@host"), " "); !strings.Contains(got, "ControlPersist=5") {
+		t.Errorf("custom persist not honored: %q", got)
+	}
+
+	t.Setenv("MU_SSH_CONTROL_PERSIST", "0")
+	if a := controlArgs("u@host"); a != nil {
+		t.Errorf("persist=0 must disable multiplexing, got %v", a)
+	}
+}
+
+// TestControlPath: the socket path is stable per target, distinct across targets, carries the
+// mu-cm marker, and stays well under the unix-socket path limit even for a long target.
+func TestControlPath(t *testing.T) {
+	a := controlPath("user@login.hpc1")
+	if a != controlPath("user@login.hpc1") {
+		t.Error("controlPath not stable for the same target")
+	}
+	if a == controlPath("user@login.node-a") {
+		t.Error("distinct targets must not share a control socket")
+	}
+	if !strings.Contains(a, "mu-cm-") {
+		t.Errorf("unexpected control path %q", a)
+	}
+	if long := controlPath(strings.Repeat("x", 300) + "@host"); len(long) > 104 {
+		t.Errorf("control path too long for a unix socket: %d (%q)", len(long), long)
+	}
+}
+
 // TestFirstLine: the terse error summary folded into a bounded remote-exec failure
 // is the first non-blank line, trimmed.
 func TestFirstLine(t *testing.T) {

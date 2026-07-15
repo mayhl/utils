@@ -3,11 +3,14 @@ package hpc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,7 +33,10 @@ import (
 func RemoteExec(target, remoteCmd string) (string, error) {
 	ssh := config.SSHCommand()
 	arg := "bash -lc " + shell.Quote(remoteCmd)
-	cmd := exec.Command(ssh, "-q", "-o", fmt.Sprintf("ConnectTimeout=%d", connectSeconds()), target, arg)
+	args := []string{"-q", "-o", fmt.Sprintf("ConnectTimeout=%d", connectSeconds())}
+	args = append(args, controlArgs(target)...)
+	args = append(args, target, arg)
+	cmd := exec.Command(ssh, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	stop := armSpinner(hostOf(target))
@@ -59,6 +65,48 @@ func connectSeconds() int {
 		}
 	}
 	return connectTimeout
+}
+
+// controlPersist (seconds) is how long an ambient RemoteExec master lingers after its last use,
+// warm for the next verb. Short: long enough that a workflow's back-to-back calls (a submit
+// then its sweep, a fleet of reads) reuse one auth, short enough not to hold an idle connection
+// to a login node. 0 via MU_SSH_CONTROL_PERSIST disables reuse entirely (fresh ssh per call, the
+// old behavior) — the escape hatch for a site where multiplexing misbehaves.
+const controlPersist = 30
+
+func controlPersistSeconds() int {
+	if v := os.Getenv("MU_SSH_CONTROL_PERSIST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n // 0 disables; negative is clamped away below
+		}
+	}
+	return controlPersist
+}
+
+// controlArgs turns on OpenSSH connection multiplexing for RemoteExec: every call to the same
+// target within the persist window rides ONE ControlMaster, so the whole run authenticates once
+// instead of once per command — the cost that matters on a Kerberos cluster. ssh owns the
+// master's lifecycle (auto-create on first use with ControlMaster=auto, persist a bounded time
+// after the last client, remove the socket on exit), so there is nothing for mu to open or
+// close. Empty (reuse off) when the persist window is non-positive.
+func controlArgs(target string) []string {
+	persist := controlPersistSeconds()
+	if persist <= 0 {
+		return nil
+	}
+	return []string{
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=" + controlPath(target),
+		"-o", fmt.Sprintf("ControlPersist=%d", persist),
+	}
+}
+
+// controlPath is the ambient master's control socket: stable per target (so calls reuse it) and
+// short (a 12-hex digest of the target under the temp dir, well inside the ~104-char unix-socket
+// path limit — the target itself, user@host, could blow it).
+func controlPath(target string) string {
+	h := sha256.Sum256([]byte(target))
+	return filepath.Join(os.TempDir(), "mu-cm-"+hex.EncodeToString(h[:6]))
 }
 
 // spinnerDelay is how long a remote call must run before the latency spinner
