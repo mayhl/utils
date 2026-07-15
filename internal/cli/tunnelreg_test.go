@@ -98,6 +98,23 @@ func freePort(t *testing.T) int {
 	return p
 }
 
+// TestJobShort: the batched `ls` matches a stored id against qstat's echoed form by its
+// suffix-free segment, so a PBS id that qsub returned as "N.sdb" but qstat echoes as "N.hpc1"
+// still resolves. SLURM ids (no suffix) pass through unchanged.
+func TestJobShort(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"1284575.sdb", "1284575"},
+		{"1284575.hpc1", "1284575"},
+		{"8580901", "8580901"}, // SLURM — no suffix
+		{"1284[7].hpc1", "1284[7]"},
+		{"", ""},
+	} {
+		if got := jobShort(tc.in); got != tc.want {
+			t.Errorf("jobShort(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestWallLeft: requested minus elapsed, degrading to "" when a field is unparseable.
 func TestWallLeft(t *testing.T) {
 	for _, tc := range []struct{ req, el, want string }{

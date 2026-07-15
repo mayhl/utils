@@ -33,25 +33,16 @@ func tunnelLsCmd() *cobra.Command {
 				render.Info("no open tunnels")
 				return nil
 			}
+			// One scheduler query per system (not per tunnel) enriches them all; a job the
+			// scheduler no longer knows is pruned inside and left out of the map.
+			states := tunnelStates(recs)
 			rows := make([]render.TunnelRow, 0, len(recs))
-			ticketed := false
 			for _, t := range recs {
-				state, left := "?", t.Walltime
-				// One ticket for the whole sweep, and only if there's something to ask.
-				if !ticketed {
-					if err := hpc.EnsureTicket(); err == nil {
-						ticketed = true
-					}
+				s, ok := states[t.ID]
+				if !ok {
+					continue // pruned — the job is gone
 				}
-				if ticketed {
-					if st, rem, live := tunnelLiveState(t); !live {
-						forgetTunnel(t) // the job is gone — so is the reason to keep the record
-						continue
-					} else {
-						state, left = st, rem
-					}
-				}
-				rows = append(rows, render.TunnelRow{ID: t.ID, Port: strconv.Itoa(t.LocalPort), System: t.System, Job: t.Job, Node: t.Host, State: state, WallLeft: left})
+				rows = append(rows, render.TunnelRow{ID: t.ID, Port: strconv.Itoa(t.LocalPort), System: t.System, Job: t.Job, Node: t.Host, State: s.state, WallLeft: s.left})
 			}
 			if len(rows) == 0 {
 				render.Info("no open tunnels")
@@ -64,24 +55,86 @@ func tunnelLsCmd() *cobra.Command {
 	return c
 }
 
-// tunnelLiveState asks the job's scheduler for its state and remaining walltime. live=false
-// means the scheduler has no record of it — the job ended, and the tunnel with it.
-func tunnelLiveState(t tunnelRec) (state, left string, live bool) {
-	scheduler := config.SchedulerFor(t.System)
-	cmd := detailCmd(scheduler, []string{t.Job})
-	if cmd == "" {
-		return "?", t.Walltime, true // no scheduler configured — can't judge, so don't prune
+// tunnelState is a tunnel's live scheduler-derived state for the `ls` table.
+type tunnelState struct{ state, left string }
+
+// tunnelStates enriches every tunnel with its live state, batching ONE scheduler query per
+// system rather than one per tunnel. The returned map is keyed by tunnel id; a tunnel left
+// OUT of it has been pruned — the scheduler has no record of its job, so the job ended and
+// the record with it. A tunnel we couldn't judge (no scheduler configured, no ticket, an ssh
+// hiccup) is KEPT with state "?": an unanswered query is not proof the job is gone.
+func tunnelStates(recs []tunnelRec) map[string]tunnelState {
+	out := make(map[string]tunnelState, len(recs))
+	// Group by system, preserving first-seen order so one detailCmd covers all its jobs.
+	var order []string
+	bySystem := map[string][]tunnelRec{}
+	for _, t := range recs {
+		if _, seen := bySystem[t.System]; !seen {
+			order = append(order, t.System)
+		}
+		bySystem[t.System] = append(bySystem[t.System], t)
 	}
-	out, err := hpc.RemoteExec(t.Target, cmd)
-	if err != nil {
-		return "?", t.Walltime, true // a transient ssh failure is not proof the job is gone
+	ticketed := false
+	for _, sys := range order {
+		group := bySystem[sys]
+		keepUnknown := func() {
+			for _, t := range group {
+				out[t.ID] = tunnelState{state: "?", left: t.Walltime}
+			}
+		}
+		scheduler := config.SchedulerFor(sys)
+		jobs := make([]string, len(group))
+		for i, t := range group {
+			jobs[i] = t.Job
+		}
+		cmd := detailCmd(scheduler, jobs)
+		if cmd == "" {
+			keepUnknown() // no scheduler configured — can't judge
+			continue
+		}
+		// One ticket for the whole sweep, and only once there's a system to ask about.
+		if !ticketed {
+			if err := hpc.EnsureTicket(); err != nil {
+				keepUnknown() // no ticket — can't ask, so don't prune
+				continue
+			}
+			ticketed = true
+		}
+		raw, err := hpc.RemoteExec(group[0].Target, cmd)
+		if err != nil {
+			keepUnknown() // a transient ssh failure is not proof the jobs are gone
+			continue
+		}
+		// Key results by BOTH full and short id: the id qsub returned ("1284575.sdb") can
+		// carry a different host suffix than qstat echoes ("1284575.hpc1"), so match on the
+		// suffix-free segment too. SLURM ids have no suffix, so both keys coincide.
+		byJob := map[string]queue.JobDetail{}
+		for _, d := range queue.ParseDetails(scheduler, raw) {
+			byJob[d.ID] = d
+			byJob[d.ShortID] = d
+		}
+		for _, t := range group {
+			d, ok := byJob[t.Job]
+			if !ok {
+				d, ok = byJob[jobShort(t.Job)]
+			}
+			if !ok {
+				forgetTunnel(t) // the scheduler has no record of it — the job is gone
+				continue
+			}
+			out[t.ID] = tunnelState{state: d.State, left: wallLeft(d.ReqWall, d.Elapsed)}
+		}
 	}
-	ds := queue.ParseDetails(scheduler, out)
-	if len(ds) == 0 {
-		return "", "", false
+	return out
+}
+
+// jobShort is the suffix-free leading segment of a scheduler job id (PBS "1284570.hpc1" →
+// "1284570"; SLURM ids are unchanged), for matching a stored id against qstat's echoed form.
+func jobShort(id string) string {
+	if i := strings.IndexByte(id, '.'); i > 0 {
+		return id[:i]
 	}
-	d := ds[0]
-	return d.State, wallLeft(d.ReqWall, d.Elapsed), true
+	return id
 }
 
 // tunnelCloseCmd is `mu job tunnel close`: tear down a tunnel — drop the forward, kill the
