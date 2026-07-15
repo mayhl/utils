@@ -188,14 +188,14 @@ func jobSubCmd() *cobra.Command {
 
 			render.Info(fmt.Sprintf("Submit to %s (%s)", label, scheduler))
 			if push {
-				render.Detail(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
+				render.Verbose(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
 			} else {
-				render.Detail("script:  " + remoteScript)
+				render.Verbose("script:  " + remoteScript)
 			}
 			if d := adapter.Directives(opts); len(d) > 0 {
-				render.Detail("applies: " + strings.Join(d, "  "))
+				render.Verbose("applies: " + strings.Join(d, "  "))
 			} else {
-				render.Detail("applies: (scheduler defaults / script directives)")
+				render.Verbose("applies: (scheduler defaults / script directives)")
 			}
 			render.Detail("command: " + cmd)
 			if dryRun {

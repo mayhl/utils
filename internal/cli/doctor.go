@@ -14,7 +14,7 @@ import (
 )
 
 func doctorCmd() *cobra.Command {
-	var verbose, checkup bool
+	var checkup bool
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the environment (tools, config, plugin checks).",
@@ -28,7 +28,7 @@ func doctorCmd() *cobra.Command {
 			}
 			results, overall := doctor.Run()
 
-			if verbose {
+			if render.IsVerbose() {
 				// Verbose: split into separate tables — one per section, then a detail
 				// table per check (TSV verbose → sub-table; prose → text block).
 				var order []string
@@ -87,7 +87,7 @@ func doctorCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show full per-check detail (plugin output, versions, expiry)")
+	// -v (global) shows full per-check detail: plugin output, versions, expiry
 	c.Flags().BoolVar(&checkup, "checkup", false, "throttled background run for shell-init: event log + notice file, no tables")
 	c.AddCommand(doctorFmtCmd(), doctorSetupCmd(), doctorSSHFSCmd())
 	// `mu doctor git` mirrors git's own `mu git doctor` — same leaf, re-verbed. Gated on the

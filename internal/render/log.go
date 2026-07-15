@@ -200,7 +200,12 @@ func ResetLoggerForTest() {
 // NOT recorded. They're ephemeral UI messages; the curated event log is fed only
 // by the scoped/event paths (Scoped, Step, Event*, `mu log write`). Rule of thumb:
 // scoped ⇒ logged event; unscoped ⇒ ephemeral message.
-func Info(msg string) { renderTier(slog.LevelInfo, msg) }
+func Info(msg string) {
+	if IsQuiet() {
+		return // -q keeps only results (OK) + warnings + errors
+	}
+	renderTier(slog.LevelInfo, msg)
+}
 func OK(msg string)   { renderTier(LevelOK, msg) }
 func Warn(msg string) { renderTier(slog.LevelWarn, msg) }
 func Err(msg string)  { renderTier(slog.LevelError, msg) }

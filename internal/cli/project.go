@@ -30,7 +30,7 @@ func projectCmd() *cobra.Command {
 
 func projectSubmitCmd() *cobra.Command {
 	var node, script, account, queue_ string
-	var yes, dryRun, verbose, keep, clean bool
+	var yes, dryRun, keep, clean bool
 	c := &cobra.Command{
 		Use:   "submit <case-dir>",
 		Short: "Push a case to a cluster's $WORK staging and submit it.",
@@ -46,7 +46,7 @@ func projectSubmitCmd() *cobra.Command {
 			"carries a real reproducible sha. Pre-flight refuses a diverged remote.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, verbose, keep, clean)
+			return projectSubmit(node, args[0], script, account, queue_, yes, dryRun, render.IsVerbose(), keep, clean)
 		},
 	}
 	setHelpArgs(c, [2]string{"<case-dir>", "case directory to push and run (under $HOME, inside a git project)"})
@@ -57,7 +57,7 @@ func projectSubmitCmd() *cobra.Command {
 	f.StringVarP(&queue_, "queue", "q", "", "queue / partition to submit to")
 	f.BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	f.BoolVarP(&dryRun, "dry-run", "n", false, "show the plan without pushing or submitting")
-	f.BoolVarP(&verbose, "verbose", "v", false, "per-file rsync output instead of the aggregate bar")
+	// per-file rsync output (vs the aggregate bar) rides the global -v now; no local flag
 	f.BoolVar(&keep, "keep-extra", false, "keep staging files the case dir no longer has (skip rsync --delete)")
 	f.BoolVar(&clean, "clean", false, "commit-gated study mode: push via the per-node remote, stage $HOME→$WORK on the node")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {

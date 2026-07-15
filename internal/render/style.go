@@ -140,6 +140,9 @@ func logLine(utf, ascii string, colors text.Colors, msg string) {
 // Detail prints a dim, glyph-less supporting line to stderr (e.g. the local/remote
 // block under a verbose sshfs mount).
 func Detail(msg string) {
+	if IsQuiet() {
+		return // -q trims the gray entirely — results, warnings, and errors only
+	}
 	if colorOff() {
 		fmt.Fprint(os.Stderr, msg+nl())
 		return

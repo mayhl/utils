@@ -51,6 +51,21 @@ func HouseError(_ io.Writer, _ fang.Styles, err error) {
 	}
 }
 
+// verbosityFlag is a boolean-style persistent flag (-v / -q) that moves the global render level
+// the moment it's parsed — before any RunE runs — so verbosity is set independently of the
+// PersistentPreRun chain, which Cobra runs only the deepest link of. Its zero prints "false"
+// and its Type is "bool", so it reads and renders as an ordinary switch.
+type verbosityFlag struct{ to render.Level }
+
+func (verbosityFlag) String() string { return "false" }
+func (verbosityFlag) Type() string   { return "bool" }
+func (f verbosityFlag) Set(s string) error {
+	if s == "true" {
+		render.Verbosity = f.to
+	}
+	return nil
+}
+
 // Root builds the top-level `mu` command with all subcommand trees attached.
 func Root() *cobra.Command {
 	// sshfs is local-only, so name it in the blurb only off an HPC node (see below).
@@ -73,6 +88,17 @@ func Root() *cobra.Command {
 	setHelpTitle(root, "mayhl_utils — HPC toolkit") // for the intercepted house root help
 	root.PersistentFlags().BoolVar(&render.PlainFlag, "plain", false,
 		"borderless, tab-aligned tables (auto when piped; overrides MU_RENDER)")
+	// -v / -q set the global output level for any command (persistent = inherited by every
+	// child). -v reveals each command's verbose extras; -q trims to results + warnings + errors.
+	root.PersistentFlags().VarP(verbosityFlag{render.LevelVerbose}, "verbose", "v",
+		"show per-command detail (job chatter, cp per-file output, doctor per-check detail)")
+	// --quiet is long-only: -q is already --queue on job sub / tunnel / project submit, and a
+	// duplicate shorthand panics pflag when the persistent flag merges into those commands.
+	root.PersistentFlags().Var(verbosityFlag{render.LevelQuiet}, "quiet",
+		"results, warnings, and errors only — suppress info headers and gray detail")
+	root.PersistentFlags().Lookup("verbose").NoOptDefVal = "true"
+	root.PersistentFlags().Lookup("quiet").NoOptDefVal = "true"
+	root.MarkFlagsMutuallyExclusive("verbose", "quiet")
 	root.AddCommand(cpCmd(), tarCmd(), hpcCmd(), setupCmd(), logCmd(), doctorCmd(), psCmd(), jobCmd(), pathCmd(), configCmd())
 	// sshfs mounts a remote dir onto the LOCAL workstation via fuse — inapplicable on an
 	// HPC login node (already on the box, no fuse-t), so register it local-only. Mirrors

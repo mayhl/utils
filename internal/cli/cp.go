@@ -21,7 +21,6 @@ func cpCmd() *cobra.Command {
 
 func cpPushCmd() *cobra.Command {
 	var o rsync.Opts
-	var verbose bool
 	cmd := &cobra.Command{
 		Use:   "push <node> <src> [dst]",
 		Short: "Copy a local path TO a node (rsync push), with a progress bar.",
@@ -30,20 +29,19 @@ func cpPushCmd() *cobra.Command {
 		Args:              cobra.RangeArgs(2, 3),
 		ValidArgsFunction: nodeCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runTransfer(true, args[0], args[1], transferDst(args, ""), o, verbose)
+			return runTransfer(true, args[0], args[1], transferDst(args, ""), o, render.IsVerbose())
 		},
 	}
 	setHelpArgs(cmd,
 		[2]string{"<node>", "target node or cluster alias from the configured inventory"},
 		[2]string{"<src>", "local path to copy"},
 		[2]string{"[dst]", "destination path on the node (~-relative or absolute); default: your home dir"})
-	addTransferFlags(cmd, &o, &verbose)
+	addTransferFlags(cmd, &o)
 	return cmd
 }
 
 func cpPullCmd() *cobra.Command {
 	var o rsync.Opts
-	var verbose bool
 	cmd := &cobra.Command{
 		Use:   "pull <node> <src> [dst]",
 		Short: "Copy a path FROM a node to local (rsync pull), with a progress bar.",
@@ -52,14 +50,14 @@ func cpPullCmd() *cobra.Command {
 		Args:              cobra.RangeArgs(2, 3),
 		ValidArgsFunction: nodeCompletion,
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runTransfer(false, args[0], args[1], transferDst(args, "."), o, verbose)
+			return runTransfer(false, args[0], args[1], transferDst(args, "."), o, render.IsVerbose())
 		},
 	}
 	setHelpArgs(cmd,
 		[2]string{"<node>", "source node or cluster alias from the configured inventory"},
 		[2]string{"<src>", "remote path on the node (~-relative or absolute)"},
 		[2]string{"[dst]", "local destination path; default: the current directory"})
-	addTransferFlags(cmd, &o, &verbose)
+	addTransferFlags(cmd, &o)
 	return cmd
 }
 
@@ -109,7 +107,7 @@ func runTransfer(push bool, node, a, b string, o rsync.Opts, verbose bool) error
 	return codeErr(code)
 }
 
-func addTransferFlags(cmd *cobra.Command, o *rsync.Opts, verbose *bool) {
+func addTransferFlags(cmd *cobra.Command, o *rsync.Opts) {
 	f := cmd.Flags()
 	f.BoolVarP(&o.DryRun, "dry-run", "n", false, "show what would transfer")
 	f.StringArrayVar(&o.Exclude, "exclude", nil, "rsync exclude pattern (repeatable)")
@@ -121,7 +119,7 @@ func addTransferFlags(cmd *cobra.Command, o *rsync.Opts, verbose *bool) {
 	f.IntVar(&o.Timeout, "timeout", 0, "I/O timeout in seconds (0 = none)")
 	f.BoolVar(&o.PartialDir, "partial-dir", true, "keep partials in .rsync-partial for cross-run resume (--partial-dir=false to disable)")
 	f.StringArrayVar(&o.Ropt, "ropt", nil, "extra raw rsync option (repeatable)")
-	f.BoolVarP(verbose, "verbose", "v", false, "per-file output instead of the aggregate bar")
+	// per-file output (vs the aggregate bar) rides the global -v now; no local flag
 }
 
 // nodeCompletion completes the first argument (node) from the configured

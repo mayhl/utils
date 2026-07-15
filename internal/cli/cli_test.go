@@ -67,7 +67,6 @@ func TestCommandFlags(t *testing.T) {
 	}{
 		{[]string{"hpc", "nodes"}, "status", "s"},
 		{[]string{"hpc", "ticket"}, "renew", ""},
-		{[]string{"sshfs", "mount"}, "verbose", "v"},
 		{[]string{"sshfs", "add"}, "ro", ""},
 		{[]string{"sshfs", "add"}, "read-only", ""},
 		{[]string{"tar"}, "gzip", "z"},
@@ -80,6 +79,18 @@ func TestCommandFlags(t *testing.T) {
 		}
 		if c.shorthand != "" && f.Shorthand != c.shorthand {
 			t.Errorf("%v: --%s shorthand = %q, want %q", c.path, c.long, f.Shorthand, c.shorthand)
+		}
+	}
+	// -v / --quiet are global (persistent on root, inherited by every command). --quiet is
+	// long-only on purpose: -q is --queue on the submit commands (see root.go).
+	for _, g := range []struct{ long, shorthand string }{{"verbose", "v"}, {"quiet", ""}} {
+		f := root.PersistentFlags().Lookup(g.long)
+		if f == nil {
+			t.Errorf("root missing persistent --%s", g.long)
+			continue
+		}
+		if f.Shorthand != g.shorthand {
+			t.Errorf("--%s shorthand = %q, want %q", g.long, f.Shorthand, g.shorthand)
 		}
 	}
 }

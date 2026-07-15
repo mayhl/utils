@@ -255,17 +255,17 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	render.Info(fmt.Sprintf("Tunnel job → %s (%s)", node, scheduler))
 	if jobID == "" {
 		if push {
-			render.Detail(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
+			render.Verbose(fmt.Sprintf("script:  %s → %s (push)", script, remoteScript))
 		} else {
-			render.Detail("script:  " + remoteScript)
+			render.Verbose("script:  " + remoteScript)
 		}
 		render.Detail("command: " + submitCmd)
 	} else {
 		render.Detail("job:     " + jobID)
 	}
-	render.Detail(fmt.Sprintf("tunnel:  localhost:%d → <node>:%d, one held connection", localPort, port))
+	render.Verbose(fmt.Sprintf("tunnel:  localhost:%d → <node>:%d, one held connection", localPort, port))
 	if !foreground {
-		render.Detail("mode:    background — mu exits once it's up; close with `mu job tunnel close`")
+		render.Verbose("mode:    background — mu exits once it's up; close with `mu job tunnel close`")
 	}
 	if !yes {
 		fmt.Fprintf(os.Stderr, "connect + tunnel on %s? [y/N] ", node)

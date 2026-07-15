@@ -74,7 +74,6 @@ func sshfsListCmd() *cobra.Command {
 }
 
 func sshfsMountCmd() *cobra.Command {
-	var verbose bool
 	var all bool
 	c := &cobra.Command{
 		Use:   "mount <name>...",
@@ -105,13 +104,13 @@ func sshfsMountCmd() *cobra.Command {
 				names = expanded
 			}
 			if len(names) == 1 && !all {
-				return codeErr(runMount(names[0], verbose, "", false)) // classic single-mount path (hcd uses this)
+				return codeErr(runMount(names[0], render.IsVerbose(), "", false)) // classic single-mount path (hcd uses this)
 			}
-			return codeErr(runMountBatch(names, verbose))
+			return codeErr(runMountBatch(names, render.IsVerbose()))
 		},
 	}
 	setHelpArgs(c, [2]string{"<name>", "registered mount name, or @group for every mount in a group"})
-	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "show the remote target + verbose ssh output")
+	// -v (global) shows the remote target + verbose ssh output
 	c.Flags().BoolVarP(&all, "all", "a", false, "mount every registered mount")
 	return c
 }
