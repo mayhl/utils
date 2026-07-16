@@ -24,11 +24,14 @@ const remoteHashBatch = 200
 // sha256sum. rsync already checksum-verifies every file it sends, so this is the opt-in
 // (--verify) paranoid confirmation for a critical push, not a routine cost. Advisory: it
 // reports a mismatch loudly but never fails the command — the transfer has already happened.
-func verifyPushed(target, node string, results []syncResult, force bool) {
+// It returns the local digests it computed, keyed by absolute local path, so the manifest
+// can record them without hashing the same bytes a second time.
+func verifyPushed(target, node string, results []syncResult, force bool) map[string]string {
 	type bad struct{ path, reason string }
 	var mismatches []bad
 	var okCount int
 	var totalBytes int64
+	digests := map[string]string{}
 
 	for _, res := range results {
 		files := res.newPaths
@@ -50,6 +53,7 @@ func verifyPushed(target, node string, results []syncResult, force bool) {
 				continue
 			}
 			local[rel] = h
+			digests[filepath.Join(res.localAbs, rel)] = h
 			totalBytes += sz
 			want = append(want, rel)
 		}
@@ -70,11 +74,11 @@ func verifyPushed(target, node string, results []syncResult, force bool) {
 
 	total := okCount + len(mismatches)
 	if total == 0 {
-		return // nothing was pushed under these tiers — nothing to verify
+		return digests // nothing was pushed under these tiers — nothing to verify
 	}
 	if len(mismatches) == 0 {
 		render.OK(fmt.Sprintf("verify:  %d/%d files match (sha256, %s)", okCount, total, render.HumanBytes(totalBytes)))
-		return
+		return digests
 	}
 	render.Warn(fmt.Sprintf("verify:  %d/%d files match — %d MISMATCH on %s (the push may be corrupt or incomplete)", okCount, total, len(mismatches), node))
 	const cap_ = 20
@@ -85,6 +89,7 @@ func verifyPushed(target, node string, results []syncResult, force bool) {
 		}
 		render.Detail(fmt.Sprintf("  ✗ %s: %s", m.path, m.reason))
 	}
+	return digests
 }
 
 // sha256File streams a file through sha256, returning its hex digest and byte size.
