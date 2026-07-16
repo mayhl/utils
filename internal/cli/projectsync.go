@@ -496,9 +496,16 @@ func syncShared(root string, o projSyncOpts) error {
 	// Opt-in end-to-end integrity check: rsync already verifies each file it transfers,
 	// so this is the paranoid confirmation for critical pushes — an independent sha256
 	// on both ends. Advisory: a mismatch warns loudly but the transfer already happened.
+	// Its digests feed the manifest below, so a verified push records sha256 for free.
+	var digests map[string]string
 	if o.verify {
-		verifyPushed(target, o.node, results, o.force)
+		digests = verifyPushed(target, o.node, results, o.force)
 	}
+
+	// Record what landed into each tier's remote manifest (source commit + per-file
+	// size/mtime, plus sha256 when verified) so the staged data self-describes its
+	// version. Advisory — the push already succeeded.
+	writeManifest(target, root, o.node, results, o, digests)
 	return nil
 }
 
