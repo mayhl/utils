@@ -165,9 +165,14 @@ func narrowTier(root, path string) (syncTier, error) {
 // $WORKDIR at the same $HOME-relative path, additively — new files transfer, existing
 // files are never overwritten (add-only house rule). Differing files are reported and
 // skipped, not resolved. Distinct from submit-iterate's disposable case staging.
+// fleetAuto is the sentinel --fleet takes with no value (pflag NoOptDefVal): resolve
+// the fleet from the project's markers/.mu-fleet rather than an explicit list.
+const fleetAuto = "@auto"
+
 func projectSyncCmd() *cobra.Command {
 	var yes, dryRun, force, checksum bool
 	var tierSel, exclude []string
+	var fleet string
 	c := &cobra.Command{
 		Use:   "sync <node> [path]",
 		Short: "Push shared run-dependency data (simulations/data) to a cluster's $WORKDIR.",
@@ -177,18 +182,33 @@ func projectSyncCmd() *cobra.Command {
 			"disposable case staging.\n\n" +
 			"An optional path narrows the push to one dataset/subtree under a tier; without\n" +
 			"one, every selected --tier that exists locally is pushed.\n\n" +
+			"--fleet fans the same push out to every node the project touches — the union of\n" +
+			"its .mu-node markers, a .mu-fleet override, or an explicit --fleet=a,b list.\n" +
+			"Shared data is consistent-everywhere, so no node-lock applies; each node runs the\n" +
+			"full push and a failure on one doesn't strand the rest.\n\n" +
 			"Additive and add-only: a dry itemized pass classifies each file as new (dest\n" +
 			"absent), identical, or differing (size or mtime); the real transfer pushes only\n" +
 			"the new ones (rsync --ignore-existing). Differing files are listed and SKIPPED —\n" +
 			"shared data is never silently overwritten. Detection is cheap size + mtime, not\n" +
 			"a full checksum. Shows the plan and confirms before transferring.",
-		Args: cobra.RangeArgs(1, 2),
+		Args: cobra.RangeArgs(0, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			var path string
-			if len(args) > 1 {
-				path = args[1]
+			o := projSyncOpts{tierSel: tierSel, force: force, checksum: checksum, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()}
+			if fleet != "" {
+				// Fleet mode fans out over the node set; a positional is the optional path.
+				if len(args) > 0 {
+					o.path = args[0]
+				}
+				return projectSyncFleet(fleet, o)
 			}
-			return projectSync(projSyncOpts{node: args[0], path: path, tierSel: tierSel, force: force, checksum: checksum, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()})
+			if len(args) == 0 {
+				return usageErr("a <node> is required (or --fleet to fan out to the project's fleet)")
+			}
+			o.node = args[0]
+			if len(args) > 1 {
+				o.path = args[1]
+			}
+			return projectSync(o)
 		},
 	}
 	setHelpArgs(
@@ -203,7 +223,12 @@ func projectSyncCmd() *cobra.Command {
 	f.BoolVarP(&force, "force", "f", false, "overwrite differing files instead of skipping them (loud)")
 	f.BoolVarP(&checksum, "checksum", "c", false, "compare by full checksum, not size+mtime (opt-in; reads both ends)")
 	f.StringArrayVar(&exclude, "exclude", nil, "extra rsync exclude pattern (repeatable; stacks on the built-in junk set)")
-	c.ValidArgsFunction = func(_ *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+	f.StringVar(&fleet, "fleet", "", "fan out to every node the project touches (bare = .mu-node markers or .mu-fleet; =a,b for an explicit list)")
+	f.Lookup("fleet").NoOptDefVal = fleetAuto
+	c.ValidArgsFunction = func(cmd *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+		if cmd.Flags().Changed("fleet") {
+			return nil, cobra.ShellCompDirectiveDefault // fleet mode: only an optional path
+		}
 		switch len(args) {
 		case 0:
 			return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
@@ -215,6 +240,69 @@ func projectSyncCmd() *cobra.Command {
 	}
 	c.AddCommand(projectSyncPullCmd())
 	return c
+}
+
+// projectSyncFleet fans the SHARED-zone push out to every node the project touches.
+// The node set comes from an explicit --fleet=a,b list, else project.Fleet (the
+// .mu-fleet override or the .mu-node marker union). Shared data is consistent-
+// everywhere, so — unlike submit — no node-lock applies; it may go to any node. Each
+// node runs the full syncShared push; a per-node failure is reported and the fan-out
+// continues, so one unreachable cluster doesn't strand the rest.
+func projectSyncFleet(spec string, o projSyncOpts) error {
+	root, err := project.FindRoot(".")
+	if err != nil {
+		return usageErr("%s", err)
+	}
+
+	var nodes []string
+	var source string
+	if spec == fleetAuto {
+		nodes, source, err = project.Fleet(root)
+		if err != nil {
+			return usageErr("%s", err)
+		}
+		if len(nodes) == 0 {
+			return usageErr("no fleet to fan out to — the project declares no %s markers; add one, a %s file, or pass --fleet=<nodes>", project.AffinityFile, project.FleetFile)
+		}
+	} else {
+		nodes = splitFleet(spec)
+		source = "flag"
+		if len(nodes) == 0 {
+			return usageErr("--fleet lists no nodes")
+		}
+	}
+
+	render.Info(fmt.Sprintf("Fan out shared data → %d node(s): %s", len(nodes), strings.Join(nodes, ", ")))
+	render.Detail("project: " + root)
+	render.Detail("fleet:   " + source)
+
+	var failed []string
+	for _, n := range nodes {
+		render.Info("── " + n + " ──")
+		no := o
+		no.node = n
+		if err := syncShared(root, no); err != nil {
+			render.Warn(fmt.Sprintf("%s: %s", n, err))
+			failed = append(failed, n)
+		}
+	}
+	if len(failed) > 0 {
+		return runErr("fan-out incomplete — %d of %d node(s) failed: %s", len(failed), len(nodes), strings.Join(failed, ", "))
+	}
+	render.OK(fmt.Sprintf("fanned out shared data to %d node(s)", len(nodes)))
+	return nil
+}
+
+// splitFleet parses a --fleet=a,b,c list into node tokens, dropping blanks and
+// surrounding whitespace.
+func splitFleet(spec string) []string {
+	var out []string
+	for _, s := range strings.Split(spec, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // projectSync resolves the project (from cwd), classifies every shared tier that

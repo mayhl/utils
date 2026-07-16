@@ -84,6 +84,55 @@ func TestAffinity(t *testing.T) {
 	}
 }
 
+func TestFleet(t *testing.T) {
+	root, caseDir := repo(t)
+	study := filepath.Dir(caseDir) // simulations/funwave
+	caseB := filepath.Join(study, "case_b")
+	if err := os.MkdirAll(caseB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(dir, name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No markers, no .mu-fleet: the project declares no fleet.
+	if nodes, _, err := Fleet(root); err != nil || len(nodes) != 0 {
+		t.Errorf("bare: nodes=%v err=%v, want empty", nodes, err)
+	}
+
+	// Marker union: split a sweep across two nodes; the fleet is their set, deduped
+	// and sorted. A third marker repeating a node collapses.
+	write(caseDir, AffinityFile, "hpc2\n")
+	write(caseB, AffinityFile, "hpc1\n")
+	write(study, AffinityFile, "# study default\nhpc1\n")
+	nodes, source, err := Fleet(root)
+	if err != nil || source != "markers" {
+		t.Fatalf("markers: source=%q err=%v", source, err)
+	}
+	if strings.Join(nodes, ",") != "hpc1,hpc2" {
+		t.Errorf("markers: nodes=%v, want [hpc1 hpc2]", nodes)
+	}
+
+	// A .mu-fleet at the root overrides the marker union — the bootstrap escape hatch
+	// declaring a node no case is locked to yet.
+	write(root, FleetFile, "hpc1\nhpc3\n# a data-only node\nhpc2\n")
+	nodes, source, err = Fleet(root)
+	if err != nil || source != FleetFile {
+		t.Fatalf("override: source=%q err=%v", source, err)
+	}
+	if strings.Join(nodes, ",") != "hpc1,hpc2,hpc3" {
+		t.Errorf("override: nodes=%v, want [hpc1 hpc2 hpc3]", nodes)
+	}
+
+	// A .mu-fleet naming no nodes is malformed, not an empty fleet.
+	write(root, FleetFile, "# only a comment\n")
+	if _, _, err := Fleet(root); err == nil {
+		t.Error("empty .mu-fleet: want error, got nil")
+	}
+}
+
 func TestHomeRel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

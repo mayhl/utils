@@ -7,9 +7,11 @@ package project
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -24,6 +26,13 @@ const StampFile = ".mu-origin.toml"
 // across nodes, a study-dir marker locks the sweep whole. This is the DECLARED
 // intent (enforced on submit); run.toml's `cluster` is the OBSERVED record.
 const AffinityFile = ".mu-node"
+
+// FleetFile is the optional project-root override naming the nodes a project's
+// SHARED data fans out to. It covers what the AffinityFile marker-union can't: the
+// BOOTSTRAP span (declare the fleet before any case is locked, to pre-stage shared
+// data ahead of first run) and a data-only node (staged but not yet run on). One
+// node token per line; blank lines and # comments skipped.
+const FleetFile = ".mu-fleet"
 
 // FindRoot walks up from path to the enclosing git repo root — the project root
 // per the structure contract (no project.toml marker until the sim manager needs
@@ -98,6 +107,83 @@ func readAffinity(path string) (node string, found bool, err error) {
 		return line, true, nil
 	}
 	return "", false, fmt.Errorf("%s declares no node", path)
+}
+
+// Fleet resolves the set of nodes a project's SHARED data spans, in override order:
+// the FleetFile at the root if present (an explicit list — the bootstrap/data-only
+// escape hatch), else the union of every AffinityFile marker under the tree (the
+// nodes cases are actually locked to). The result is deduplicated and sorted; source
+// names which path answered. An empty result means the project declares no fleet —
+// there is nothing to fan out to. Note this is the per-project fleet, distinct from
+// config.Fleet (the cross-project mstat query scope).
+func Fleet(root string) (nodes []string, source string, err error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, "", err
+	}
+	if list, ok, ferr := readFleetFile(filepath.Join(abs, FleetFile)); ferr != nil {
+		return nil, "", ferr
+	} else if ok {
+		return list, FleetFile, nil
+	}
+	// Marker union: walk the tree collecting each AffinityFile's node token. .git is
+	// skipped (no markers live there); a malformed marker aborts the walk, same as
+	// Affinity refusing to silently ignore one.
+	set := map[string]bool{}
+	werr := filepath.WalkDir(abs, func(p string, d fs.DirEntry, e error) error {
+		if e != nil {
+			return e
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != AffinityFile {
+			return nil
+		}
+		node, found, rerr := readAffinity(p)
+		if rerr != nil {
+			return rerr
+		}
+		if found {
+			set[node] = true
+		}
+		return nil
+	})
+	if werr != nil {
+		return nil, "", werr
+	}
+	for n := range set {
+		nodes = append(nodes, n)
+	}
+	sort.Strings(nodes)
+	return nodes, "markers", nil
+}
+
+// readFleetFile reads a FleetFile's node tokens — every non-blank, non-comment line.
+// found=false when the file is absent; an error when it exists but names no node (a
+// malformed override we refuse to treat as an empty fleet).
+func readFleetFile(path string) (nodes []string, found bool, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		nodes = append(nodes, line)
+	}
+	if len(nodes) == 0 {
+		return nil, false, fmt.Errorf("%s names no nodes", path)
+	}
+	sort.Strings(nodes)
+	return nodes, true, nil
 }
 
 // HomeRel names path in the shared relative namespace: its path relative to
