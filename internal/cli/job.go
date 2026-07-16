@@ -126,6 +126,7 @@ func jobPrepCmd() *cobra.Command {
 func jobSubCmd() *cobra.Command {
 	var node, account, walltime, name string
 	var nodes int
+	var hours float64
 	var sel queueSel
 	var yes, dryRun, interactive bool
 	c := &cobra.Command{
@@ -229,6 +230,7 @@ func jobSubCmd() *cobra.Command {
 				render.Verbose("applies: (scheduler defaults / script directives)")
 			}
 			render.Detail("command: " + cmd)
+			hoursPreflight(node, account, script, hours, !dryRun)
 			if dryRun {
 				render.Info("dry run — not submitted")
 				return nil
@@ -287,6 +289,7 @@ func jobSubCmd() *cobra.Command {
 	addQueueSelFlags(c, &sel)
 	c.Flags().StringVarP(&walltime, "walltime", "t", "", "walltime limit: HH:MM:SS or a duration (10m, 1h, 1.5h, 1h30m)")
 	c.Flags().IntVarP(&nodes, "nodes", "n", 0, "node count (PBS select chunk / SLURM -N)")
+	c.Flags().Float64Var(&hours, "hours", 0, "override the estimated core-hour cost for the allocation pre-flight (else parsed from the script)")
 	c.Flags().StringVarP(&name, "name", "J", "", "job name")
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "edit the submission in a form (fields pre-seeded from flags + config, live queue list)")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
