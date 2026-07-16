@@ -92,6 +92,8 @@ type file struct {
 		TarHookThreshold   string `toml:"tar_hook_threshold"`   // per-leaf tar size warranting a pack hook; default "100GB"
 		JobHooks           *bool  `toml:"job_hooks"`            // read-time model hooks in queue views; nil (omitted) → on
 		WatchInterval      string `toml:"watch_interval"`       // sidecar tick period, Go duration; default "60s"
+		Primary            string `toml:"primary"`              // cross-cluster consistency anchor (node token); empty → no anchor
+		Headless           *bool  `toml:"headless"`             // laptop-less mode: primary is the hub; nil (omitted) → auto-detect
 	} `toml:"project"`
 	MirrorSets []MirrorSet `toml:"mirror_set"`
 	Clusters   []struct {
@@ -478,6 +480,37 @@ func WatchInterval() time.Duration {
 		}
 	}
 	return time.Minute
+}
+
+// PrimaryCluster is the project's cross-cluster consistency anchor (config.toml
+// [project] primary, a node token) — the git origin + data hub that replaces the
+// laptop in headless mode, the node peers fan out FROM. Empty when unset: no anchor
+// designated, so no anchor guard fires. Machine-local DATA, like the [ssh]/[sshfs]
+// seams — it does not travel with a project.
+func PrimaryCluster() string {
+	if f := cfg(); f != nil {
+		return f.Project.Primary
+	}
+	return ""
+}
+
+// Headless reports whether mu runs without a laptop hub — the primary cluster is
+// the consistency anchor instead. Resolution mirrors MU_SYSTEM's (env override →
+// config default → auto-detect): the MU_HEADLESS env wins (an ill-formed value is
+// ignored, not an error), else the [project] headless config default, else auto —
+// on an HPC node ($BC_HOST / MU_SYSTEM=hpc) there is no laptop, so headless is the
+// sensible default; on a laptop it is not. Note auto does NOT probe laptop-origin
+// reachability (deferred with the c2c transport); on-cluster is the proxy.
+func Headless() bool {
+	if v, ok := os.LookupEnv("MU_HEADLESS"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	if f := cfg(); f != nil && f.Project.Headless != nil {
+		return *f.Project.Headless
+	}
+	return os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc"
 }
 
 // TarParentThreshold is the batch-put cutoff (config.toml [project]

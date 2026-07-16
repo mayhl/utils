@@ -69,6 +69,73 @@ nodes  = ["node2"]
 	}
 }
 
+func TestHeadlessAndPrimary(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := "[project]\nprimary  = \"hpc1\"\nheadless = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	// Clean auto-detect baseline: off a cluster, no override.
+	t.Setenv("BC_HOST", "")
+	t.Setenv("MU_SYSTEM", "")
+	t.Setenv("MU_HEADLESS", "")
+	reset()
+
+	if PrimaryCluster() != "hpc1" {
+		t.Errorf("PrimaryCluster = %q, want hpc1", PrimaryCluster())
+	}
+	// The config default (true) wins over an off auto-detect (laptop, no env).
+	if !Headless() {
+		t.Error("config headless=true should win with no env override")
+	}
+	// The MU_HEADLESS env override beats the config default, both directions.
+	t.Setenv("MU_HEADLESS", "0")
+	if Headless() {
+		t.Error("MU_HEADLESS=0 must override config headless=true")
+	}
+	t.Setenv("MU_HEADLESS", "1")
+	if !Headless() {
+		t.Error("MU_HEADLESS=1 must force headless on")
+	}
+	// An ill-formed override is ignored, not an error — falls back to config.
+	t.Setenv("MU_HEADLESS", "maybe")
+	if !Headless() {
+		t.Error("ill-formed MU_HEADLESS should fall through to the config default")
+	}
+}
+
+func TestHeadlessAutoDetect(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	// [project] present but headless omitted → nil → resolution falls to auto-detect.
+	if err := os.WriteFile(path, []byte("[project]\nprimary = \"hpc1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	t.Setenv("MU_HEADLESS", "")
+	reset()
+
+	// Off a cluster (no signal) → headless off.
+	t.Setenv("BC_HOST", "")
+	t.Setenv("MU_SYSTEM", "")
+	if Headless() {
+		t.Error("auto off a cluster should be headless=false")
+	}
+	// On an HPC node ($BC_HOST set) → headless on.
+	t.Setenv("BC_HOST", "hpc1")
+	if !Headless() {
+		t.Error("auto on a cluster ($BC_HOST) should be headless=true")
+	}
+	// MU_SYSTEM=hpc is the other on-cluster signal.
+	t.Setenv("BC_HOST", "")
+	t.Setenv("MU_SYSTEM", "hpc")
+	if !Headless() {
+		t.Error("auto with MU_SYSTEM=hpc should be headless=true")
+	}
+}
+
 func TestNoConfigUsesDefaults(t *testing.T) {
 	// No config.toml (env encoding is retired) → empty clusters + built-in
 	// scalar defaults. MU_ROOT is cleared so the dev shell's real config.toml
