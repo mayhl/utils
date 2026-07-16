@@ -10,8 +10,9 @@ func TestSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Specs: %v", err)
 	}
-	// Sorted and derived from the [tools] table: "name = ver" → "name@ver".
-	want := []string{"difftastic@latest", "github:dandavison/delta@0.18.2"}
+	// Sorted and derived from the [tools] table: "name = ver" → "name@ver"; an inline
+	// table carries its tool options in mise's CLI form, "name[k=v]@ver".
+	want := []string{"difftastic@latest", "github:dandavison/delta[matching=musl]@0.18.2"}
 	if strings.Join(specs, ",") != strings.Join(want, ",") {
 		t.Errorf("specs = %v, want %v", specs, want)
 	}

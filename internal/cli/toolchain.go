@@ -16,8 +16,9 @@ import (
 
 // toolchainCmd is `mu setup toolchain`: install the dev toolchain with mise. Phase 2 of
 // machine onboarding (runs ON the box, decoupled from the phase-1 push in `mu setup
-// onboard`). Bare = self-install; --prefix <path> --module installs to a shared path and
-// writes a Tcl modulefile for the users who follow. The tool list is embedded in mu
+// onboard`). Bare = self-install; --prefix <path> --module installs the shared HPC runtime
+// (embedded manifest + config-resolved base/hpc tiers) and writes a Tcl modulefile of
+// static prepend-paths for the users who follow. The base tool list is embedded in mu
 // (self-contained). On macOS mise can't cover the Intel-mac-only tools, so it prints the
 // Homebrew bootstrap for you to run instead of driving brew silently.
 func toolchainCmd() *cobra.Command {
@@ -27,8 +28,9 @@ func toolchainCmd() *cobra.Command {
 		Use:   "toolchain",
 		Short: "Install the mu dev toolchain (via mise).",
 		Long: "Install the base CLI toolchain with mise. Bare installs it for you; --prefix\n" +
-			"<path> --module installs to a shared path and writes a Tcl modulefile so other\n" +
-			"users can `module load` it. The tool list is embedded in mu — print it with\n" +
+			"<path> --module installs the shared HPC runtime (embedded manifest + the\n" +
+			"config-resolved base/hpc tiers) and writes a Tcl modulefile so other users can\n" +
+			"`module load` it. The tool list is embedded in mu — print it with\n" +
 			"--dump-manifest. On macOS this prints the Homebrew + mise bootstrap to run.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -67,9 +69,8 @@ type toolchain struct {
 	specs    []string
 }
 
-// linux installs the toolchain with mise: bootstrap mise if absent, install the embedded
-// tool specs (to --prefix when shared), reshim, and optionally write a Tcl modulefile so
-// followers on a shared system can `module load` it.
+// linux installs the toolchain with mise: bootstrap mise if absent, then either the
+// per-user install of the embedded specs (bare) or the shared-module deploy (--module).
 func (t *toolchain) linux() error {
 	mise, present := misePath()
 	render.Info("toolchain plan (linux):")
@@ -83,9 +84,11 @@ func (t *toolchain) linux() error {
 		dest = "(mise per-user default)"
 	}
 	render.Detail("  install root: " + dest)
-	render.Detail("  tools: " + strings.Join(t.specs, ", "))
 	if t.module {
-		render.Detail("  modulefile: " + t.modulefilePath())
+		render.Detail("  tiers: embedded manifest + config-resolved base/hpc (MISE_ENV=hpc)")
+		render.Detail("  modulefile: " + t.modulefilePath() + " — one prepend-path per tool bin dir")
+	} else {
+		render.Detail("  tools: " + strings.Join(t.specs, ", "))
 	}
 	if t.dryRun {
 		render.OK("dry-run — nothing installed")
@@ -98,19 +101,61 @@ func (t *toolchain) linux() error {
 		}
 		mise, _ = misePath()
 	}
+	if t.module {
+		return t.deployModule(mise)
+	}
 	env := os.Environ()
 	if t.prefix != "" {
-		env = append(env, "MISE_DATA_DIR="+t.prefix)
+		env = overrideEnv(env, "MISE_DATA_DIR="+t.prefix)
 	}
 	if err := runEnv(env, mise, append([]string{"install"}, t.specs...)...); err != nil {
 		return fmt.Errorf("mise install: %w", err)
 	}
 	_ = runEnv(env, mise, "reshim")
 	render.OK("installed toolchain: " + strings.Join(t.specs, ", "))
-	if t.module {
-		return t.writeModulefile()
-	}
 	return nil
+}
+
+// deployModule installs the shared HPC runtime into --prefix and writes the Tcl
+// modulefile. The embedded manifest is staged as a temp-dir mise.toml so one
+// config-resolved `mise install` covers manifest + base + hpc tiers in a single
+// resolution; MISE_ENV is pinned to hpc (fmt is personal, never shared) and the cache
+// rides under the prefix so a small $HOME quota never blocks the deploy.
+func (t *toolchain) deployModule(mise string) error {
+	dir, err := os.MkdirTemp("", "mu-toolchain-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	manifest := filepath.Join(dir, "mise.toml")
+	if err := os.WriteFile(manifest, []byte(setup.Manifest()), 0o644); err != nil {
+		return err
+	}
+	env := overrideEnv(os.Environ(),
+		"MISE_DATA_DIR="+t.prefix,
+		"MISE_CACHE_DIR="+filepath.Join(t.prefix, "cache"),
+		"MISE_ENV=hpc")
+	if err := runEnvDir(dir, env, mise, "trust", manifest); err != nil {
+		return fmt.Errorf("mise trust: %w", err)
+	}
+	if err := runEnvDir(dir, env, mise, "install"); err != nil {
+		return fmt.Errorf("mise install: %w", err)
+	}
+	out, err := outputEnvDir(dir, env, mise, "bin-paths")
+	if err != nil {
+		return fmt.Errorf("mise bin-paths: %w", err)
+	}
+	var bins []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !isBackendRuntime(l) {
+			bins = append(bins, l)
+		}
+	}
+	if len(bins) == 0 {
+		return fmt.Errorf("mise bin-paths reported no tool dirs under %s", t.prefix)
+	}
+	render.OK(fmt.Sprintf("installed shared toolchain: %d tool dirs under %s", len(bins), t.prefix))
+	return t.writeModulefile(bins)
 }
 
 // darwin prints the Homebrew + mise bootstrap (some tools are brew-only on Intel macs, so
@@ -134,30 +179,43 @@ func (t *toolchain) darwin() error {
 	return nil
 }
 
+// isBackendRuntime filters install dirs that only back other tools (python → pipx
+// venvs) out of the modulefile PATH: venv shebangs reference them by absolute prefix
+// path, and HPC sites provide user-facing pythons via their own modules — ours must
+// not shadow those on a consumer's PATH.
+func isBackendRuntime(binDir string) bool {
+	return strings.Contains(binDir, "/installs/python/")
+}
+
 // modulefilePath is where --module writes the Tcl modulefile under the shared prefix.
 func (t *toolchain) modulefilePath() string {
 	return filepath.Join(t.prefix, "modulefiles", "mu-toolchain")
 }
 
-// writeModulefile emits a minimal Tcl modulefile that puts the shared install on PATH —
-// `module load mu-toolchain` after `module use <prefix>/modulefiles`.
-func (t *toolchain) writeModulefile() error {
+// writeModulefile emits the Tcl modulefile: one static prepend-path per tool bin dir —
+// consumers never invoke mise (shims need a per-user config to resolve, and would point
+// at the deployer's home-dir mise binary), so a config-less user and a read-only prefix
+// both work. `module load mu-toolchain` after `module use <prefix>/modulefiles`.
+func (t *toolchain) writeModulefile(binDirs []string) error {
 	path := t.modulefilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := "#%Module1.0\n" +
-		"## mu dev toolchain — generated by `mu setup toolchain --module`\n" +
-		"prepend-path PATH " + t.prefix + "/shims\n" +
-		"setenv MISE_DATA_DIR " + t.prefix + "\n" +
-		// The module-provided marker: the zsh MISE_ENV composition skips the hpc tier
-		// when set, so a per-user `fmt` opt-in never re-installs module-owned base+hpc.
-		// Doubles as the doctor's provider signal (module vs personal mise).
-		"setenv MU_TOOLCHAIN " + t.prefix + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	var b strings.Builder
+	b.WriteString("#%Module1.0\n")
+	b.WriteString("## mu dev toolchain — generated by `mu setup toolchain --module`\n")
+	for _, d := range binDirs {
+		b.WriteString("prepend-path PATH " + d + "\n")
+	}
+	// The module-provided marker: the zsh MISE_ENV composition skips the hpc tier
+	// when set, so a per-user `fmt` opt-in never re-installs module-owned base+hpc.
+	// Doubles as the doctor's provider signal (module vs personal mise).
+	b.WriteString("setenv MU_TOOLCHAIN " + t.prefix + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return err
 	}
 	render.OK("wrote modulefile: " + path + "  (module use " + filepath.Dir(path) + ")")
+	render.Info("consumers need read access — check the prefix: chmod -R a+rX " + t.prefix)
 	return nil
 }
 
@@ -202,8 +260,42 @@ func bootstrapMise() error {
 
 // runEnv runs a command with the given env, streaming its output to stderr.
 func runEnv(env []string, name string, args ...string) error {
+	return runEnvDir("", env, name, args...)
+}
+
+// runEnvDir is runEnv with a working directory (mise resolves a staged local config
+// by cwd).
+func runEnvDir(dir string, env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Env = env
+	cmd.Dir, cmd.Env = dir, env
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	return cmd.Run()
+}
+
+// outputEnvDir runs a command and captures stdout (chatter still streams to stderr).
+func outputEnvDir(dir string, env []string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir, cmd.Env = dir, env
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+// overrideEnv replaces (not appends) the given KEY=value entries in env — a duplicate
+// key appended after the original is undefined territory for getenv.
+func overrideEnv(env []string, kv ...string) []string {
+	out := env[:0:0]
+	for _, e := range env {
+		keep := true
+		for _, o := range kv {
+			if k, _, ok := strings.Cut(o, "="); ok && strings.HasPrefix(e, k+"=") {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, e)
+		}
+	}
+	return append(out, kv...)
 }
