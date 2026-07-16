@@ -104,6 +104,7 @@ type projSyncOpts struct {
 	tierSel  []string
 	force    bool     // overwrite differing files (loud) instead of skipping them
 	checksum bool     // classify by full checksum, not size+mtime (opt-in, expensive)
+	verify   bool     // after the push, sha256 each pushed file end-to-end (opt-in, reads both ends)
 	exclude  []string // extra excludes, stacked on the built-in junk set
 	yes      bool
 	dryRun   bool
@@ -171,7 +172,7 @@ func narrowTier(root, path string) (syncTier, error) {
 const fleetAuto = "@auto"
 
 func projectSyncCmd() *cobra.Command {
-	var yes, dryRun, force, checksum bool
+	var yes, dryRun, force, checksum, verify bool
 	var tierSel, exclude []string
 	var fleet string
 	c := &cobra.Command{
@@ -194,7 +195,7 @@ func projectSyncCmd() *cobra.Command {
 			"a full checksum. Shows the plan and confirms before transferring.",
 		Args: cobra.RangeArgs(0, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			o := projSyncOpts{tierSel: tierSel, force: force, checksum: checksum, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()}
+			o := projSyncOpts{tierSel: tierSel, force: force, checksum: checksum, verify: verify, exclude: exclude, yes: yes, dryRun: dryRun, verbose: render.IsVerbose()}
 			if fleet != "" {
 				// Fleet mode fans out over the node set; a positional is the optional path.
 				if len(args) > 0 {
@@ -223,6 +224,7 @@ func projectSyncCmd() *cobra.Command {
 	f.StringSliceVar(&tierSel, "tier", nil, "tiers to sync: sim, processed, raw (default: sim; raw → $HOME)")
 	f.BoolVarP(&force, "force", "f", false, "overwrite differing files instead of skipping them (loud)")
 	f.BoolVarP(&checksum, "checksum", "c", false, "compare by full checksum, not size+mtime (opt-in; reads both ends)")
+	f.BoolVar(&verify, "verify", false, "after the push, sha256 each pushed file end-to-end and confirm the remote matches (opt-in; reads both ends)")
 	f.StringArrayVar(&exclude, "exclude", nil, "extra rsync exclude pattern (repeatable; stacks on the built-in junk set)")
 	f.StringVar(&fleet, "fleet", "", "fan out to every node the project touches (bare = .mu-node markers or .mu-fleet; =a,b for an explicit list)")
 	f.Lookup("fleet").NoOptDefVal = fleetAuto
@@ -490,6 +492,13 @@ func syncShared(root string, o projSyncOpts) error {
 	msg := fmt.Sprintf("synced %d file(s) → %s", pushN, o.node)
 	render.OK(msg)
 	render.EventOK("project", msg)
+
+	// Opt-in end-to-end integrity check: rsync already verifies each file it transfers,
+	// so this is the paranoid confirmation for critical pushes — an independent sha256
+	// on both ends. Advisory: a mismatch warns loudly but the transfer already happened.
+	if o.verify {
+		verifyPushed(target, o.node, results, o.force)
+	}
 	return nil
 }
 
