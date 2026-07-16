@@ -52,9 +52,15 @@ func TestClassifyItemize(t *testing.T) {
 		"Number of files: 5",   // stats noise — ignored
 	}, "\n")
 
-	newN, updates := classifyItemize([]byte(out))
-	if newN != 2 {
-		t.Errorf("newN = %d, want 2", newN)
+	newPaths, updates := classifyItemize([]byte(out))
+	wantNew := []string{"a.nc", "sub/b.nc"}
+	if len(newPaths) != len(wantNew) {
+		t.Fatalf("newPaths = %v, want %v", newPaths, wantNew)
+	}
+	for i, n := range wantNew {
+		if newPaths[i] != n {
+			t.Errorf("newPaths[%d] = %q, want %q", i, newPaths[i], n)
+		}
 	}
 	wantUpd := []string{"c.nc", "d.nc"}
 	if len(updates) != len(wantUpd) {

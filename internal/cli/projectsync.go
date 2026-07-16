@@ -87,7 +87,8 @@ type syncResult struct {
 	rel        string
 	localAbs   string
 	remoteRoot string
-	newN       int
+	dest       string   // resolved absolute remote dir (for the storage pre-flight's quota match)
+	newPaths   []string // src-relative paths of the new files (their local bytes = the push size)
 	updates    []string
 }
 
@@ -403,14 +404,14 @@ func syncShared(root string, o projSyncOpts) error {
 		if derr != nil {
 			return derr
 		}
-		newN, updates, cerr := classifySync(target, t.localAbs, dest, o.checksum, syncExcludes(o.exclude))
+		newPaths, updates, cerr := classifySync(target, t.localAbs, dest, o.checksum, syncExcludes(o.exclude))
 		if cerr != nil {
 			return runErr("%s: classify %s: %s", o.node, t.rel, cerr)
 		}
-		results = append(results, syncResult{rel: t.rel, localAbs: t.localAbs, remoteRoot: t.remoteRoot, newN: newN, updates: updates})
-		totalNew += newN
+		results = append(results, syncResult{rel: t.rel, localAbs: t.localAbs, remoteRoot: t.remoteRoot, dest: dest, newPaths: newPaths, updates: updates})
+		totalNew += len(newPaths)
 		totalUpd += len(updates)
-		render.Detail(fmt.Sprintf("tier:    %s → %s/%s  (%d new, %d differ)", t.rel, t.remoteRoot, t.rel, newN, len(updates)))
+		render.Detail(fmt.Sprintf("tier:    %s → %s/%s  (%d new, %d differ)", t.rel, t.remoteRoot, t.rel, len(newPaths), len(updates)))
 	}
 
 	if totalUpd > 0 {
@@ -471,7 +472,7 @@ func syncShared(root string, o projSyncOpts) error {
 	// Transfer pass: one push per tier that has files to move — new files always,
 	// plus the differs when --force is set.
 	for _, res := range results {
-		move := res.newN
+		move := len(res.newPaths)
 		if o.force {
 			move += len(res.updates)
 		}
@@ -764,8 +765,8 @@ func pullItemize(target, srcAbs, destLocal string, update, checksum bool, exclud
 		}
 		return 0, nil, fmt.Errorf("%s", msg)
 	}
-	n, d := classifyItemize(out)
-	return n, d, nil
+	np, d := classifyItemize(out)
+	return len(np), d, nil
 }
 
 // pullResults transfers results/ from the remote src to the local dst, creating the local
@@ -838,7 +839,7 @@ func ensureRemoteDir(target, node, remoteRoot, rel string) (string, error) {
 // layer's -u (skip files newer on the receiver) can't hide a remote-newer file from the
 // differs report; the real transfer, which does inherit the env layer, only ever pushes
 // new files anyway (unless --force, which bypasses the env layer too).
-func classifySync(target, srcAbs, destAbs string, checksum bool, excludes []string) (newN int, updates []string, err error) {
+func classifySync(target, srcAbs, destAbs string, checksum bool, excludes []string) (newPaths, updates []string, err error) {
 	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
 	args := []string{"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec)}
 	if checksum {
@@ -857,18 +858,18 @@ func classifySync(target, srcAbs, destAbs string, checksum bool, excludes []stri
 		if msg == "" {
 			msg = rerr.Error()
 		}
-		return 0, nil, fmt.Errorf("%s", msg)
+		return nil, nil, fmt.Errorf("%s", msg)
 	}
-	newN, updates = classifyItemize(out)
-	return newN, updates, nil
+	newPaths, updates = classifyItemize(out)
+	return newPaths, updates, nil
 }
 
 // classifyItemize splits the raw output of `rsync --itemize-changes -n` into new and
-// differing regular files. A transferred file itemizes with leading '<' (sent — the
-// push case) or '>' (received — a pull); all-'+' attribute flags mean newly created
-// (new), anything else means it exists and differs (update). Non-file lines and
-// attr-only ('.') / dir-create ('c') lines are ignored.
-func classifyItemize(out []byte) (newN int, updates []string) {
+// differing regular files, returning each set's src-relative paths. A transferred file
+// itemizes with leading '<' (sent — the push case) or '>' (received — a pull); all-'+'
+// attribute flags mean newly created (new), anything else means it exists and differs
+// (update). Non-file lines and attr-only ('.') / dir-create ('c') lines are ignored.
+func classifyItemize(out []byte) (newPaths, updates []string) {
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // long paths
 	for sc.Scan() {
@@ -877,12 +878,12 @@ func classifyItemize(out []byte) (newN int, updates []string) {
 			continue
 		}
 		if item[2:] == "+++++++++" {
-			newN++
+			newPaths = append(newPaths, path)
 		} else {
 			updates = append(updates, path)
 		}
 	}
-	return newN, updates
+	return newPaths, updates
 }
 
 // parseItemize splits an `rsync --itemize-changes` line into its 11-char flag field
