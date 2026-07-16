@@ -69,7 +69,7 @@ func hpcUsageCmd() *cobra.Command {
 					}
 					return infos[i].System < infos[j].System
 				})
-				cacheCollatedAccounts(infos)
+				cacheCollatedUsage(infos)
 				if jsonOut {
 					return writeJSON(infos)
 				}
@@ -109,8 +109,11 @@ func hpcUsageCmd() *cobra.Command {
 			infos := parseUsageWithFY(out)
 			if live {
 				// The view is the refresh: every live listing restocks `mu config -i`'s
-				// account picker (names only — see acctcache.go).
+				// account picker (names only — see acctcache.go) and the submit pre-flight's
+				// hours cache (the whole rows, stamped — see usagecache.go), so a later
+				// `mu job sub` shows its allocation share without fetching again.
 				writeAcctCache(label, infos)
+				writeUsageCache(label, infos)
 			}
 			if len(infos) == 0 {
 				if out != "" {
@@ -153,15 +156,18 @@ func parseUsageWithFY(out string) []queue.UsageInfo {
 	return rows
 }
 
-// cacheCollatedAccounts restocks the account picker of every system a collate reached — the
-// rows already carry their System tag, so one fan-out refreshes the whole fleet at once.
-func cacheCollatedAccounts(infos []queue.UsageInfo) {
+// cacheCollatedUsage restocks every system a collate reached — both the account picker
+// (names) and the submit pre-flight's hours cache — from one fan-out. The rows already carry
+// their System tag, so grouping by it refreshes the whole fleet's caches at once, keyed by
+// the same node label a later `mu job sub` looks up.
+func cacheCollatedUsage(infos []queue.UsageInfo) {
 	bySystem := map[string][]queue.UsageInfo{}
 	for _, in := range infos {
 		bySystem[in.System] = append(bySystem[in.System], in)
 	}
 	for label, rows := range bySystem {
 		writeAcctCache(label, rows)
+		writeUsageCache(label, rows)
 	}
 }
 
