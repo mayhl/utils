@@ -317,6 +317,26 @@ func projectSync(o projSyncOpts) error {
 	return syncShared(root, o)
 }
 
+// anchorNote surfaces headless mode and the primary-cluster anchor in a sync plan.
+// In headless mode the primary cluster is the hub peers fan out FROM, so pushing
+// shared data from a non-anchor source risks diverging from it — we warn but proceed,
+// the same soft guard-not-whitelist shape as the case node-lock and the default-mode
+// laptop-hub warning. Silent off headless (the laptop-hub default needs no note).
+func anchorNote() {
+	if !config.Headless() {
+		return
+	}
+	primary := config.PrimaryCluster()
+	if primary == "" {
+		render.Detail("headless: on (no primary anchor — set [project] primary in config.toml)")
+		return
+	}
+	render.Detail("headless: on (primary " + primary + ")")
+	if self, _ := currentCluster(); self != "" && self != primary {
+		render.Warn(fmt.Sprintf("shared data is being pushed from %s, not the anchor %s — fan out from the anchor to avoid divergence", self, primary))
+	}
+}
+
 // syncShared pushes the project's SHARED-zone tiers for an already-resolved root — the
 // callable core behind `mu project sync` (root from cwd) and submit --clean's data leg
 // (root from the case's project). Additive + add-only, identical on both paths.
@@ -368,6 +388,7 @@ func syncShared(root string, o projSyncOpts) error {
 
 	render.Info("Sync shared data → " + o.node)
 	render.Detail("project: " + root)
+	anchorNote()
 
 	if err := hpc.EnsureTicket(); err != nil {
 		return runErr("%s", err)
