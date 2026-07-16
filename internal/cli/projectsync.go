@@ -414,6 +414,10 @@ func syncShared(root string, o projSyncOpts) error {
 		render.Detail(fmt.Sprintf("tier:    %s → %s/%s  (%d new, %d differ)", t.rel, t.remoteRoot, t.rel, len(newPaths), len(updates)))
 	}
 
+	// Advisory disk-quota pre-flight: how much the new files add vs each destination
+	// filesystem's headroom. Never blocks — soft warn only.
+	storagePreflight(o.node, results)
+
 	if totalUpd > 0 {
 		if o.force {
 			render.Warn(fmt.Sprintf("%d file(s) differ on %s and will be OVERWRITTEN (--force)", totalUpd, o.node))
