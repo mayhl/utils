@@ -97,6 +97,7 @@ func Generate() string {
 	b.WriteString(miseEnv())
 	b.WriteString(platformSeam())
 	b.WriteString(sharedTooling())
+	b.WriteString(clipTools())
 	b.WriteString(doctorCheckup())
 	b.WriteString(helper)
 	// Clear any stale same-named aliases (e.g. a leftover bare-node ssh alias from
@@ -247,6 +248,37 @@ func miseEnv() string {
   export MISE_ENV="${MISE_ENV:+$MISE_ENV,}hpc"
 fi
 case " $(printf '%s' "${MU_MODULES:-}" | tr ',' ' ') " in *" fmt "*) export MISE_ENV="${MISE_ENV:+$MISE_ENV,}fmt" ;; esac
+`
+}
+
+// clipTools emits the OSC 52 clipboard pair, portable sh (bash+zsh). The terminal
+// itself carries the copy back over SSH — no X11, no xclip, works from any login
+// node. mu_clip: args or stdin → local clipboard (tmux needs the DCS passthrough
+// wrap). mu_paste: OSC 52 reads are terminal-gated for security, so it leans on
+// kitty's kitten and errors elsewhere. pbcopy/pbpaste get defined only where the
+// real ones don't exist (mac muscle memory on the clusters). MU_CLIP_TTY overrides
+// the /dev/tty target (tests; no controlling terminal → fall back to stdout).
+func clipTools() string {
+	return `mu_clip() {
+  _mu_b64=$({ if [ $# -gt 0 ]; then printf '%s' "$*"; else cat; fi; } | base64 | tr -d '\n')
+  if [ -n "${TMUX:-}" ]; then
+    _mu_osc=$(printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$_mu_b64")
+  else
+    _mu_osc=$(printf '\033]52;c;%s\a' "$_mu_b64")
+  fi
+  printf '%s' "$_mu_osc" > "${MU_CLIP_TTY:-/dev/tty}" 2>/dev/null || printf '%s' "$_mu_osc"
+  unset _mu_b64 _mu_osc
+}
+mu_paste() {
+  if command -v kitten > /dev/null 2>&1; then
+    kitten clipboard --get-clipboard
+  else
+    echo "mu_paste: OSC 52 reads are terminal-gated — needs kitty's kitten" >&2
+    return 1
+  fi
+}
+command -v pbcopy > /dev/null 2>&1 || pbcopy() { mu_clip "$@"; }
+command -v pbpaste > /dev/null 2>&1 || pbpaste() { mu_paste "$@"; }
 `
 }
 

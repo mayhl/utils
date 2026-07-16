@@ -243,6 +243,40 @@ echo "NAG-LINE" > "$XDG_CACHE_HOME/mayhl_utils/doctor.notice"
 	}
 }
 
+// TestClipToolsExec runs the emitted mu_clip in real bash AND zsh and pins the exact
+// OSC 52 bytes — args and stdin forms, plus the tmux DCS passthrough wrap. The test
+// has no controlling terminal, so MU_CLIP_TTY routes the write to stdout.
+func TestClipToolsExec(t *testing.T) {
+	cases := []struct {
+		name string
+		env  []string
+		cmd  string
+		want string
+	}{
+		{"args", nil, `mu_clip x`, "\x1b]52;c;eA==\a"},
+		{"stdin", nil, `printf '%s' hello | mu_clip`, "\x1b]52;c;aGVsbG8=\a"},
+		{"tmux wrap", []string{"TMUX=1"}, `mu_clip x`, "\x1bPtmux;\x1b\x1b]52;c;eA==\a\x1b\\"},
+	}
+	for _, sh := range []string{"bash", "zsh"} {
+		p, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed — skipped", sh)
+			continue
+		}
+		for _, c := range cases {
+			cmd := exec.Command(p, "-c", clipTools()+c.cmd)
+			cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "MU_CLIP_TTY=/dev/stdout"}, c.env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s/%s: %v\n%q", sh, c.name, err, out)
+			}
+			if got := string(out); got != c.want {
+				t.Errorf("%s/%s: emitted %q, want %q", sh, c.name, got, c.want)
+			}
+		}
+	}
+}
+
 // TestMiseEnvExec evaluates the emitted MISE_ENV composition in real bash AND zsh
 // across the tier combos: hpc composes on an HPC box, is skipped when the mu-toolchain
 // module marker (MU_TOOLCHAIN) is set, fmt rides MU_MODULES, and a pre-set MISE_ENV
