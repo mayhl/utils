@@ -95,6 +95,9 @@ type file struct {
 		Primary            string `toml:"primary"`              // cross-cluster consistency anchor (node token); empty → no anchor
 		Headless           *bool  `toml:"headless"`             // laptop-less mode: primary is the hub; nil (omitted) → auto-detect
 	} `toml:"project"`
+	Job struct {
+		HoursWarn *int `toml:"hours_warn"` // submit pre-flight: warn when an estimate exceeds this many core-hours; nil → default, 0 → off
+	} `toml:"job"`
 	MirrorSets []MirrorSet `toml:"mirror_set"`
 	Clusters   []struct {
 		Name         string            `toml:"name"`
@@ -511,6 +514,18 @@ func Headless() bool {
 		return *f.Project.Headless
 	}
 	return os.Getenv("BC_HOST") != "" || os.Getenv("MU_SYSTEM") == "hpc"
+}
+
+// HoursWarn is the submit pre-flight threshold in core-hours (config.toml [job]
+// hours_warn): a job whose estimate exceeds it draws a soft warning before the
+// confirm. An omitted key takes the built-in default; an explicit 0 turns the
+// warning off (a site that never wants it), which is why the field is a pointer —
+// 0 and unset must differ.
+func HoursWarn() int {
+	if f := cfg(); f != nil && f.Job.HoursWarn != nil {
+		return *f.Job.HoursWarn
+	}
+	return 10000
 }
 
 // TarParentThreshold is the batch-put cutoff (config.toml [project]

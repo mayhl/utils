@@ -136,6 +136,39 @@ func TestHeadlessAutoDetect(t *testing.T) {
 	}
 }
 
+func TestHoursWarn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	t.Setenv("MU_CONFIG_FILE", path)
+
+	// Omitted → the built-in default.
+	if err := os.WriteFile(path, []byte("[job]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reset()
+	if HoursWarn() != 10000 {
+		t.Errorf("default HoursWarn = %d, want 10000", HoursWarn())
+	}
+
+	// An explicit 0 turns the warning off — distinct from omitted.
+	if err := os.WriteFile(path, []byte("[job]\nhours_warn = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reset()
+	if HoursWarn() != 0 {
+		t.Errorf("explicit-0 HoursWarn = %d, want 0", HoursWarn())
+	}
+
+	// A set value stands.
+	if err := os.WriteFile(path, []byte("[job]\nhours_warn = 5000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reset()
+	if HoursWarn() != 5000 {
+		t.Errorf("set HoursWarn = %d, want 5000", HoursWarn())
+	}
+}
+
 func TestNoConfigUsesDefaults(t *testing.T) {
 	// No config.toml (env encoding is retired) → empty clusters + built-in
 	// scalar defaults. MU_ROOT is cleared so the dev shell's real config.toml
