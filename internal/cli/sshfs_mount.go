@@ -34,7 +34,7 @@ func runMountBatch(names []string, verbose bool) int {
 		if verbose {
 			rc = runMount(name, true, "", false)
 		} else {
-			rc = runMount(name, false, fmt.Sprintf("Mounting %s  %d/%d", name, i, total), true)
+			rc = runMount(name, false, fmt.Sprintf("Mounting %s  %d/%d", name, i+1, total), true)
 		}
 		if rc != 0 {
 			failed++
@@ -152,7 +152,10 @@ func runMount(name string, verbose bool, spinLabel string, quiet bool) int {
 
 	switch sshfs.Status(name) {
 	case "mounted":
-		return 0 // already live — idempotent
+		// Idempotent, but never silent: a batch prints one line per name, so a skip
+		// here read as "the total clobbered my mount line".
+		render.OK(name + " already mounted")
+		return 0
 	case "hung":
 		render.Warn(name + ": stale mount — remounting")
 		if !sshfs.Umount(mdir) {
