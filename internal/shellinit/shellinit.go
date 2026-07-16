@@ -240,11 +240,13 @@ func configExports() string {
 //	shared mu-toolchain module provides it (its modulefile setenvs MU_TOOLCHAIN), so a
 //	per-user fmt opt-in never re-installs module-owned base+hpc.
 //	fmt — opt-in formatter/lint/DAP enforcement via MU_MODULES containing fmt.
+//	MU_MODULES is a space/comma list (the modules.Enabled contract) — normalize the
+//	commas so `fmt git` and `git,fmt` both match.
 func miseEnv() string {
 	return `if [ -z "${MU_TOOLCHAIN:-}" ] && { [ -n "${BC_HOST:-}" ] || [ "${MU_SYSTEM:-}" = "hpc" ]; }; then
   export MISE_ENV="${MISE_ENV:+$MISE_ENV,}hpc"
 fi
-case ",${MU_MODULES:-}," in *,fmt,*) export MISE_ENV="${MISE_ENV:+$MISE_ENV,}fmt" ;; esac
+case " $(printf '%s' "${MU_MODULES:-}" | tr ',' ' ') " in *" fmt "*) export MISE_ENV="${MISE_ENV:+$MISE_ENV,}fmt" ;; esac
 `
 }
 

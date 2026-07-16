@@ -259,6 +259,8 @@ func TestMiseEnvExec(t *testing.T) {
 		{"hpc via MU_SYSTEM", []string{"MU_SYSTEM=hpc"}, "hpc"},
 		{"module provides toolchain", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc"}, "none"},
 		{"fmt only under module", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc", "MU_MODULES=git,fmt"}, "fmt"},
+		{"fmt in a space list", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc", "MU_MODULES=fmt git"}, "fmt"},
+		{"fmt not a substring", []string{"BC_HOST=x", "MU_TOOLCHAIN=/opt/tc", "MU_MODULES=fmtx gitfmt"}, "none"},
 		{"hpc+fmt compose", []string{"BC_HOST=x", "MU_MODULES=fmt"}, "hpc,fmt"},
 		{"pre-set survives", []string{"MISE_ENV=pre", "BC_HOST=x"}, "pre,hpc"},
 	}
