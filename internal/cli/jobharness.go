@@ -69,8 +69,9 @@ func jobHarnessOpenCmd() *cobra.Command {
 		Short: "Open an interactive allocation inside a shared-socket tmux session (you authenticate).",
 		Long: "Like `mu job shell`, but the allocation runs inside a tmux session on the\n" +
 			"`mu-harness` socket, so you can drive the pane with `mu job harness run`\n" +
-			"while you stay attached. You authenticate in the pane; --dir pins the\n" +
-			"directory drive commands run in.\n\n" +
+			"while you stay attached. You authenticate in the pane; --dir starts the pane\n" +
+			"in that directory (submitting the allocation from it) and anchors driven commands\n" +
+			"there.\n\n" +
 			"    mu job harness open -N wheat -q standard --dir ~/proj",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -79,11 +80,11 @@ func jobHarnessOpenCmd() *cobra.Command {
 			if os.Getenv("MU_HARNESS_INNER") == "" {
 				return launchHarness(dir, harnessSession(o.node))
 			}
-			return runShellAlloc(&o)
+			return runShellAlloc(&o, dir)
 		},
 	}
 	addShellAllocFlags(c, &o)
-	c.Flags().StringVar(&dir, "dir", "", "directory drive commands run in (the anchor); default: the pane's pwd on first run")
+	c.Flags().StringVar(&dir, "dir", "", "starting directory for the pane (attach + interactive land here) and the anchor for driven commands; default: the pane's pwd on first run")
 	return c
 }
 
@@ -95,8 +96,9 @@ func jobHarnessLoginCmd() *cobra.Command {
 		Long: "Like `mu job harness open`, but the pane runs on the cluster's LOGIN node over\n" +
 			"`ssh -t` with no scheduler allocation — so it keeps the login node's internet egress\n" +
 			"for compiling and fetching dependencies a compute node can't reach. You authenticate\n" +
-			"in the pane; --dir pins the directory drive commands run in. Drive it with the\n" +
-			"`--login` form of the run/capture/attach verbs (session mu-login-<cluster>).\n\n" +
+			"in the pane; --dir starts the pane in that directory and anchors driven commands there.\n" +
+			"Drive it with the `--login` form of the run/capture/attach verbs (session\n" +
+			"mu-login-<cluster>).\n\n" +
 			"    mu job harness login -N wheat --dir ~/proj\n" +
 			"    mu job harness run --login wheat 'make'\n\n" +
 			"For compute (used with no internet), see `mu job harness open`. Front-door: `mlogin`.\n" +
@@ -108,11 +110,11 @@ func jobHarnessLoginCmd() *cobra.Command {
 			if os.Getenv("MU_HARNESS_INNER") == "" {
 				return launchHarness(dir, harnessLoginSession(node))
 			}
-			return loginInteractive(node)
+			return loginInteractive(node, dir)
 		},
 	}
 	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required)")
-	c.Flags().StringVar(&dir, "dir", "", "directory drive commands run in (the anchor); default: the pane's pwd on first run")
+	c.Flags().StringVar(&dir, "dir", "", "starting directory for the pane (attach + interactive land here) and the anchor for driven commands; default: the pane's pwd on first run")
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})

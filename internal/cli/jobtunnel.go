@@ -145,8 +145,10 @@ func addShellAllocFlags(c *cobra.Command, o *shellAlloc) {
 	})
 }
 
-// runShellAlloc runs the -i form (when asked) then hands off to the interactive allocation.
-func runShellAlloc(o *shellAlloc) error {
+// runShellAlloc runs the -i form (when asked) then hands off to the interactive allocation. dir,
+// when set (harness open --dir), submits the allocation from that directory so the pane lands
+// there; `mu job shell` passes "".
+func runShellAlloc(o *shellAlloc, dir string) error {
 	if o.interactive {
 		if !render.Interactive() {
 			return usageErr("needs a terminal (stdin is not a tty)")
@@ -174,7 +176,7 @@ func runShellAlloc(o *shellAlloc) error {
 		o.account, o.walltime, o.nodes = acct, wall, n
 		o.sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
 	}
-	return jobInteractive(o.node, o.account, o.walltime, o.nodes, &o.sel)
+	return jobInteractive(o.node, o.account, o.walltime, dir, o.nodes, &o.sel)
 }
 
 func jobShellCmd() *cobra.Command {
@@ -192,7 +194,7 @@ func jobShellCmd() *cobra.Command {
 			"    mu job shell -N hpc1 --debug",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runShellAlloc(&o)
+			return runShellAlloc(&o, "")
 		},
 	}
 	addShellAllocFlags(c, &o)
@@ -442,7 +444,7 @@ func waitRunning(capture func(string) (string, error), a queue.Adapter, schedule
 // jobInteractive replaces mu with `ssh -t <login> <qsub -I|salloc>` — the
 // scheduler's own interactive allocation under a real tty (RemoteExec is
 // tty-less by design, so this path builds its own ssh).
-func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) error {
+func jobInteractive(node, account, walltime, dir string, nodes int, sel *queueSel) error {
 	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
 	if err != nil {
 		return err
@@ -489,7 +491,15 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 		Account: account, Queue: part, QOS: qos, Walltime: wall, Name: jobName(newTunnelID()),
 		Nodes: nodes, CoresPerNode: queueCPN(label, queue_),
 	})
-	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
+	// --dir (harness open): submit the allocation FROM <dir> so the scheduler's submit dir is
+	// <dir>. SLURM's salloc keeps that cwd, so the pane lands in <dir>; PBS opens the interactive
+	// shell in $HOME but exports PBS_O_WORKDIR=<dir> (`cd $PBS_O_WORKDIR` gets you there, and the
+	// harness anchor already runs driven commands in <dir>).
+	launch := icmd
+	if dir != "" {
+		launch = "cd " + shell.Quote(dir) + " && " + icmd
+	}
+	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, launch))
 	ssh := config.SSHCommand()
 	// `bash -lc`, exactly as RemoteExec does it: ssh runs the command in the user's LOGIN
 	// SHELL WITHOUT LOGIN SEMANTICS, so /etc/profile.d never runs and the scheduler isn't on
@@ -499,7 +509,7 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 	//
 	// -q silences the client's pre-auth banner (the consent notice); the MOTD and the profile
 	// noise come down the pty instead, and allocView drops those.
-	cmd := exec.Command(ssh, "-q", "-t", target, "bash -lc "+shell.Quote(icmd))
+	cmd := exec.Command(ssh, "-q", "-t", target, "bash -lc "+shell.Quote(launch))
 	view := newAllocView(os.Stdout)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
 	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return the cursor to
@@ -586,7 +596,7 @@ func harnessLoginSession(node string) string { return "mu-login-" + sessionNode(
 // dependency) that a compute node lacks. The compute sibling is jobInteractive; this one drops
 // the qsub -I / salloc and hands you the login shell directly. Runs inside the harness pane
 // (MU_HARNESS_INNER), so you authenticate here, same as the compute path.
-func loginInteractive(node string) error {
+func loginInteractive(node, dir string) error {
 	if node == "" {
 		return usageErr("needs -N <cluster> — the login harness runs from the workstation")
 	}
@@ -602,7 +612,14 @@ func loginInteractive(node string) error {
 	// No remote command: `ssh -t` runs the user's login shell interactively, so /etc/profile
 	// (modules, PATH, any network proxy) is sourced — everything a compile needs. -q drops the
 	// pre-auth banner; allocView cleans the MOTD/profile noise the pty carries.
-	cmd := exec.Command(ssh, "-q", "-t", target)
+	sshArgs := []string{"-q", "-t", target}
+	if dir != "" {
+		// --dir: land the pane IN <dir> (so attach and interactive work start there, not just
+		// driven `run`), then exec the login shell so the profile is still sourced. A failed cd
+		// falls back to $HOME rather than killing the pane. exec so no wrapper shell lingers.
+		sshArgs = append(sshArgs, "cd "+shell.Quote(dir)+" 2>/dev/null || echo 'harness: --dir path not found on the login node — staying in $HOME' >&2; exec ${SHELL:-bash} -l")
+	}
+	cmd := exec.Command(ssh, sshArgs...)
 	view := newAllocView(os.Stdout)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
 	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return to column 0.
