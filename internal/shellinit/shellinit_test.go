@@ -43,16 +43,16 @@ nodes = ["node2"]
 			t.Errorf("missing export %q in:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "_mu_node() {") {
+	if !strings.Contains(out, "mu_node() {") {
 		t.Error("missing shared dispatcher helper")
 	}
 	// The dispatcher grammar (help arm, numbered-node selector) is verified
 	// behaviorally by TestDispatchExec, which runs the generated code — a text
 	// match here would just duplicate that, more brittly.
-	if !strings.Contains(out, `hpc2() { _mu_node hpc2 "alice@hpc2.alpha.example.mil" "$@"; }`) {
+	if !strings.Contains(out, `hpc2() { mu_node hpc2 "alice@hpc2.alpha.example.mil" "$@"; }`) {
 		t.Errorf("missing/wrong hpc2 wrapper:\n%s", out)
 	}
-	if !strings.Contains(out, `node2() { _mu_node node2 "alice@node2.beta.example.mil" "$@"; }`) {
+	if !strings.Contains(out, `node2() { mu_node node2 "alice@node2.beta.example.mil" "$@"; }`) {
 		t.Errorf("missing node2 wrapper:\n%s", out)
 	}
 	if strings.Contains(out, "hpc1()") {

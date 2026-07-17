@@ -47,13 +47,19 @@ import (
 // MU_SSH_STDERR_FILTER (default drops that message; process substitution keeps the
 // command's exit code and lets real errors through). TEMPORARY workaround for the
 // cluster's /etc/profile.d — see the dbus-filter note.
-const helper = `_mu_node_help() {
+//
+// No leading underscore on these two, and don't add one: to zsh a `_name` function is a
+// COMPLETION function, and tooling that snapshots-and-replays a shell filters them out on that
+// convention — which dropped the helper while keeping the dispatchers that call it, leaving
+// every node shortcut a `command not found`. They're plain helpers; they take the plain `mu_`
+// prefix the rest of the layer uses.
+const helper = `mu_node_help() {
   mu setup node-help "$1"
 }
-_mu_node() {
+mu_node() {
   local node=$1 target=$2; shift 2
   case ${1:-} in
-    -h|--help) _mu_node_help "$node" ;;
+    -h|--help) mu_node_help "$node" ;;
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
     mstat) shift; mu hpc queue --node "$node" "$@" ;;
@@ -109,7 +115,7 @@ func Generate() string {
 		fmt.Fprintf(&b, "unalias %s 2>/dev/null || :\n", strings.Join(nodes, " "))
 		b.WriteString("eval '\n")
 		for _, n := range nodes {
-			fmt.Fprintf(&b, "%s() { _mu_node %s \"%s\" \"$@\"; }\n", n, n, targets[n])
+			fmt.Fprintf(&b, "%s() { mu_node %s \"%s\" \"$@\"; }\n", n, n, targets[n])
 		}
 		b.WriteString("'\n")
 	}
