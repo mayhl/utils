@@ -10,7 +10,7 @@
 
 # Visible width of a string, ignoring ANSI SGR escapes. The trailing 'X'
 # sentinel protects any trailing spaces from command-substitution stripping.
-_mu_visible_len() {
+mu_visible_len() {
   local s esc
   esc=$(printf '\033')
   s=$(printf '%sX' "$1" | sed "s/${esc}\[[0-9;]*m//g")
@@ -28,7 +28,7 @@ mu_wrap() {
   cols=${COLUMNS:-$(tput cols 2> /dev/null || echo 80)}
   # guard against unset/zero/non-numeric COLUMNS (non-interactive shells)
   case $cols in '' | *[!0-9]* | 0) cols=80 ;; esac
-  plen=$(_mu_visible_len "$prefix")
+  plen=$(mu_visible_len "$prefix")
   twidth=$((cols - plen))
   [ "$twidth" -lt 20 ] && twidth=20
   indent=$(printf '%*s' "$plen" '')
