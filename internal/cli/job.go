@@ -352,14 +352,32 @@ func (s *queueSel) key() string {
 // true for `sub` (batch default belongs there), false for tunnel/shell (interactive
 // verbs stay on the scheduler default unless a flag says otherwise).
 func (s *queueSel) resolve(node, label string, bareDefault bool) (string, error) {
+	// A bad queue_flag misroutes even an explicit -q (-p vs --qos), so validate it first.
+	if err := checkQueueFlag(label); err != nil {
+		return "", err
+	}
 	if s.queue != "" {
 		return s.queue, nil
 	}
 	key := s.key()
 	if key == "" && !bareDefault {
+		// Interactive verbs opt out of the default to ride the scheduler's — but a qos-site has
+		// none, so an empty queue there is fatal rather than a fallback.
+		if queueRequired(label) {
+			return "", errNoDefaultQueue(label)
+		}
 		return "", nil
 	}
-	return resolveSubmitQueue(node, label, key)
+	q, err := resolveSubmitQueue(node, label, key)
+	if err != nil {
+		return "", err
+	}
+	// submit_queue.default unset on a qos-site → empty → the scheduler would reject the job with
+	// a raw "Invalid qos specification"; name the config fix here instead.
+	if q == "" && queueRequired(label) {
+		return "", errNoDefaultQueue(label)
+	}
+	return q, nil
 }
 
 // submitClasses maps a class-flag key to the node class the live fallback filters by.

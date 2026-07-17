@@ -179,6 +179,41 @@ func submitTarget(label, queueName string) (queue_, qos string) {
 	return queueName, ""
 }
 
+// queueRequired reports whether a site cannot submit without a queue name mu can supply. A
+// SLURM site that carries its queues as QOS values (queue_flag = "qos") keeps no usable default:
+// an empty queue emits no --qos and the scheduler rejects the job with "Invalid qos
+// specification". PBS and partition-SLURM sites keep a scheduler-side default (the routing queue
+// / default partition), so an empty queue there is legitimate — this must stay narrow, or it
+// would demand a queue where none is needed.
+func queueRequired(label string) bool {
+	return config.SchedulerFor(label) == "slurm" && config.QueueFlagFor(label) == "qos"
+}
+
+// errNoDefaultQueue names the exact config fix, rather than letting the empty queue reach the
+// scheduler and come back as a raw "Invalid qos specification" the user has to decode.
+func errNoDefaultQueue(label string) error {
+	return usageErr("%s carries its queues as QOS but no default is configured — set "+
+		`submit_queue = { default = "<queue>" } for %s in your mu config, or pass -q <queue>`,
+		label, label)
+}
+
+// checkQueueFlag rejects a queue_flag that is neither "qos" nor "partition". A typo like "quos"
+// otherwise degrades silently to the partition path — mu emits `-p <name>` where `--qos=<name>`
+// was meant, and the scheduler rejects it as an invalid partition. queue_flag is a SLURM-only
+// knob (PBS ignores it, so a stray value there is inert), so the check is scoped to SLURM to
+// avoid blocking a PBS submit over a field its scheduler never reads.
+func checkQueueFlag(label string) error {
+	if config.SchedulerFor(label) != "slurm" {
+		return nil
+	}
+	switch f := config.QueueFlagFor(label); f {
+	case "qos", "partition":
+		return nil
+	default:
+		return usageErr("%s has an invalid queue_flag %q in your mu config — use \"qos\" or \"partition\"", label, f)
+	}
+}
+
 // wallLeft is requested-minus-elapsed, as a human duration — the answer to "how much longer
 // does this tunnel have". The scheduler's own cells feed it, so the ADAPTER reads them: a
 // two-field cell is HH:MM on PBS but MM:SS on SLURM, and a dialect-blind parse got it wrong

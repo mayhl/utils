@@ -176,3 +176,97 @@ queue_flag = "qos"
 		t.Errorf("no queue at all stays empty, got %q/%q", q, qos)
 	}
 }
+
+// TestQueueConfigValidation locks the config-gap guards: a SLURM qos-site with no default queue
+// must fail with a NAMED fix rather than emit an empty --qos the scheduler rejects cryptically;
+// an invalid queue_flag must be caught on SLURM but stay inert on PBS; and partition / PBS sites
+// (which keep a scheduler-side default) must still accept an empty queue.
+func TestQueueConfigValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[[cluster]]
+name = "qsite"
+domain = "q.example.mil"
+scheduler = "slurm"
+nodes = ["qbare"]
+queue_flag = "qos"
+
+[[cluster]]
+name = "qsitedef"
+domain = "qd.example.mil"
+scheduler = "slurm"
+nodes = ["qdef"]
+queue_flag = "qos"
+submit_queue = { default = "standard" }
+
+[[cluster]]
+name = "psite"
+domain = "p.example.mil"
+scheduler = "slurm"
+nodes = ["pbare"]
+
+[[cluster]]
+name = "pbssite"
+domain = "b.example.mil"
+scheduler = "pbs"
+nodes = ["pbsbare"]
+
+[[cluster]]
+name = "badflag"
+domain = "x.example.mil"
+scheduler = "slurm"
+nodes = ["xbad"]
+queue_flag = "quos"
+
+[[cluster]]
+name = "pbsbadflag"
+domain = "pb.example.mil"
+scheduler = "pbs"
+nodes = ["pbsbad"]
+queue_flag = "quos"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", path)
+	config.ResetForTest()
+	defer config.ResetForTest()
+
+	// queueRequired: only a SLURM qos-site demands a queue.
+	for _, tc := range []struct {
+		node string
+		want bool
+	}{{"qbare", true}, {"qdef", true}, {"pbare", false}, {"pbsbare", false}} {
+		if got := queueRequired(tc.node); got != tc.want {
+			t.Errorf("queueRequired(%q) = %v, want %v", tc.node, got, tc.want)
+		}
+	}
+
+	// resolve with bareDefault=true, as sub/shell/tunnel/harness pass it.
+	if _, err := (&queueSel{}).resolve("qbare", "qbare", true); err == nil {
+		t.Error("qos-site with no default must error, not resolve to an empty queue")
+	}
+	if q, err := (&queueSel{}).resolve("qdef", "qdef", true); err != nil || q != "standard" {
+		t.Errorf("qos-site with a default = %q,%v; want standard,<nil>", q, err)
+	}
+	if q, err := (&queueSel{queue: "debug"}).resolve("qbare", "qbare", true); err != nil || q != "debug" {
+		t.Errorf("explicit -q on a qos-site = %q,%v; want debug,<nil>", q, err)
+	}
+	for _, node := range []string{"pbare", "pbsbare"} { // scheduler-side default → empty is fine
+		if q, err := (&queueSel{}).resolve(node, node, true); err != nil || q != "" {
+			t.Errorf("%s empty-default = %q,%v; want \"\",<nil>", node, q, err)
+		}
+	}
+
+	// checkQueueFlag: an invalid value errors on SLURM, stays inert (accepted) on PBS.
+	if err := checkQueueFlag("xbad"); err == nil {
+		t.Error("an invalid queue_flag on a SLURM site must be rejected")
+	}
+	if err := checkQueueFlag("pbsbad"); err != nil {
+		t.Errorf("queue_flag is inert on PBS — a stray value must not block: %v", err)
+	}
+	if err := checkQueueFlag("qbare"); err != nil {
+		t.Errorf("queue_flag=qos is valid: %v", err)
+	}
+}
