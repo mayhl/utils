@@ -31,6 +31,23 @@ func TestControlArgs(t *testing.T) {
 	}
 }
 
+// TestAmbientTransport: the rsync -e string carries the same control opts as RemoteExec
+// (one shared socket per target), and collapses to the plain transport when reuse is off.
+func TestAmbientTransport(t *testing.T) {
+	t.Setenv("MU_SSH_CONTROL_PERSIST", "")
+	got := AmbientTransport("u@host")
+	for _, want := range []string{"ControlMaster=auto", "ControlPath=" + controlPath("u@host"), "ControlPersist="} {
+		if !strings.Contains(got, want) {
+			t.Errorf("AmbientTransport() = %q, missing %q", got, want)
+		}
+	}
+
+	t.Setenv("MU_SSH_CONTROL_PERSIST", "0")
+	if got := AmbientTransport("u@host"); strings.Contains(got, "ControlMaster") {
+		t.Errorf("persist=0 must yield the plain transport, got %q", got)
+	}
+}
+
 // TestControlPath: the socket path is stable per target, distinct across targets, carries the
 // mu-cm marker, and stays well under the unix-socket path limit even for a long target.
 func TestControlPath(t *testing.T) {

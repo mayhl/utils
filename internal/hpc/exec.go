@@ -109,6 +109,19 @@ func controlPath(target string) string {
 	return filepath.Join(os.TempDir(), "mu-cm-"+hex.EncodeToString(h[:6]))
 }
 
+// AmbientTransport is the rsync -e ssh command that joins target's ambient ControlMaster:
+// the transfer becomes a channel on the same socket every RemoteExec call shares, so a
+// flow's exec round-trips and rsync legs all cost ONE auth. rsync splits -e on whitespace
+// itself (no shell), so the flags ride the string safely. Plain transport (fresh
+// connection per rsync, the old behavior) when reuse is off (MU_SSH_CONTROL_PERSIST=0).
+func AmbientTransport(target string) string {
+	t := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	if opts := controlArgs(target); len(opts) > 0 {
+		t += " " + strings.Join(opts, " ")
+	}
+	return t
+}
+
 // spinnerDelay is how long a remote call must run before the latency spinner
 // appears — long enough that a fast LAN/cached call never flickers one, short
 // enough to reassure on a slow login that mu isn't wedged.
