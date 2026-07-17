@@ -105,9 +105,16 @@ type tunnelState struct{ state, left string }
 // OUT of it has been pruned — the scheduler has no record of its job, so the job ended and
 // the record with it. A tunnel we couldn't judge (no scheduler configured, no ticket, an ssh
 // hiccup) is KEPT with state "?": an unanswered query is not proof the job is gone.
+//
+// Liveness comes from the queue LISTING, never a per-job detail — the same rule the staged
+// sweep follows (sweepStagedOn). `qstat -f <gone-id>` exits NON-ZERO, which is
+// indistinguishable from an ssh failure, so a detail query can report absence but can never
+// PROVE it: every ended job looked like a hiccup and was kept as "?" forever. Absence from a
+// SUCCESSFUL listing is the only sound proof, and the listing carries the state and the
+// walltime this table wants anyway.
 func tunnelStates(recs []tunnelRec) map[string]tunnelState {
 	out := make(map[string]tunnelState, len(recs))
-	// Group by system, preserving first-seen order so one detailCmd covers all its jobs.
+	// Group by system, preserving first-seen order so one listing covers all its jobs.
 	var order []string
 	bySystem := map[string][]tunnelRec{}
 	for _, t := range recs {
@@ -125,11 +132,8 @@ func tunnelStates(recs []tunnelRec) map[string]tunnelState {
 			}
 		}
 		scheduler := config.SchedulerFor(sys)
-		jobs := make([]string, len(group))
-		for i, t := range group {
-			jobs[i] = t.Job
-		}
-		cmd := detailCmd(scheduler, jobs)
+		// Your own jobs: mu submitted the tunnel job as you, so the default listing sees it.
+		cmd, parse := fetchSpec(scheduler, userSel{})
 		if cmd == "" {
 			keepUnknown() // no scheduler configured — can't judge
 			continue
@@ -150,21 +154,25 @@ func tunnelStates(recs []tunnelRec) map[string]tunnelState {
 		// Key results by BOTH full and short id: the id qsub returned ("1284575.sdb") can
 		// carry a different host suffix than qstat echoes ("1284575.hpc1"), so match on the
 		// suffix-free segment too. SLURM ids have no suffix, so both keys coincide.
-		byJob := map[string]queue.JobDetail{}
-		for _, d := range queue.ParseDetails(scheduler, raw) {
-			byJob[d.ID] = d
-			byJob[d.ShortID] = d
+		byJob := map[string]queue.Job{}
+		for _, j := range parse(raw) {
+			byJob[j.ID] = j
+			byJob[j.ShortID] = j
 		}
 		for _, t := range group {
-			d, ok := byJob[t.Job]
+			j, ok := byJob[t.Job]
 			if !ok {
-				d, ok = byJob[jobShort(t.Job)]
+				j, ok = byJob[jobShort(t.Job)]
 			}
 			if !ok {
-				forgetTunnel(t) // the scheduler has no record of it — the job is gone
+				forgetTunnel(t) // absent from a listing that WORKED — the job is gone
 				continue
 			}
-			out[t.ID] = tunnelState{state: d.State, left: wallLeft(d.ReqWall, d.Elapsed)}
+			state := j.State.String()
+			if j.State == queue.Unknown {
+				state = strings.TrimSpace(j.RawState) // show the raw code rather than hide it
+			}
+			out[t.ID] = tunnelState{state: state, left: wallLeft(j.ReqWall, j.Elapsed)}
 		}
 	}
 	return out
