@@ -527,7 +527,7 @@ func pushTier(target string, res syncResult, o projSyncOpts) error {
 	excludes := syncExcludes(o.exclude)
 	var args []string
 	if o.force {
-		transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+		transport := hpc.AmbientTransport(target)
 		// -a only (no -u): overwrite regardless of transfer direction. --partial-dir
 		// matches rsync.partialDir, keeping resumable partials out of the dest tree.
 		args = []string{"-a", "--partial-dir=.rsync-partial"}
@@ -539,7 +539,7 @@ func pushTier(target string, res syncResult, o projSyncOpts) error {
 		}
 		args = append(args, "-e", transport, src, dst)
 	} else {
-		args = rsync.BuildArgs(src, dst, rsync.Opts{PartialDir: true, Checksum: o.checksum, Exclude: excludes, Ropt: []string{"--ignore-existing"}})
+		args = rsync.BuildArgs(src, dst, rsync.Opts{PartialDir: true, Checksum: o.checksum, Exclude: excludes, Ropt: []string{"--ignore-existing"}, Transport: hpc.AmbientTransport(target)})
 	}
 	code, _ := rsync.Run(args, label, o.verbose)
 	if code != 0 {
@@ -763,7 +763,7 @@ func classifyPull(target, srcAbs, destLocal string, checksum bool, excludes []st
 // checksum swaps the size+mtime quick-check for a full compare. Args are hand-built (not
 // BuildArgs) so -u is explicit, never inherited from the env opts.
 func pullItemize(target, srcAbs, destLocal string, update, checksum bool, excludes []string) (newN int, differs []string, err error) {
-	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	transport := hpc.AmbientTransport(target)
 	args := []string{"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec)}
 	if update {
 		args = append(args, "-u")
@@ -798,7 +798,7 @@ func pullResults(target, remoteSrc, localDst, label string, o projSyncOpts) erro
 	if err := os.MkdirAll(localDst, 0o755); err != nil {
 		return runErr("staging local dir: %s", err)
 	}
-	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	transport := hpc.AmbientTransport(target)
 	args := []string{"-a", "--partial-dir=.rsync-partial"}
 	if !o.force {
 		args = append(args, "-u")
@@ -861,7 +861,7 @@ func ensureRemoteDir(target, node, remoteRoot, rel string) (string, error) {
 // differs report; the real transfer, which does inherit the env layer, only ever pushes
 // new files anyway (unless --force, which bypasses the env layer too).
 func classifySync(target, srcAbs, destAbs string, checksum bool, excludes []string) (newPaths, updates []string, err error) {
-	transport := strings.TrimSpace(config.SSHCommand() + " " + config.SSHTransferOpts())
+	transport := hpc.AmbientTransport(target)
 	args := []string{"-a", "-i", "-n", fmt.Sprintf("--modify-window=%d", mtimeWindowSec)}
 	if checksum {
 		args = append(args, "-c") // full checksum compare, not size+mtime (opt-in, expensive)

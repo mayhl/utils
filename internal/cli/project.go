@@ -223,7 +223,9 @@ func projectSubmit(node, caseDir, script, account, queue_ string, yes, dryRun, v
 			return err
 		}
 	} else {
-		o := rsync.Opts{Delete: !keep, PartialDir: true}
+		// Rides the ambient master the legs on either side already share, so staging
+		// doesn't authenticate a connection of its own between them.
+		o := rsync.Opts{Delete: !keep, PartialDir: true, Transport: hpc.AmbientTransport(target)}
 		if !keep {
 			o.Ropt = stageProtect
 		}
