@@ -332,6 +332,7 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	if err != nil {
 		return tunnelErr(aborted, "%s", err)
 	}
+	runningAt := time.Now()
 	render.OK(fmt.Sprintf("job %s running on %s", jobID, host))
 
 	if err := mux.Forward(localPort, host, port); err != nil {
@@ -340,7 +341,8 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 
 	rec := tunnelRec{
 		ID: id, System: node, Job: jobID, Host: host, Target: target, Sock: mux.Sock(),
-		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: remoteScript, Staged: push, Started: startedAt,
+		LocalPort: localPort, RemotePort: port, Walltime: wall, Script: remoteScript, Staged: push,
+		Started: startedAt, Running: runningAt,
 	}
 	if err := saveTunnel(rec); err != nil {
 		// The tunnel is up; we just can't track it. Say so rather than tear down working work.

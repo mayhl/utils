@@ -39,6 +39,12 @@ type tunnelRec struct {
 	Script     string    `json:"script"`      // "" in adopt mode; the staged path when Staged
 	Staged     bool      `json:"staged"`      // mu pushed Script here, so `close` removes it
 	Started    time.Time `json:"started"`
+	// Running is when the job reached R, which is when its walltime clock starts — Started is
+	// the submit, and the queue wait between them can be long. Only this one dates the job's
+	// death (see expired); zero on records written before it existed, and in adopt mode it's
+	// when MU saw the job running, not when it started, so it dates the death LATE. Late is the
+	// safe direction: a live tunnel is never mistaken for a corpse.
+	Running time.Time `json:"running,omitempty"`
 }
 
 // jobName is what mu-created ephemeral jobs (tunnel, shell) wear in the queue: mu-<id>,
