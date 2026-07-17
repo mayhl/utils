@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mayhl/mayhl_utils/internal/queue"
 )
 
 // TestTunnelRegistry: a tunnel survives the round trip, is findable by bare or qualified job
@@ -174,17 +176,27 @@ func TestJobShort(t *testing.T) {
 	}
 }
 
-// TestWallLeft: requested minus elapsed, degrading to "" when a field is unparseable.
+// TestWallLeft: requested minus elapsed, read through the scheduler's own adapter. The
+// two-field cases are the whole point — the same "10:00" is HH:MM on PBS and MM:SS on SLURM,
+// so the answer diverges by dialect; a blank/UNLIMITED field degrades to "".
 func TestWallLeft(t *testing.T) {
-	for _, tc := range []struct{ req, el, want string }{
-		{"01:00:00", "00:20:00", "00:40:00"},
-		{"48:00:00", "01:30:00", "46:30:00"},
-		{"01:00:00", "02:00:00", "0s"}, // over — clamp, don't go negative
-		{"", "00:10:00", ""},           // scheduler left walltime blank
-		{"01:00:00", "UNLIMITED", ""},  // a form ParseWalltime doesn't read
+	for _, tc := range []struct {
+		sched, req, el, want string
+	}{
+		// HH:MM:SS parses the same either way.
+		{"slurm", "01:00:00", "00:20:00", "00:40:00"},
+		{"pbs", "48:00:00", "01:30:00", "46:30:00"},
+		{"slurm", "01:00:00", "02:00:00", "0s"}, // over — clamp, don't go negative
+		// Two-field forms diverge: this is the bug the dialect-aware reader fixes.
+		{"slurm", "10:00", "09:47", "00:00:13"},         // SLURM MM:SS: 10m − 9m47s = 13s
+		{"pbs", "24:00", "06:14", "17:46:00"},           // PBS HH:MM: 24h − 6h14m
+		{"slurm", "1-00:00:00", "06:14:32", "17:45:28"}, // SLURM day form
+		// Degradation.
+		{"slurm", "", "00:10:00", ""},        // scheduler left walltime blank
+		{"pbs", "01:00:00", "UNLIMITED", ""}, // not a clock
 	} {
-		if got := wallLeft(tc.req, tc.el); got != tc.want {
-			t.Errorf("wallLeft(%q,%q) = %q, want %q", tc.req, tc.el, got, tc.want)
+		if got := wallLeft(queue.For(tc.sched), tc.req, tc.el); got != tc.want {
+			t.Errorf("wallLeft(%s, %q, %q) = %q, want %q", tc.sched, tc.req, tc.el, got, tc.want)
 		}
 	}
 }

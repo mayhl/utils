@@ -160,11 +160,16 @@ func submitTarget(label, queueName string) (queue_, qos string) {
 }
 
 // wallLeft is requested-minus-elapsed, as a human duration — the answer to "how much longer
-// does this tunnel have". "" when either side didn't parse (the scheduler left a field blank
-// or gave a form ParseWalltime doesn't read), so the column degrades rather than lying.
-func wallLeft(reqWall, elapsed string) string {
-	req, ok1 := queue.ParseWalltime(strings.TrimSpace(reqWall))
-	el, ok2 := queue.ParseWalltime(strings.TrimSpace(elapsed))
+// does this tunnel have". The scheduler's own cells feed it, so the ADAPTER reads them: a
+// two-field cell is HH:MM on PBS but MM:SS on SLURM, and a dialect-blind parse got it wrong
+// (or, when it rejected the form outright, blanked the column). "" when either side doesn't
+// parse — a genuinely blank/UNLIMITED field — so the column degrades rather than lying.
+func wallLeft(a queue.Adapter, reqWall, elapsed string) string {
+	if a == nil {
+		return ""
+	}
+	req, ok1 := a.ParseDuration(reqWall)
+	el, ok2 := a.ParseDuration(elapsed)
 	if !ok1 || !ok2 {
 		return ""
 	}

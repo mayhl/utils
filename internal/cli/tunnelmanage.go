@@ -172,7 +172,7 @@ func tunnelStates(recs []tunnelRec) map[string]tunnelState {
 			if j.State == queue.Unknown {
 				state = strings.TrimSpace(j.RawState) // show the raw code rather than hide it
 			}
-			out[t.ID] = tunnelState{state: state, left: wallLeft(j.ReqWall, j.Elapsed)}
+			out[t.ID] = tunnelState{state: state, left: wallLeft(queue.For(scheduler), j.ReqWall, j.Elapsed)}
 		}
 	}
 	return out

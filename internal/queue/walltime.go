@@ -90,3 +90,72 @@ func NormalizeWalltime(s string) (string, bool) {
 	}
 	return FormatWalltime(sec), true
 }
+
+// parsePBSDuration reads a PBS qstat time cell into seconds. The wide format prints Req'd
+// Time as HH:MM and Elapsed as HH:MM:SS, so a two-field cell is HOURS:MINUTES — the opposite
+// of SLURM, where two fields are minutes:seconds. This is why the reader must know the
+// dialect: "24:00" is 24 hours here and 24 minutes there.
+func parsePBSDuration(s string) (int, bool) {
+	f, ok := clockFields(s)
+	if !ok {
+		return 0, false
+	}
+	switch len(f) {
+	case 2: // HH:MM
+		return f[0]*3600 + f[1]*60, true
+	case 3: // HH:MM:SS
+		return f[0]*3600 + f[1]*60 + f[2], true
+	}
+	return 0, false
+}
+
+// parseSLURMDuration reads a squeue time cell into seconds. squeue picks the SHORTEST form
+// that fits the magnitude: MM:SS under an hour, HH:MM:SS under a day, D-HH:MM:SS beyond — so
+// a two-field cell is MINUTES:SECONDS, and a leading "D-" adds whole days. A non-clock value
+// (UNLIMITED, N/A, NOT_SET, a blank) is not a duration and returns not-ok, so the column
+// degrades rather than inventing a number.
+func parseSLURMDuration(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	days := 0
+	if i := strings.IndexByte(s, '-'); i > 0 { // D-HH:MM:SS
+		d, err := strconv.Atoi(s[:i])
+		if err != nil || d < 0 {
+			return 0, false
+		}
+		days, s = d, s[i+1:]
+	}
+	f, ok := clockFields(s)
+	if !ok {
+		return 0, false
+	}
+	switch {
+	case days > 0 && len(f) == 3: // D-HH:MM:SS — the day form is always full
+		return days*86400 + f[0]*3600 + f[1]*60 + f[2], true
+	case days > 0:
+		return 0, false // a day prefix without a full HH:MM:SS is malformed
+	case len(f) == 2: // MM:SS
+		return f[0]*60 + f[1], true
+	case len(f) == 3: // HH:MM:SS
+		return f[0]*3600 + f[1]*60 + f[2], true
+	}
+	return 0, false
+}
+
+// clockFields splits a colon clock into its integer fields (2 or 3), rejecting anything
+// non-numeric — so UNLIMITED, N/A and a blank cell fall through instead of parsing as zero.
+func clockFields(s string) ([]int, bool) {
+	s = strings.TrimSpace(s)
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return nil, false
+	}
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		out[i] = n
+	}
+	return out, true
+}

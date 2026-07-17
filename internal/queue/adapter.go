@@ -24,6 +24,7 @@ type Adapter interface {
 	SubmitCmd(script string, o SubmitOpts) string
 	InteractiveCmd(o SubmitOpts) string // interactive allocation (qsub -I / salloc) — run under a tty
 	Directives(o SubmitOpts) []string   // header lines (#PBS / #SBATCH) for preview + templates
+	ParseDuration(s string) (int, bool) // read a scheduler time cell into seconds — DIALECT-SPECIFIC
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
@@ -186,6 +187,8 @@ func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
 
 func (pbsAdapter) InteractiveCmd(o SubmitOpts) string { return "qsub -I" + pbsOpts(o) }
 
+func (pbsAdapter) ParseDuration(s string) (int, bool) { return parsePBSDuration(s) }
+
 // Directives renders the #PBS header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
 func (pbsAdapter) Directives(o SubmitOpts) []string {
@@ -287,6 +290,8 @@ func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 }
 
 func (slurmAdapter) InteractiveCmd(o SubmitOpts) string { return "salloc" + slurmOpts(o) }
+
+func (slurmAdapter) ParseDuration(s string) (int, bool) { return parseSLURMDuration(s) }
 
 // Directives renders the #SBATCH header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
