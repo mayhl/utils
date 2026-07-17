@@ -518,26 +518,28 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 // tmux client sees the same server the allocation runs in.
 const harnessSocket = "mu-harness"
 
-// launchHarness re-execs THIS `mu job harness open` invocation inside a tmux session on the
-// shared socket, so a separate tmux client can drive the compute-node pane via
-// `mu job harness run` while the owner stays attached and authenticates. mu owns only the
-// setup — no ssh or pkinit runs on the driver side. The inner run carries MU_HARNESS_INNER, which
-// the open verb reads to skip this wrap and proceed to the real allocation. dir, when given,
-// pins the drive anchor now (before the pane exists to pwd).
-func launchHarness(node, dir string) error {
+// launchHarness re-execs THIS `mu job harness {open,login}` invocation inside a tmux session on
+// the shared socket, so a separate tmux client can drive the pane via `mu job harness run` while
+// the owner stays attached and authenticates. mu owns only the setup — no ssh or pkinit runs on
+// the driver side. The inner run carries MU_HARNESS_INNER, which the open/login verb reads to skip
+// this wrap and proceed to the real session. session is the tmux name (mu-shell-<id> for compute,
+// mu-login-<id> for a login node); dir, when given, pins the drive anchor now (before the pane
+// exists to pwd).
+func launchHarness(dir, session string) error {
 	// new-session attaches THIS terminal (you authenticate in the pane), so it needs a real
 	// tty — a pipe or a non-interactive prompt makes tmux fail with a cryptic "not a terminal".
 	if !render.Interactive() {
-		return usageErr("`mu job harness open` needs a real terminal (you authenticate in the pane) — run it in your shell, not through a pipe or a non-interactive prompt")
+		return usageErr("this harness needs a real terminal (you authenticate in the pane) — run it in your shell, not through a pipe or a non-interactive prompt")
 	}
 	tmuxBin, err := harnessTmux()
 	if err != nil {
 		return err
 	}
-	name := harnessSession(node)
-	// Don't clobber a live allocation of the same name — send the owner to it instead.
-	if harnessHasSession(tmuxBin, name) {
-		return usageErr("harness session %q is already open — `mu job harness attach %s`", name, node)
+	// Don't clobber a live session of the same name — send the owner to it instead. The full
+	// session name is a valid drive id (resolveHarnessSession accepts it verbatim), so the hints
+	// stay correct for both the compute and login kinds without special-casing.
+	if harnessHasSession(tmuxBin, session) {
+		return usageErr("harness session %q is already open — `mu job harness attach %s`", session, session)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -550,12 +552,12 @@ func launchHarness(node, dir string) error {
 		inner += " " + shell.Quote(a)
 	}
 	if dir != "" {
-		if err := writeHarnessAnchor(name, dir); err != nil {
+		if err := writeHarnessAnchor(session, dir); err != nil {
 			return runErr("cannot save anchor: %s", err)
 		}
 	}
-	render.Info(fmt.Sprintf("harness: opening tmux session %q — drive with `mu job harness run %s <cmd>`, watch with `mu job harness attach %s`", name, node, node))
-	tc := exec.Command(tmuxBin, "-L", harnessSocket, "new-session", "-s", name, inner)
+	render.Info(fmt.Sprintf("harness: opening tmux session %q — drive with `mu job harness run %s <cmd>`, watch with `mu job harness attach %s`", session, session, session))
+	tc := exec.Command(tmuxBin, "-L", harnessSocket, "new-session", "-s", session, inner)
 	tc.Stdin, tc.Stdout, tc.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// Drop TMUX so this attaches cleanly even when launched from inside another tmux: it runs on
 	// its own socket, but tmux still refuses a nested ATTACH while $TMUX is set.
@@ -563,14 +565,55 @@ func launchHarness(node, dir string) error {
 	return tc.Run()
 }
 
-// harnessSession derives a tmux-safe session name from the target (tmux forbids ':' and '.').
-func harnessSession(node string) string {
+// sessionNode sanitizes a target into a tmux-safe suffix (tmux forbids ':' and '.').
+func sessionNode(node string) string {
 	n := node
 	if n == "" {
 		n = "hpc"
 	}
-	n = strings.NewReplacer(":", "-", ".", "-").Replace(n)
-	return "mu-shell-" + n
+	return strings.NewReplacer(":", "-", ".", "-").Replace(n)
+}
+
+// harnessSession derives the COMPUTE harness session name for a target.
+func harnessSession(node string) string { return "mu-shell-" + sessionNode(node) }
+
+// harnessLoginSession derives the LOGIN-node harness session name — distinct from the compute
+// name (mu-shell-<id>) so a compile-on-login and a run-on-compute harness coexist per cluster.
+func harnessLoginSession(node string) string { return "mu-login-" + sessionNode(node) }
+
+// loginInteractive opens an interactive shell on the cluster's LOGIN node over `ssh -t` — no
+// scheduler, so the pane keeps the login node's internet egress (compiling, fetching a
+// dependency) that a compute node lacks. The compute sibling is jobInteractive; this one drops
+// the qsub -I / salloc and hands you the login shell directly. Runs inside the harness pane
+// (MU_HARNESS_INNER), so you authenticate here, same as the compute path.
+func loginInteractive(node string) error {
+	if node == "" {
+		return usageErr("needs -N <cluster> — the login harness runs from the workstation")
+	}
+	target, err := hpc.Resolve(node)
+	if err != nil {
+		return usageErr("%s", err)
+	}
+	if err := hpc.EnsureTicket(); err != nil {
+		return runErr("%s", err)
+	}
+	render.Info(fmt.Sprintf("login-node shell on %s (internet egress; no allocation)", target))
+	ssh := config.SSHCommand()
+	// No remote command: `ssh -t` runs the user's login shell interactively, so /etc/profile
+	// (modules, PATH, any network proxy) is sourced — everything a compile needs. -q drops the
+	// pre-auth banner; allocView cleans the MOTD/profile noise the pty carries.
+	cmd := exec.Command(ssh, "-q", "-t", target)
+	view := newAllocView(os.Stdout)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
+	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return to column 0.
+	render.SetCRLF(true)
+	defer render.SetCRLF(false)
+	err = cmd.Run()
+	view.flush()
+	if err != nil && !strings.Contains(err.Error(), "signal:") {
+		return runErr("login session: %s", err)
+	}
+	return nil
 }
 
 // envWithout returns env with every VAR=... entry whose name is in drop removed.

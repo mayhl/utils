@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mayhl/mayhl_utils/internal/hpc"
 	"github.com/mayhl/mayhl_utils/internal/render"
 	"github.com/mayhl/mayhl_utils/internal/shell"
 )
@@ -46,14 +47,17 @@ func jobHarnessCmd() *cobra.Command {
 		Long: "Run commands in, and read output from, the tmux session `mu job harness open`\n" +
 			"created on the shared `mu-harness` socket. These verbs touch only local tmux — no ssh,\n" +
 			"no pkinit — so you can drive the pane from a script while you stay attached.\n\n" +
-			"    mu job harness open -N wheat -q standard      # you open it (authenticate)\n" +
-			"    mu job harness run wheat 'make'               # then drive it\n" +
-			"    mu job harness capture wheat                  # read the pane\n\n" +
-			"<id> is the cluster (→ session mu-shell-<cluster>) or a full session name; see\n" +
-			"`mu job harness ls`. Front-door: `mharness <id> <cmd>` = `mu job harness run`.",
+			"    mu job harness open -N wheat -q standard      # compute node (authenticate)\n" +
+			"    mu job harness login -N wheat                 # login node: internet, no queue\n" +
+			"    mu job harness run wheat 'make'               # drive the compute pane\n" +
+			"    mu job harness run --login wheat 'make'       # drive the login pane\n\n" +
+			"<id> is the cluster (compute → mu-shell-<cluster>; --login → mu-login-<cluster>) or a\n" +
+			"full session name; see `mu job harness ls`. A login pane keeps the login node's internet\n" +
+			"egress for compiling/fetching that a compute node lacks — the two coexist per cluster.\n" +
+			"Front-door: `mharness <id> <cmd>` = `mu job harness run`; `mlogin <id>` = login open.",
 		Args: cobra.NoArgs,
 	}
-	c.AddCommand(jobHarnessOpenCmd(), jobHarnessRunCmd(), jobHarnessCaptureCmd(), jobHarnessAttachCmd(), jobHarnessLsCmd(), jobHarnessPinCmd())
+	c.AddCommand(jobHarnessOpenCmd(), jobHarnessLoginCmd(), jobHarnessRunCmd(), jobHarnessCaptureCmd(), jobHarnessAttachCmd(), jobHarnessLsCmd(), jobHarnessPinCmd())
 	return c
 }
 
@@ -73,7 +77,7 @@ func jobHarnessOpenCmd() *cobra.Command {
 			// Outer run: re-exec THIS invocation inside tmux. The inner (MU_HARNESS_INNER set)
 			// falls through to the normal allocation in the pane.
 			if os.Getenv("MU_HARNESS_INNER") == "" {
-				return launchHarness(o.node, dir)
+				return launchHarness(dir, harnessSession(o.node))
 			}
 			return runShellAlloc(&o)
 		},
@@ -83,10 +87,42 @@ func jobHarnessOpenCmd() *cobra.Command {
 	return c
 }
 
+func jobHarnessLoginCmd() *cobra.Command {
+	var node, dir string
+	c := &cobra.Command{
+		Use:   "login",
+		Short: "Open a login-node shell inside a shared-socket tmux session (internet egress, no scheduler).",
+		Long: "Like `mu job harness open`, but the pane runs on the cluster's LOGIN node over\n" +
+			"`ssh -t` with no scheduler allocation — so it keeps the login node's internet egress\n" +
+			"for compiling and fetching dependencies a compute node can't reach. You authenticate\n" +
+			"in the pane; --dir pins the directory drive commands run in. Drive it with the\n" +
+			"`--login` form of the run/capture/attach verbs (session mu-login-<cluster>).\n\n" +
+			"    mu job harness login -N wheat --dir ~/proj\n" +
+			"    mu job harness run --login wheat 'make'\n\n" +
+			"For compute (used with no internet), see `mu job harness open`. Front-door: `mlogin`.\n" +
+			"NOTE: for compile/fetch only — running compute here violates login-node policy.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// Outer run: re-exec THIS invocation inside tmux. The inner (MU_HARNESS_INNER set)
+			// falls through to the login-node ssh in the pane.
+			if os.Getenv("MU_HARNESS_INNER") == "" {
+				return launchHarness(dir, harnessLoginSession(node))
+			}
+			return loginInteractive(node)
+		},
+	}
+	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required)")
+	c.Flags().StringVar(&dir, "dir", "", "directory drive commands run in (the anchor); default: the pane's pwd on first run")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
+	return c
+}
+
 func jobHarnessRunCmd() *cobra.Command {
 	var timeout time.Duration
 	var dir string
-	var allowAbs bool
+	var allowAbs, login bool
 	c := &cobra.Command{
 		Use:   "run <id> <cmd>...",
 		Short: "Send a command to the pane, wait, print its output, and pass through its exit code.",
@@ -96,7 +132,7 @@ func jobHarnessRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			session, err := resolveHarnessSession(tmuxBin, args[0])
+			session, err := resolveHarnessSession(tmuxBin, args[0], login)
 			if err != nil {
 				return err
 			}
@@ -127,11 +163,13 @@ func jobHarnessRunCmd() *cobra.Command {
 	c.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "how long to wait for the command to finish before giving up")
 	c.Flags().StringVar(&dir, "dir", "", "anchor directory for this and later runs (default: the pane's pwd, pinned on first run)")
 	c.Flags().BoolVar(&allowAbs, "allow-abs", false, "permit an absolute path / ~ / .. in the command (also MUH_ALLOW_ABS=1)")
+	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
 	return c
 }
 
 func jobHarnessCaptureCmd() *cobra.Command {
-	return &cobra.Command{
+	var login bool
+	c := &cobra.Command{
 		Use:   "capture <id>",
 		Short: "Print the harness pane (what the owner sees).",
 		Args:  cobra.ExactArgs(1),
@@ -140,7 +178,7 @@ func jobHarnessCaptureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			session, err := resolveHarnessSession(tmuxBin, args[0])
+			session, err := resolveHarnessSession(tmuxBin, args[0], login)
 			if err != nil {
 				return err
 			}
@@ -152,10 +190,13 @@ func jobHarnessCaptureCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
+	return c
 }
 
 func jobHarnessAttachCmd() *cobra.Command {
-	return &cobra.Command{
+	var login bool
+	c := &cobra.Command{
 		Use:   "attach <id>",
 		Short: "Attach your terminal to the harness pane (detach with C-b d).",
 		Args:  cobra.ExactArgs(1),
@@ -164,7 +205,7 @@ func jobHarnessAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			session, err := resolveHarnessSession(tmuxBin, args[0])
+			session, err := resolveHarnessSession(tmuxBin, args[0], login)
 			if err != nil {
 				return err
 			}
@@ -179,6 +220,8 @@ func jobHarnessAttachCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
+	return c
 }
 
 func jobHarnessLsCmd() *cobra.Command {
@@ -210,7 +253,8 @@ func jobHarnessLsCmd() *cobra.Command {
 }
 
 func jobHarnessPinCmd() *cobra.Command {
-	return &cobra.Command{
+	var login bool
+	c := &cobra.Command{
 		Use:   "pin <id> [dir]",
 		Short: "Set the anchor directory for a session (default: the pane's pwd).",
 		Args:  cobra.RangeArgs(1, 2),
@@ -219,7 +263,7 @@ func jobHarnessPinCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			session, err := resolveHarnessSession(tmuxBin, args[0])
+			session, err := resolveHarnessSession(tmuxBin, args[0], login)
 			if err != nil {
 				return err
 			}
@@ -236,6 +280,8 @@ func jobHarnessPinCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
+	return c
 }
 
 // --- tmux + session plumbing ---
@@ -282,17 +328,25 @@ func harnessHasSession(tmuxBin, name string) bool {
 	return false
 }
 
-// resolveHarnessSession accepts a full session name or a cluster id (mapped through
-// harnessSession → mu-shell-<id>) and returns whichever EXISTS on the socket. Exact match, not
-// tmux's prefix/fnmatch target logic, so a short id can't silently hit the wrong session.
-func resolveHarnessSession(tmuxBin, id string) (string, error) {
+// resolveHarnessSession accepts a full session name or a cluster id and returns whichever EXISTS
+// on the socket. A bare id maps through harnessSession → mu-shell-<id> for the compute pane, or
+// harnessLoginSession → mu-login-<id> when login is set. Exact match, not tmux's prefix/fnmatch
+// target logic, so a short id can't silently hit the wrong session.
+func resolveHarnessSession(tmuxBin, id string, login bool) (string, error) {
+	derive := harnessSession
+	if login {
+		derive = harnessLoginSession
+	}
 	have := harnessSessions(tmuxBin)
-	for _, want := range []string{id, harnessSession(id)} {
+	for _, want := range []string{id, derive(id)} {
 		for _, s := range have {
 			if s == want {
 				return s, nil
 			}
 		}
+	}
+	if login {
+		return "", harnessErr("no login harness for %q — open one with `mu job harness login -N %s`, or see `mu job harness ls`", id, id)
 	}
 	return "", harnessErr("no harness session for %q — open one with `mu job harness open -N %s ...`, or see `mu job harness ls`", id, id)
 }

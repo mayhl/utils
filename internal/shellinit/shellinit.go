@@ -176,6 +176,9 @@ func frontDoors() string {
 			// mharness sends a command to a harness pane (opened by `mu job harness open`);
 			// the common drive verb, so the front-door is `run`, not the group.
 			door{"mharness", `mu job harness run "$@"`},
+			// mlogin opens the login-node harness (internet, no scheduler) — the compile
+			// half of the compile-on-login / run-on-compute split.
+			door{"mlogin", `mu job harness login "$@"`},
 		)
 	}
 	// archive is mirror-aware end-to-end via `mu archive` (project module),
