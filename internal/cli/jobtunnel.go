@@ -620,14 +620,15 @@ func loginInteractive(node, dir string) error {
 		sshArgs = append(sshArgs, "cd "+shell.Quote(dir)+" 2>/dev/null || echo 'harness: --dir path not found on the login node — staying in $HOME' >&2; exec ${SHELL:-bash} -l")
 	}
 	cmd := exec.Command(ssh, sshArgs...)
-	view := newAllocView(os.Stdout)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
+	// Pass the pty straight through — NOT through allocView. allocView holds all output until
+	// the scheduler announces itself (salloc:/qsub:), the HOLD→PASS trigger; a login shell has
+	// no scheduler, so that tag never comes and it would swallow the prompt and echo, hanging
+	// the pane. The login node's MOTD shows once, which is fine for an interactive shell.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return to column 0.
 	render.SetCRLF(true)
 	defer render.SetCRLF(false)
-	err = cmd.Run()
-	view.flush()
-	if err != nil && !strings.Contains(err.Error(), "signal:") {
+	if err := cmd.Run(); err != nil && !strings.Contains(err.Error(), "signal:") {
 		return runErr("login session: %s", err)
 	}
 	return nil
