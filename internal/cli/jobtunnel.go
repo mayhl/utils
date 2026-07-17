@@ -213,7 +213,9 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 	}
 	queue_, wall := "", ""
 	if jobID == "" { // adopt mode never submits — don't resolve (or live-fetch) a queue for it
-		if queue_, err = sel.resolve(node, node, false); err != nil {
+		// The bare default counts: a site whose queue rides --qos has no usable scheduler
+		// default, so submitting without one is refused outright (Invalid qos specification).
+		if queue_, err = sel.resolve(node, node, true); err != nil {
 			return err
 		}
 		// A tunnel is a HELD session: it lives exactly as long as its job, so the config
@@ -443,7 +445,7 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 	if account == "" {
 		account = config.AccountFor(label)
 	}
-	queue_, err := sel.resolve(node, label, false)
+	queue_, err := sel.resolve(node, label, true)
 	if err != nil {
 		return err
 	}
