@@ -91,9 +91,9 @@ func jobTunnelCmd() *cobra.Command {
 			if port == 0 {
 				return usageErr("needs -p <port> — the service port on the compute node")
 			}
-			if localPort == 0 {
-				localPort = port
-			}
+			// An unnamed -l stays 0 so pickLocalPort can start at the service port and walk up
+			// when it's taken. Defaulting it here would forge a port the user never named, and
+			// a NAMED port is refused rather than moved — so the busy case died at the refusal.
 			return jobTunnel(node, script, jobID, account, walltime, &sel, port, localPort, name, foreground, yes, wait, poll)
 		},
 	}
@@ -102,7 +102,7 @@ func jobTunnelCmd() *cobra.Command {
 	f.StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
 	f.StringVar(&jobID, "job", "", "adopt this already-submitted job instead of submitting")
 	f.IntVarP(&port, "port", "p", 0, "service port on the compute node")
-	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: same as --port)")
+	f.IntVarP(&localPort, "local", "l", 0, "local port to listen on (default: --port, or the next free port above it)")
 	f.StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
 	addQueueSelFlags(c, &sel)
 	f.StringVarP(&walltime, "walltime", "t", "", "how long to hold the job: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")

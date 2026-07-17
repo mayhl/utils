@@ -212,7 +212,7 @@ func pickLocalPort(want, remote int) (int, error) {
 			return 0, usageErr("local port %d is privileged (<1024) — pick one above 1024", want)
 		}
 		if !portFree(want) {
-			return 0, usageErr("local port %d is already in use — pick another, or omit -l and mu will", want)
+			return 0, usageErr("local port %d is already in use — pick another, or omit -l and mu will take the next free port above --port", want)
 		}
 		return want, nil
 	}

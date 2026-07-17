@@ -129,6 +129,19 @@ func TestPickLocalPort(t *testing.T) {
 	if got, err := pickLocalPort(0, remote); err != nil || got != remote {
 		t.Errorf("auto-pick = %d, %v; want it to start at the remote port %d", got, err, remote)
 	}
+
+	// No -l with the remote port already held locally: auto-pick WALKS up rather than refusing.
+	// The tunnel command used to default -l to --port, which made this branch unreachable — a
+	// busy service port hit the named-port refusal instead of moving.
+	b, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	busy := b.Addr().(*net.TCPAddr).Port
+	if got, err := pickLocalPort(0, busy); err != nil || got <= busy {
+		t.Errorf("auto-pick over a busy remote port = %d, %v; want a free port above %d", got, err, busy)
+	}
 }
 
 // freePort returns a port that is free right now (the listener is closed before returning,
