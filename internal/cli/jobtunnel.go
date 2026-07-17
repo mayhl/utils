@@ -519,6 +519,38 @@ func jobInteractive(node, account, walltime, dir string, nodes int, sel *queueSe
 	return nil
 }
 
+// preflightAlloc re-runs jobInteractive's cheap, network-free gate (target + scheduler
+// resolution) in the OUTER process, before `mu job harness open` wraps the allocation in tmux.
+// Without it a missing/misconfigured scheduler fails INSIDE the pane, which tmux closes the
+// instant the inner exits — so the error flashes and vanishes and the owner sees a silent no-op.
+// Failing here surfaces it on the owner's own terminal. jobInteractive still validates (it also
+// serves the un-wrapped `mu job shell`), so this is a deliberate echo, not the only check.
+func preflightAlloc(node string) error {
+	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
+	if err != nil {
+		return err
+	}
+	if queue.For(scheduler) == nil {
+		return errNoScheduler(label)
+	}
+	if _, err := hpc.Resolve(label); err != nil {
+		return usageErr("%s", err)
+	}
+	return nil
+}
+
+// preflightLogin is the login-harness counterpart: loginInteractive's node + target gate, run in
+// the outer process so a bad --node fails loud instead of dying in the pane that closes on exit.
+func preflightLogin(node string) error {
+	if node == "" {
+		return usageErr("needs -N <cluster> — the login harness runs from the workstation")
+	}
+	if _, err := hpc.Resolve(node); err != nil {
+		return usageErr("%s", err)
+	}
+	return nil
+}
+
 // harnessSocket is the fixed `-L` socket the owner's terminal and any driver share, so a second
 // tmux client sees the same server the allocation runs in.
 const harnessSocket = "mu-harness"

@@ -76,8 +76,13 @@ func jobHarnessOpenCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// Outer run: re-exec THIS invocation inside tmux. The inner (MU_HARNESS_INNER set)
-			// falls through to the normal allocation in the pane.
+			// falls through to the normal allocation in the pane. Preflight the scheduler config
+			// here first — inside the pane it would fail pre-auth and the pane would close before
+			// the owner could read it (a silent no-op).
 			if os.Getenv("MU_HARNESS_INNER") == "" {
+				if err := preflightAlloc(o.node); err != nil {
+					return err
+				}
 				return launchHarness(dir, harnessSession(o.node))
 			}
 			return runShellAlloc(&o, dir)
@@ -106,8 +111,12 @@ func jobHarnessLoginCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// Outer run: re-exec THIS invocation inside tmux. The inner (MU_HARNESS_INNER set)
-			// falls through to the login-node ssh in the pane.
+			// falls through to the login-node ssh in the pane. Preflight --dir/target here so a
+			// bad cluster fails loud instead of dying in the pane that closes on exit.
 			if os.Getenv("MU_HARNESS_INNER") == "" {
+				if err := preflightLogin(node); err != nil {
+					return err
+				}
 				return launchHarness(dir, harnessLoginSession(node))
 			}
 			return loginInteractive(node, dir)
