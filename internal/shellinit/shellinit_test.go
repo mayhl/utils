@@ -58,12 +58,16 @@ nodes = ["node2"]
 	if strings.Contains(out, "hpc1()") {
 		t.Error("self node (hpc1) should be skipped")
 	}
-	// Front-doors: mps/mkill always; the queue pair under the default (pbs) idiom.
+	// Front-doors: mps/mkill always; the queue pair under the default (pbs) idiom, plus the
+	// rest of Class A generated from the single table (msub is new; mrls comes from bare `rls`).
 	for _, want := range []string{
 		`mps() { mu ps "$@"; }`,
 		`mkill() { mu ps kill "$@"; }`,
 		`mstat() { mu hpc queue "$@"; }`,
 		`mdel() { mu hpc queue kill "$@"; }`,
+		`msub() { mu job sub "$@"; }`,
+		`mrls() { mu hpc queue release "$@"; }`,
+		`mtunnel() { mu job tunnel "$@"; }`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing front-door %q in:\n%s", want, out)
@@ -71,6 +75,17 @@ nodes = ["node2"]
 	}
 	if strings.Contains(out, "mqueue()") {
 		t.Error("pbs idiom should not emit mqueue")
+	}
+	// The `<node> <verb>` dispatcher arm is generated from the SAME classAVerbs table as the
+	// m-door, so the two surfaces stay in lock-step (bare verbs: `stat`, not `mstat`).
+	for _, want := range []string{
+		`stat) shift; mu hpc queue --node "$node" "$@" ;;`,
+		`sub) shift; mu job sub --node "$node" "$@" ;;`,
+		`rls) shift; mu hpc queue release --node "$node" "$@" ;;`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing dispatcher arm %q in:\n%s", want, out)
+		}
 	}
 }
 

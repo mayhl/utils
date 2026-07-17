@@ -53,7 +53,50 @@ import (
 // convention — which dropped the helper while keeping the dispatchers that call it, leaving
 // every node shortcut a `command not found`. They're plain helpers; they take the plain `mu_`
 // prefix the rest of the layer uses.
-const helper = `mu_node_help() {
+// nodeVerb is one node-targeted capability: its bare `<node> <verb>` name and the `mu` command
+// it runs. classAVerbs is the SINGLE source that generates all three invocation surfaces — the
+// m-door `m<verb>`, the `<node> <verb>` dispatcher arm, and the binary's own -N — so the three
+// can never drift.
+type nodeVerb struct{ verb, path string }
+
+// classAVerbs lists the node-targeted verbs in canonical order, the queue/kill pair resolved to
+// the site's idiom ([shell] queue_aliases): stat/del on pbs, queue/cancel on slurm, both on
+// "both". The rest are idiom-neutral. Every entry's `mu` command takes --node (verified against
+// the queueTargetCtx / -N surface), so `<node> <verb>` == `m<verb> -N <node>` == `mu <path> -N`.
+func classAVerbs() []nodeVerb {
+	var v []nodeVerb
+	switch config.QueueAliases() {
+	case "slurm":
+		v = append(v, nodeVerb{"queue", "hpc queue"}, nodeVerb{"cancel", "hpc queue kill"})
+	case "both":
+		v = append(v, nodeVerb{"stat", "hpc queue"}, nodeVerb{"del", "hpc queue kill"},
+			nodeVerb{"queue", "hpc queue"}, nodeVerb{"cancel", "hpc queue kill"})
+	default: // pbs
+		v = append(v, nodeVerb{"stat", "hpc queue"}, nodeVerb{"del", "hpc queue kill"})
+	}
+	return append(
+		v,
+		nodeVerb{"info", "hpc queue info"}, nodeVerb{"peek", "hpc queue peek"},
+		nodeVerb{"hold", "hpc queue hold"}, nodeVerb{"rls", "hpc queue release"}, // rls ← qrls
+		nodeVerb{"hist", "hpc queue hist"},
+		nodeVerb{"queues", "hpc queues"}, nodeVerb{"storage", "hpc storage"}, nodeVerb{"usage", "hpc usage"},
+		nodeVerb{"shell", "job shell"}, nodeVerb{"sub", "job sub"}, nodeVerb{"tunnel", "job tunnel"},
+	)
+}
+
+// nodeDispatcher builds the `<node> <verb>` dispatcher. The node-targeted arms are GENERATED
+// from classAVerbs; the surrounding arms are node-INTRINSIC and stay hand-written — cp push/pull,
+// exec/-- forced remote-exec, a bare/numbered node → ssh login, -h → the house panel. No arm body
+// contains a single quote (Generate emits this OUTSIDE the eval dance, but keep it clean anyway).
+func nodeDispatcher() string {
+	var arms strings.Builder
+	for _, v := range classAVerbs() {
+		fmt.Fprintf(&arms, "    %s) shift; mu %s --node \"$node\" \"$@\" ;;\n", v.verb, v.path)
+	}
+	return dispatcherHead + arms.String() + dispatcherTail
+}
+
+const dispatcherHead = `mu_node_help() {
   mu setup node-help "$1"
 }
 mu_node() {
@@ -62,10 +105,9 @@ mu_node() {
     -h|--help) mu_node_help "$node" ;;
     push) shift; mu cp push "$node" "$@" ;;
     pull) shift; mu cp pull "$node" "$@" ;;
-    mstat) shift; mu hpc queue --node "$node" "$@" ;;
-    shell|sub|tunnel) local v=$1; shift; mu job "$v" --node "$node" "$@" ;;
-    queues|usage|storage) local v=$1; shift; mu hpc "$v" --node "$node" "$@" ;;
-    exec|--) shift; mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2) ;;
+`
+
+const dispatcherTail = `    exec|--) shift; mu_auth && ${MU_SSH:-ssh} -q "$target" "bash -lc \"$*\"" 2> >(grep -vE "${MU_SSH_STDERR_FILTER:-dbus-update-activation-environment|^Cannot continue}" >&2) ;;
     "")   mu_auth && mu_ssh_login "$target" ;;
     *)
       case $1 in
@@ -105,7 +147,7 @@ func Generate() string {
 	b.WriteString(sharedTooling())
 	b.WriteString(clipTools())
 	b.WriteString(doctorCheckup())
-	b.WriteString(helper)
+	b.WriteString(nodeDispatcher())
 	// Clear any stale same-named aliases (e.g. a leftover bare-node ssh alias from
 	// the old connect.sh codegen), then define the dispatchers inside a NESTED
 	// eval. zsh parses a whole eval block up-front and refuses a function def over
@@ -134,57 +176,39 @@ func Generate() string {
 // (no body contains a single quote).
 func frontDoors() string {
 	type door struct{ name, body string }
+	// Class C — nodeless local planes (m-door + binary; no `<node> <verb>` form).
 	doors := []door{
 		{"mps", `mu ps "$@"`},
 		{"mkill", `mu ps kill "$@"`},
 		{"mlog", `mu log "$@"`},
 		{"mcfg", `mu config "$@"`},
-		// The one mirror verb that must be shell (it cds). Capture-then-cd so a failed
-		// resolve leaves the shell where it is — the error is already on stderr.
-		{"swap", `local d; d=$(mu path swap "$@") && cd "$d"`},
 	}
 	if len(config.NodeNames()) > 0 {
-		stat := door{"mstat", `mu hpc queue "$@"`}
-		del := door{"mdel", `mu hpc queue kill "$@"`}
-		queue := door{"mqueue", `mu hpc queue "$@"`}
-		cancel := door{"mcancel", `mu hpc queue kill "$@"`}
-		switch config.QueueAliases() {
-		case "slurm":
-			doors = append(doors, queue, cancel)
-		case "both":
-			doors = append(doors, stat, del, queue, cancel)
-		default: // "pbs"
-			doors = append(doors, stat, del)
+		// Class A — GENERATED from classAVerbs, the SAME table nodeDispatcher() reads, so the
+		// m-door `m<verb>` and the `<node> <verb>` arm can never drift. The idiom (queue_aliases)
+		// resolves stat/del vs queue/cancel in that one place, so it flows through here for free.
+		for _, v := range classAVerbs() {
+			doors = append(doors, door{"m" + v.verb, "mu " + v.path + ` "$@"`})
 		}
-		// Scheduler-neutral read/state verbs — same name whatever the idiom (no clean
-		// squeue word for "info"/"peek"/"hold"/"history").
+		// Curated exceptions the systematic pattern can't hold:
+		//   mharness — `harness run` takes an id positional, not --node.
+		//   mlogin   — `harness login` takes -N, but `<node> login` would collide with the
+		//              bare-node ssh login, so it stays m-door-only.
+		//   hpcs     — Class D: a cross-cluster overview (`mu hpc nodes` iterates ALL clusters,
+		//              takes no --node), so the node-verb grammar doesn't apply; the descriptive
+		//              name (plural of HPC = systems) is deliberate, not a prefix slip.
 		doors = append(
 			doors,
-			door{"minfo", `mu hpc queue info "$@"`},
-			door{"mpeek", `mu hpc queue peek "$@"`},
-			door{"mhold", `mu hpc queue hold "$@"`},
-			door{"mrls", `mu hpc queue release "$@"`},
-			door{"mhist", `mu hpc queue hist "$@"`},
-			// Cluster info + compute-node access planes. hpcs breaks the m- prefix
-			// deliberately: it's about SYSTEMS (plural of HPC), not jobs.
-			door{"mqueues", `mu hpc queues "$@"`},
-			door{"mstorage", `mu hpc storage "$@"`},
-			door{"musage", `mu hpc usage "$@"`},
-			door{"hpcs", `mu hpc nodes "$@"`},
-			door{"mtunnel", `mu job tunnel "$@"`},
-			door{"mshell", `mu job shell "$@"`},
-			// mharness sends a command to a harness pane (opened by `mu job harness open`);
-			// the common drive verb, so the front-door is `run`, not the group.
 			door{"mharness", `mu job harness run "$@"`},
-			// mlogin opens the login-node harness (internet, no scheduler) — the compile
-			// half of the compile-on-login / run-on-compute split.
 			door{"mlogin", `mu job harness login "$@"`},
+			door{"hpcs", `mu hpc nodes "$@"`},
 		)
 	}
-	// archive is mirror-aware end-to-end via `mu archive` (project module),
-	// defined only where the site PST/TUSC binary exists and deliberately
-	// shadowing it — mu resolves the real binary from PATH, so no recursion.
+	// Project plane (project module): swap cds into a mirror (the one door that must be shell —
+	// capture-then-cd so a failed resolve leaves the shell put); mruns lists runs; archive
+	// shadows the site PST/TUSC binary (mu resolves the real one from PATH, so no recursion).
 	if modules.Enabled("project") {
+		doors = append(doors, door{"swap", `local d; d=$(mu path swap "$@") && cd "$d"`})
 		if _, err := exec.LookPath("archive"); err == nil {
 			doors = append(doors, door{"archive", `mu archive "$@"`})
 		}

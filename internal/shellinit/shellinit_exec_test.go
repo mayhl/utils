@@ -59,6 +59,9 @@ hpc1 shell --debug
 hpc1 sub run.pbs -n 4
 hpc1 queues
 hpc1 usage
+hpc1 stat
+hpc1 hold 5
+hpc1 tunnel
 hpc1 exec usage
 hpc1 -- queues
 hpc1 -h
@@ -80,6 +83,11 @@ hpc1 -h
 		"MU job sub --node hpc1 run.pbs -n 4",
 		"MU hpc queues --node hpc1",
 		"MU hpc usage --node hpc1",
+		// The systematic Class-A arms: the idiom queue verb (bare `stat`), a queue sub-verb, and
+		// the job plane — all generated from classAVerbs, all injecting --node.
+		"MU hpc queue --node hpc1",        // stat (pbs bare verb → mu hpc queue)
+		"MU hpc queue hold --node hpc1 5", // hold sub-verb with a selector
+		"MU job tunnel --node hpc1",       // job-plane node-first
 		// ...and `exec` / `--` force remote-exec of a word that is otherwise reserved.
 		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"usage\"",
 		"SSH alice@hpc1.alpha.example.mil :: bash -lc \"queues\"",
