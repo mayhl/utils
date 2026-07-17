@@ -115,7 +115,7 @@ func jobTunnelCmd() *cobra.Command {
 	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
 		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
 	})
-	c.AddCommand(tunnelLsCmd(), tunnelCloseCmd())
+	c.AddCommand(tunnelLsCmd(), tunnelReattachCmd(), tunnelCloseCmd())
 	return c
 }
 

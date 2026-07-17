@@ -187,6 +187,159 @@ func jobShort(id string) string {
 	return id
 }
 
+// tunnelReattachCmd is `mu job tunnel reattach`: put a detached tunnel's forward back, or reap
+// the record if its job has ended. The two outcomes are the same question — is the job still
+// there? — so one verb answers both, and the registry already holds everything needed to ask:
+// the job, its system, the ports. Reconnecting by hand is the same flow with `--job`, retyped.
+//
+// Deliberately NOT automatic. The drop worth surviving is a slept laptop, and by the time you
+// wake it the Kerberos ticket is gone too — so reconnecting needs your CAC PIN and cannot
+// happen unattended. A prompt you have to answer is a verb, not a daemon.
+func tunnelReattachCmd() *cobra.Command {
+	var all bool
+	c := &cobra.Command{
+		Use:   "reattach [id]",
+		Short: "Reopen a detached tunnel's forward (or reap it if the job ended).",
+		Long: "Put back the forward of a tunnel whose ssh master died — a slept laptop, a dropped\n" +
+			"link — leaving the job untouched: it has been running the whole time. Name the\n" +
+			"tunnel (as `mu job tunnel ls` shows it) or pass --all.\n\n" +
+			"If the job has since ended there is nothing to reopen, and the record is dropped\n" +
+			"instead — so this is also how a stale `ls` entry gets reaped. A tunnel that is\n" +
+			"still open is left alone.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			var targets []tunnelRec
+			switch {
+			case all:
+				targets = loadTunnels()
+			case len(args) == 1:
+				t, err := findTunnel(args[0])
+				if err != nil {
+					return err
+				}
+				targets = []tunnelRec{t}
+			default:
+				return usageErr("name a tunnel (see `mu job tunnel ls`) or pass --all")
+			}
+			if len(targets) == 0 {
+				render.Info("no open tunnels")
+				return nil
+			}
+			var failed int
+			for _, t := range targets {
+				if err := reattachTunnel(t); err != nil {
+					// One unreachable cluster must not strand the rest of the sweep.
+					render.Warn(fmt.Sprintf("%s: %v", t.ID, err))
+					failed++
+				}
+			}
+			if failed > 0 {
+				return runErr("reattach incomplete — %d of %d failed", failed, len(targets))
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&all, "all", false, "reattach (or reap) every tunnel")
+	return c
+}
+
+// reattachTunnel resolves ONE record against its cluster: reopen the forward if the job still
+// runs, drop the record if it doesn't, leave it alone if the tunnel never died.
+//
+// The cheap answers come first and offline — an already-open tunnel and a provably-expired one
+// both settle without a ticket, so `--all` over a registry of corpses costs nothing.
+func reattachTunnel(t tunnelRec) error {
+	if masterAlive(t) {
+		render.Info(fmt.Sprintf("tunnel %s is already open: %s", t.ID, t.URL()))
+		return nil
+	}
+	if expired(t) {
+		forgetTunnel(t)
+		render.OK(fmt.Sprintf("tunnel %s: job %s outlived its walltime — record dropped", t.ID, t.Job))
+		return nil
+	}
+	scheduler := config.SchedulerFor(t.System)
+	adapter := queue.For(scheduler)
+	if adapter == nil {
+		return errNoScheduler(t.System)
+	}
+	// The old local port must still be free, or the URL you were given is a lie. Same rule as
+	// the original: a named port is honoured or refused, never silently moved.
+	if _, err := pickLocalPort(t.LocalPort, t.RemotePort); err != nil {
+		return err
+	}
+	if err := hpc.EnsureTicket(); err != nil {
+		return runErr("%s", err)
+	}
+	// One held connection for both legs, and the SAME socket name the original master used
+	// (node-port, not the tunnel id) — so a later `close` finds it exactly where it looks.
+	mux, err := hpc.OpenSession(t.Target, hpc.SessionOpts{Persist: true, ID: fmt.Sprintf("%s-%d", t.System, t.LocalPort)})
+	if err != nil {
+		return runErr("connect: %s", err)
+	}
+	keepMux := false
+	defer func() {
+		if !keepMux {
+			mux.Close() // a failed reattach must not orphan the master it opened
+		}
+	}()
+
+	// Is the job still there? The listing, not a detail — see tunnelStates.
+	cmd, parse := fetchSpec(scheduler, userSel{})
+	if cmd == "" {
+		return errNoScheduler(t.System)
+	}
+	raw, err := mux.Run(cmd)
+	if err != nil {
+		return runErr("reading the queue: %s", err) // not proof of anything — keep the record
+	}
+	var job queue.Job
+	var found bool
+	for _, j := range parse(raw) {
+		if j.ID == t.Job || j.ShortID == jobShort(t.Job) {
+			job, found = j, true
+			break
+		}
+	}
+	if !found {
+		forgetTunnel(t)
+		render.OK(fmt.Sprintf("tunnel %s: job %s has ended — record dropped", t.ID, t.Job))
+		return nil
+	}
+	if job.State != queue.Running {
+		return runErr("job %s is %s, not running — nothing to forward to yet", t.Job, job.State)
+	}
+	// Where the job landed, read fresh: a requeue can move it, and the record's Host is only
+	// where it ran LAST. Safe to ask by detail now — the job exists, so the query exits clean.
+	host := t.Host
+	for _, d := range queue.ParseDetails(scheduler, tryRun(mux, adapter.DetailCmd([]string{t.Job}))) {
+		if d.ExecHost != "" {
+			host = d.ExecHost
+			break
+		}
+	}
+	if err := mux.Forward(t.LocalPort, host, t.RemotePort); err != nil {
+		return runErr("adding the forward: %s", err)
+	}
+	t.Host, t.Sock = host, mux.Sock()
+	if err := saveTunnel(t); err != nil {
+		render.Warn(fmt.Sprintf("tunnel is up but not recorded (%v) — `close` won't find it; `mdel %s`", err, t.Job))
+	}
+	keepMux = true // the master outlives mu again — `close` tears it down later
+	render.OK(fmt.Sprintf("tunnel %s reattached: %s → %s:%d (job %s)", t.ID, t.URL(), host, t.RemotePort, t.Job))
+	return nil
+}
+
+// tryRun is the tolerant read for a query whose failure is not worth failing over: the caller
+// has a fallback (the recorded host) and would rather use it than abort a working reattach.
+func tryRun(mux *hpc.Session, cmd string) string {
+	out, err := mux.Run(cmd)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // tunnelCloseCmd is `mu job tunnel close`: tear down a tunnel — drop the forward, kill the
 // job, forget the record. --keep-job leaves the allocation running (you're only detaching
 // the port); --all closes every open tunnel.
