@@ -57,7 +57,7 @@ func jobHarnessCmd() *cobra.Command {
 			"Front-door: `mharness <id> <cmd>` = `mu job harness run`; `mlogin <id>` = login open.",
 		Args: cobra.NoArgs,
 	}
-	c.AddCommand(jobHarnessOpenCmd(), jobHarnessLoginCmd(), jobHarnessRunCmd(), jobHarnessCaptureCmd(), jobHarnessAttachCmd(), jobHarnessLsCmd(), jobHarnessPinCmd())
+	c.AddCommand(jobHarnessOpenCmd(), jobHarnessLoginCmd(), jobHarnessRunCmd(), jobHarnessKeyCmd(), jobHarnessCaptureCmd(), jobHarnessAttachCmd(), jobHarnessLsCmd(), jobHarnessPinCmd())
 	return c
 }
 
@@ -174,6 +174,44 @@ func jobHarnessRunCmd() *cobra.Command {
 	c.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "how long to wait for the command to finish before giving up")
 	c.Flags().StringVar(&dir, "dir", "", "anchor directory for this and later runs (default: the pane's pwd, pinned on first run)")
 	c.Flags().BoolVar(&allowAbs, "allow-abs", false, "permit an absolute path / ~ / .. in the command (also MUH_ALLOW_ABS=1)")
+	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
+	return c
+}
+
+func jobHarnessKeyCmd() *cobra.Command {
+	var login bool
+	c := &cobra.Command{
+		Use:   "key <id> <key>...",
+		Short: "Send raw keys to the pane (C-c, q, …) to recover a stuck prompt or pager.",
+		Long: "Send key(s) straight to the pane with NO anchor, sentinel, or guard — the escape\n" +
+			"hatch for when `run` can't help because the pane is not at a shell prompt:\n\n" +
+			"    mu job harness key wheat C-c        # break a stuck command or quote continuation (dquote>)\n" +
+			"    mu job harness key wheat q          # quit a pager (less / man / git without --no-pager)\n" +
+			"    mu job harness key wheat n Enter    # answer a [y/N] prompt\n\n" +
+			"Each arg is a tmux key name or literal (see `man tmux` SEND-KEYS): C-c, C-u, C-d, Enter,\n" +
+			"Escape, Space, or a bare character. Fire-and-forget (a stuck pane emits no completion\n" +
+			"sentinel) — follow with `capture` to see the result, then resume with `run`.",
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			tmuxBin, err := harnessTmux()
+			if err != nil {
+				return err
+			}
+			session, err := resolveHarnessSession(tmuxBin, args[0], login)
+			if err != nil {
+				return err
+			}
+			// Pass the key args to send-keys VERBATIM — no C-u flush (it would scroll a pager),
+			// no sentinel wrap (a pager/continuation would swallow it), no guard (these are keys,
+			// not a path). tmux reads each arg as a key name (C-c, Enter) or literal (q, n).
+			sendArgs := append([]string{"-L", harnessSocket, "send-keys", "-t", session}, args[1:]...)
+			if err := exec.Command(tmuxBin, sendArgs...).Run(); err != nil {
+				return harnessErr("cannot send keys to session %q: %s", session, err)
+			}
+			render.Detail(fmt.Sprintf("sent %s to %s — `capture %s` to see the result", strings.Join(args[1:], " "), session, args[0]))
+			return nil
+		},
+	}
 	c.Flags().BoolVar(&login, "login", false, "target the login-node harness (mu-login-<id>) instead of the compute one")
 	return c
 }
