@@ -22,9 +22,10 @@ type Adapter interface {
 	ListCmd(all bool, users, self string) string // live queue    (qstat -a / squeue -o …)
 	HistCmd(all bool, users, self string) string // finished jobs (qstat -xa / sacct …)
 	SubmitCmd(script string, o SubmitOpts) string
-	InteractiveCmd(o SubmitOpts) string // interactive allocation (qsub -I / salloc) — run under a tty
-	Directives(o SubmitOpts) []string   // header lines (#PBS / #SBATCH) for preview + templates
-	ParseDuration(s string) (int, bool) // read a scheduler time cell into seconds — DIALECT-SPECIFIC
+	InteractiveCmd(o SubmitOpts) string          // interactive allocation (qsub -I / salloc) — run under a tty
+	Directives(o SubmitOpts) []string            // header lines (#PBS / #SBATCH) for preview + templates
+	ParseDuration(s string) (int, bool)          // read a scheduler time cell into seconds — DIALECT-SPECIFIC
+	ScriptWalltime(script []byte) (string, bool) // the walltime the script declares FOR THIS dialect
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
@@ -189,6 +190,10 @@ func (pbsAdapter) InteractiveCmd(o SubmitOpts) string { return "qsub -I" + pbsOp
 
 func (pbsAdapter) ParseDuration(s string) (int, bool) { return parsePBSDuration(s) }
 
+func (pbsAdapter) ScriptWalltime(script []byte) (string, bool) {
+	return scriptWalltime(rePBSScriptWall, script)
+}
+
 // Directives renders the #PBS header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.
 func (pbsAdapter) Directives(o SubmitOpts) []string {
@@ -292,6 +297,10 @@ func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 func (slurmAdapter) InteractiveCmd(o SubmitOpts) string { return "salloc" + slurmOpts(o) }
 
 func (slurmAdapter) ParseDuration(s string) (int, bool) { return parseSLURMDuration(s) }
+
+func (slurmAdapter) ScriptWalltime(script []byte) (string, bool) {
+	return scriptWalltime(reSLURMScriptWall, script)
+}
 
 // Directives renders the #SBATCH header lines for preview/templates (display, not exec —
 // unquoted). Empty opts yield no lines: the script's own directives / defaults apply.

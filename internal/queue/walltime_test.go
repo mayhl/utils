@@ -80,3 +80,33 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+// TestScriptWalltime: each adapter reads ONLY its own dialect's walltime directive. A #PBS
+// line is inert on SLURM and vice versa, so the other adapter must not see it — the whole
+// point of reading the directive per-scheduler.
+func TestScriptWalltime(t *testing.T) {
+	pbsScript := []byte("#!/bin/bash\n#PBS -l walltime=24:00:00\necho hi\n")
+	slurmT := []byte("#!/bin/bash\n#SBATCH -t 12:00:00\necho hi\n")
+	slurmLong := []byte("#!/bin/bash\n#SBATCH --time=12:00:00\necho hi\n")
+	none := []byte("#!/bin/bash\n#PBS -l select=1\necho hi\n")
+
+	pbs, slurm := For("pbs"), For("slurm")
+
+	if w, ok := pbs.ScriptWalltime(pbsScript); !ok || w != "24:00:00" {
+		t.Errorf("pbs on #PBS = %q,%v; want 24:00:00,true", w, ok)
+	}
+	if _, ok := slurm.ScriptWalltime(pbsScript); ok {
+		t.Error("slurm must NOT read a #PBS directive — it is inert on SLURM")
+	}
+	for _, s := range [][]byte{slurmT, slurmLong} {
+		if w, ok := slurm.ScriptWalltime(s); !ok || w != "12:00:00" {
+			t.Errorf("slurm on #SBATCH = %q,%v; want 12:00:00,true", w, ok)
+		}
+		if _, ok := pbs.ScriptWalltime(s); ok {
+			t.Error("pbs must NOT read a #SBATCH directive — it is inert on PBS")
+		}
+	}
+	if _, ok := pbs.ScriptWalltime(none); ok {
+		t.Error("a script with no walltime directive declares none")
+	}
+}

@@ -17,7 +17,23 @@ import (
 var (
 	wallCanon = regexp.MustCompile(`^\d+:[0-5]\d:[0-5]\d$`)
 	wallPart  = regexp.MustCompile(`(\d+(?:\.\d+)?)([dhms])`)
+
+	// A walltime a script declares in its scheduler header — one regex per dialect, because
+	// the SAME line is load-bearing on one scheduler and an inert comment on the other. A
+	// `#PBS -l walltime=` on a SLURM box does nothing, so reading it would suppress mu's
+	// default for a directive the scheduler never honours.
+	rePBSScriptWall   = regexp.MustCompile(`(?m)^\s*#\s*PBS\s+-l\s+walltime=(\S+)`)
+	reSLURMScriptWall = regexp.MustCompile(`(?m)^\s*#\s*SBATCH\s+(?:-t|--time=)\s*(\S+)`)
 )
+
+// scriptWalltime pulls the first walltime directive matching re out of a job script.
+func scriptWalltime(re *regexp.Regexp, script []byte) (string, bool) {
+	m := re.FindSubmatch(script)
+	if m == nil {
+		return "", false
+	}
+	return string(m[1]), true
+}
 
 // ParseWalltime reads H+:MM:SS or a shorthand ("10m", "1.5h", "1h30m", "2d") into seconds.
 //

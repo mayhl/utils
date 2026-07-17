@@ -37,11 +37,11 @@ func estimateCoreHours(script, node string) (hours float64, basis string, ok boo
 	if err != nil {
 		return 0, "", false
 	}
-	m := reScriptWalltime.FindSubmatch(b)
-	if m == nil {
+	declared, ok := scriptDeclaredWalltime(node, b)
+	if !ok {
 		return 0, "", false
 	}
-	wsec, wok := queue.ParseWalltime(strings.TrimSpace(string(m[1])))
+	wsec, wok := queue.ParseWalltime(strings.TrimSpace(declared))
 	if !wok {
 		return 0, "", false
 	}

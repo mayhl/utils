@@ -58,7 +58,7 @@ func subForm(node, label, script, account string, sel *queueSel, walltime string
 	// --debug means "give me the whole slot", so the field opens on the queue's maximum —
 	// same rule as the flag path, or -i would quietly submit a different job than the flags
 	// alone would. The script still wins if it declares one (the caller checks).
-	if walltime == "" && (sel.debug || sel.dbg) && mayInjectWalltime(script) {
+	if walltime == "" && (sel.debug || sel.dbg) && mayInjectWalltime(node, script) {
 		if max, ok := queueMax(node, queueVal); ok {
 			walltime = queue.FormatWalltime(max)
 		}
@@ -318,7 +318,7 @@ func shellForm(node, label, account, walltime string, nodes int, sel *queueSel) 
 // resolves, so -i and the flags can't disagree about what they'd submit. Left as typed (not
 // normalized): the field is the user's, and it's normalized on the way out.
 func seedWalltime(node, label, script, walltime, queueVal string, sel *queueSel) string {
-	if walltime != "" || !mayInjectWalltime(script) {
+	if walltime != "" || !mayInjectWalltime(node, script) {
 		return walltime
 	}
 	if sel.debug || sel.dbg {

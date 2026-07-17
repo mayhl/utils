@@ -93,7 +93,9 @@ func interactiveWalltime(label string) (string, error) {
 	return v, nil
 }
 
-// reScriptWalltime finds a walltime a job script already declares for itself.
+// reScriptWalltime finds a walltime a job script declares for itself, in EITHER dialect. The
+// dialect-aware read goes through the adapter (scriptDeclaredWalltime); this stays only as the
+// fallback for a cluster whose scheduler mu can't resolve.
 var reScriptWalltime = regexp.MustCompile(`(?m)^\s*#\s*(?:PBS\s+-l\s+walltime=|SBATCH\s+(?:-t|--time=)\s*)(\S+)`)
 
 // warnScriptWalltime checks a --debug submission against what the script asks for.
@@ -108,11 +110,11 @@ func warnScriptWalltime(node, queueName, script string) {
 	if err != nil {
 		return
 	}
-	m := reScriptWalltime.FindSubmatch(b)
-	if m == nil {
+	declared, ok := scriptDeclaredWalltime(node, b)
+	if !ok {
 		return
 	}
-	asks, ok := queue.ParseWalltime(strings.TrimSpace(string(m[1])))
+	asks, ok := queue.ParseWalltime(strings.TrimSpace(declared))
 	if !ok {
 		return
 	}
@@ -125,14 +127,16 @@ func warnScriptWalltime(node, queueName, script string) {
 }
 
 // mayInjectWalltime reports whether mu may supply a walltime of its own — the --debug
-// maximum or the interactive default. Only when the script is SILENT about its own.
+// maximum or the interactive default. Only when the script is SILENT about its own, read in
+// the TARGET's dialect: a #PBS directive on a SLURM box is an inert comment, so honouring it
+// would suppress mu's default for a walltime the scheduler never applies.
 //
 // A script mu cannot read counts as declaring one, which is the common case: the path is
 // resolved on the cluster, not here. That asymmetry is deliberate — a qsub `-l walltime=`
 // overrides the script's directive, and overriding one you never saw is how a 24-hour run
 // silently becomes a 30-minute one. An explicit -t is always honoured; this gates only the
 // defaults, so the escape hatch costs one flag.
-func mayInjectWalltime(script string) bool {
+func mayInjectWalltime(node, script string) bool {
 	if strings.TrimSpace(script) == "" {
 		return true // no script at all (an interactive session) — nothing to override
 	}
@@ -140,7 +144,23 @@ func mayInjectWalltime(script string) bool {
 	if err != nil {
 		return false
 	}
-	return !reScriptWalltime.Match(b)
+	_, declares := scriptDeclaredWalltime(node, b)
+	return !declares
+}
+
+// scriptDeclaredWalltime is the walltime a script declares in the TARGET's scheduler dialect,
+// letting the adapter own the directive syntax. A cluster whose scheduler mu can't resolve
+// falls back to matching either dialect — the old dialect-blind behaviour, kept only for that
+// (in practice impossible) case rather than guessing wrong.
+func scriptDeclaredWalltime(node string, b []byte) (string, bool) {
+	if a := queue.For(config.SchedulerFor(node)); a != nil {
+		return a.ScriptWalltime(b)
+	}
+	m := reScriptWalltime.FindSubmatch(b)
+	if m == nil {
+		return "", false
+	}
+	return string(m[1]), true
 }
 
 // queueTarget puts a resolved queue name into the field the site's SLURM actually reads:

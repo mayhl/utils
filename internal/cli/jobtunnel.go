@@ -221,12 +221,12 @@ func jobTunnel(node, script, jobID, account, walltime string, sel *queueSel, por
 		// A tunnel is a HELD session: it lives exactly as long as its job, so the config
 		// default applies — unless the script speaks for itself.
 		dflt := ""
-		if mayInjectWalltime(script) {
+		if mayInjectWalltime(node, script) {
 			if dflt, err = interactiveWalltime(node); err != nil {
 				return err
 			}
 		}
-		debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(script)
+		debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(node, script)
 		if wall, err = resolveWalltime(node, queue_, walltime, dflt, debugMax); err != nil {
 			return err
 		}

@@ -78,18 +78,52 @@ func TestMayInjectWalltime(t *testing.T) {
 	slurm := write("slurm.sh", "#!/bin/bash\n#SBATCH -t 12:00:00\necho hi\n")
 	slurmLong := write("slurm2.sh", "#!/bin/bash\n#SBATCH --time=12:00:00\necho hi\n")
 
-	if !mayInjectWalltime("") {
+	// A config that names one PBS cluster and one SLURM cluster, so mayInjectWalltime resolves
+	// a real dialect per node — the point of the fix.
+	cfg := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfg, []byte(`
+[[cluster]]
+name = "pbssite"
+domain = "b.example.mil"
+scheduler = "pbs"
+nodes = ["pbsnode"]
+
+[[cluster]]
+name = "slurmsite"
+domain = "s.example.mil"
+scheduler = "slurm"
+nodes = ["slurmnode"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MU_CONFIG_FILE", cfg)
+	config.ResetForTest()
+	defer config.ResetForTest()
+
+	if !mayInjectWalltime("pbsnode", "") {
 		t.Error("no script at all (an interactive session) — mu has nothing to override")
 	}
-	if !mayInjectWalltime(silent) {
+	if !mayInjectWalltime("pbsnode", silent) {
 		t.Error("a script that declares no walltime may be given one")
 	}
-	for _, s := range []string{pbs, slurm, slurmLong} {
-		if mayInjectWalltime(s) {
-			t.Errorf("%s declares a walltime — mu must not override it", filepath.Base(s))
+	// Each directive is honoured on its OWN scheduler.
+	if mayInjectWalltime("pbsnode", pbs) {
+		t.Error("a #PBS walltime on a PBS node must not be overridden")
+	}
+	for _, s := range []string{slurm, slurmLong} {
+		if mayInjectWalltime("slurmnode", s) {
+			t.Errorf("%s declares a walltime on a SLURM node — mu must not override it", filepath.Base(s))
 		}
 	}
-	if mayInjectWalltime(filepath.Join(dir, "lives-on-the-cluster.sh")) {
+	// The bug: a #PBS directive on a SLURM node is inert, so mu MAY inject — and a #SBATCH
+	// directive on a PBS node is likewise ignored. A dialect-blind reader got both wrong.
+	if !mayInjectWalltime("slurmnode", pbs) {
+		t.Error("a #PBS walltime is inert on a SLURM node — mu's default must still apply")
+	}
+	if !mayInjectWalltime("pbsnode", slurm) {
+		t.Error("a #SBATCH walltime is inert on a PBS node — mu's default must still apply")
+	}
+	if mayInjectWalltime("pbsnode", filepath.Join(dir, "lives-on-the-cluster.sh")) {
 		t.Error("an unreadable script must be assumed to declare one — overriding what you can't see is the whole hazard")
 	}
 }

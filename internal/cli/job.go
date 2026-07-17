@@ -192,7 +192,7 @@ func jobSubCmd() *cobra.Command {
 				// A batch script declares its own walltime and a qsub -l would override it,
 				// so --debug only asks for the queue's slot when the script is silent — and
 				// when it isn't, mu says whether what it asks for even fits.
-				debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(script)
+				debugMax := (sel.debug || sel.dbg) && mayInjectWalltime(node, script)
 				if (sel.debug || sel.dbg) && !debugMax && walltime == "" {
 					warnScriptWalltime(node, queueName, script)
 				}
