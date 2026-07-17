@@ -124,62 +124,78 @@ func jobTunnelCmd() *cobra.Command {
 // by design, so this path builds its own `ssh -t`). The tunnel's sibling: shell
 // = you on the node, tunnel = a service's port. FUTURE: -p adds a tunnel to the
 // allocated node once the scheduler names it (the mux makes that composable).
+// shellAlloc holds the flags shared by `mu job shell` and `mu job harness open`: both request
+// the same interactive allocation, and only the wrapping (bare vs inside tmux) differs.
+type shellAlloc struct {
+	node, account, walltime string
+	nodes                   int
+	sel                     queueSel
+	interactive             bool
+}
+
+func addShellAllocFlags(c *cobra.Command, o *shellAlloc) {
+	c.Flags().StringVarP(&o.node, "node", "N", "", "cluster to target (required off an HPC login node)")
+	c.Flags().StringVarP(&o.account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
+	addQueueSelFlags(c, &o.sel)
+	c.Flags().StringVarP(&o.walltime, "walltime", "t", "", "how long to hold the session: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
+	c.Flags().IntVarP(&o.nodes, "nodes", "n", 1, "nodes to allocate (PBS select chunk / SLURM -N)")
+	c.Flags().BoolVarP(&o.interactive, "interactive", "i", false, "pick the queue, account and walltime in a form (queue enum from the cluster's queue list)")
+	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
+		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
+	})
+}
+
+// runShellAlloc runs the -i form (when asked) then hands off to the interactive allocation.
+func runShellAlloc(o *shellAlloc) error {
+	if o.interactive {
+		if !render.Interactive() {
+			return usageErr("needs a terminal (stdin is not a tty)")
+		}
+		label, _, _, _, _, err := queueTargetCtx(o.node, userSel{})
+		if err != nil {
+			return err
+		}
+		if o.node != "" { // the form's queue fetch is remote — ticket BEFORE the TUI takes the terminal
+			if err := hpc.EnsureTicket(); err != nil {
+				return runErr("%s", err)
+			}
+		}
+		if o.account == "" {
+			o.account = config.AccountFor(label)
+		}
+		q, acct, wall, n, ok, err := shellForm(o.node, label, o.account, o.walltime, o.nodes, &o.sel)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			render.Info("aborted")
+			return nil
+		}
+		o.account, o.walltime, o.nodes = acct, wall, n
+		o.sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
+	}
+	return jobInteractive(o.node, o.account, o.walltime, o.nodes, &o.sel)
+}
+
 func jobShellCmd() *cobra.Command {
-	var node, account, walltime string
-	var nodes int
-	var sel queueSel
-	var interactive bool
+	var o shellAlloc
 	c := &cobra.Command{
 		Use:   "shell",
 		Short: "Open an interactive allocation on a compute node (qsub -I / salloc).",
 		Long: "Request an interactive allocation through the target's scheduler and hand you\n" +
 			"the shell on the compute node, tty and all. Exiting the shell releases the\n" +
-			"allocation. For tunnelling a service's port instead, see `mu job tunnel`.\n" +
+			"allocation. For tunnelling a service's port instead, see `mu job tunnel`; to run\n" +
+			"the allocation inside a tmux you can drive from a script, see `mu job harness open`.\n" +
 			"Front-door: `mshell`.\n\n" +
 			"-i picks the queue and account in a form, its queue enum backed by the\n" +
 			"cluster's queue list — the way to see what you can actually allocate on.\n\n" +
 			"    mu job shell -N hpc1 --debug",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if interactive {
-				if !render.Interactive() {
-					return usageErr("mu job shell -i needs a terminal (stdin is not a tty)")
-				}
-				label, _, _, _, _, err := queueTargetCtx(node, userSel{})
-				if err != nil {
-					return err
-				}
-				if node != "" { // the form's queue fetch is remote — ticket BEFORE the TUI takes the terminal
-					if err := hpc.EnsureTicket(); err != nil {
-						return runErr("%s", err)
-					}
-				}
-				if account == "" {
-					account = config.AccountFor(label)
-				}
-				q, acct, wall, n, ok, err := shellForm(node, label, account, walltime, nodes, &sel)
-				if err != nil {
-					return err
-				}
-				if !ok {
-					render.Info("aborted")
-					return nil
-				}
-				account, walltime, nodes = acct, wall, n
-				sel = queueSel{queue: q} // the form's pick is literal — don't re-resolve a class flag
-			}
-			return jobInteractive(node, account, walltime, nodes, &sel)
+			return runShellAlloc(&o)
 		},
 	}
-	c.Flags().StringVarP(&node, "node", "N", "", "cluster to target (required off an HPC login node)")
-	c.Flags().StringVarP(&account, "account", "A", "", "allocation to charge (overrides the cluster's config default)")
-	addQueueSelFlags(c, &sel)
-	c.Flags().StringVarP(&walltime, "walltime", "t", "", "how long to hold the session: HH:MM:SS or a duration (10m, 1h, 1.5h); default: config interactive_walltime")
-	c.Flags().IntVarP(&nodes, "nodes", "n", 1, "nodes to allocate (PBS select chunk / SLURM -N)")
-	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick the queue, account and walltime in a form (queue enum from the cluster's queue list)")
-	_ = c.RegisterFlagCompletionFunc("node", func(_ *cobra.Command, _ []string, tc string) ([]string, cobra.ShellCompDirective) {
-		return hpc.CompleteNode(tc), cobra.ShellCompDirectiveNoFileComp
-	})
+	addShellAllocFlags(c, &o)
 	return c
 }
 
@@ -496,4 +512,81 @@ func jobInteractive(node, account, walltime string, nodes int, sel *queueSel) er
 		return runErr("interactive session: %s", err)
 	}
 	return nil
+}
+
+// harnessSocket is the fixed `-L` socket the owner's terminal and any driver share, so a second
+// tmux client sees the same server the allocation runs in.
+const harnessSocket = "mu-harness"
+
+// launchHarness re-execs THIS `mu job harness open` invocation inside a tmux session on the
+// shared socket, so a separate tmux client can drive the compute-node pane via
+// `mu job harness run` while the owner stays attached and authenticates. mu owns only the
+// setup — no ssh or pkinit runs on the driver side. The inner run carries MU_HARNESS_INNER, which
+// the open verb reads to skip this wrap and proceed to the real allocation. dir, when given,
+// pins the drive anchor now (before the pane exists to pwd).
+func launchHarness(node, dir string) error {
+	// new-session attaches THIS terminal (you authenticate in the pane), so it needs a real
+	// tty — a pipe or a non-interactive prompt makes tmux fail with a cryptic "not a terminal".
+	if !render.Interactive() {
+		return usageErr("`mu job harness open` needs a real terminal (you authenticate in the pane) — run it in your shell, not through a pipe or a non-interactive prompt")
+	}
+	tmuxBin, err := harnessTmux()
+	if err != nil {
+		return err
+	}
+	name := harnessSession(node)
+	// Don't clobber a live allocation of the same name — send the owner to it instead.
+	if harnessHasSession(tmuxBin, name) {
+		return usageErr("harness session %q is already open — `mu job harness attach %s`", name, node)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return runErr("cannot locate the mu binary: %s", err)
+	}
+	// The inner command is this invocation verbatim, marked so it runs the allocation rather than
+	// re-wrapping. tmux runs it through `sh -c`, so quote the binary and every argument.
+	inner := "MU_HARNESS_INNER=1 exec " + shell.Quote(self)
+	for _, a := range os.Args[1:] {
+		inner += " " + shell.Quote(a)
+	}
+	if dir != "" {
+		if err := writeHarnessAnchor(name, dir); err != nil {
+			return runErr("cannot save anchor: %s", err)
+		}
+	}
+	render.Info(fmt.Sprintf("harness: opening tmux session %q — drive with `mu job harness run %s <cmd>`, watch with `mu job harness attach %s`", name, node, node))
+	tc := exec.Command(tmuxBin, "-L", harnessSocket, "new-session", "-s", name, inner)
+	tc.Stdin, tc.Stdout, tc.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Drop TMUX so this attaches cleanly even when launched from inside another tmux: it runs on
+	// its own socket, but tmux still refuses a nested ATTACH while $TMUX is set.
+	tc.Env = envWithout(os.Environ(), "TMUX", "TMUX_PANE")
+	return tc.Run()
+}
+
+// harnessSession derives a tmux-safe session name from the target (tmux forbids ':' and '.').
+func harnessSession(node string) string {
+	n := node
+	if n == "" {
+		n = "hpc"
+	}
+	n = strings.NewReplacer(":", "-", ".", "-").Replace(n)
+	return "mu-shell-" + n
+}
+
+// envWithout returns env with every VAR=... entry whose name is in drop removed.
+func envWithout(env []string, drop ...string) []string {
+	var out []string
+	for _, e := range env {
+		keep := true
+		for _, d := range drop {
+			if strings.HasPrefix(e, d+"=") {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, e)
+		}
+	}
+	return out
 }

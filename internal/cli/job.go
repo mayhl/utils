@@ -29,7 +29,7 @@ func jobCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobWatchCmd(), jobTunnelCmd(), jobShellCmd(), jobCleanCmd())
+	c.AddCommand(jobEnvCmd(), jobSubCmd(), jobPrepCmd(), jobHooksCmd(), jobWatchCmd(), jobTunnelCmd(), jobShellCmd(), jobHarnessCmd(), jobCleanCmd())
 	return c
 }
 
