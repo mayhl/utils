@@ -18,13 +18,21 @@ import (
 // tunnelLsCmd is `mu job tunnel ls`: the open tunnels, each enriched live from its scheduler.
 // The registry says what mu STARTED; the scheduler says whether it's still alive — so a job
 // that ended (walltime hit, cancelled elsewhere) is pruned here, on sight.
+//
+// Liveness is settled LOCALLY first, and that gate is the whole shape of this command: only a
+// tunnel whose ssh master still answers is worth a scheduler query, so a registry of corpses
+// lists instantly, offline, without a ticket. Listing must never be the thing that dials a
+// cluster — least of all one you stopped using days ago.
 func tunnelLsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ls",
 		Short: "List the open background tunnels.",
 		Long: "Show the tunnels `mu job tunnel` has opened in the background, each with its URL,\n" +
 			"the job behind it and how much walltime is left. A job the scheduler no longer\n" +
-			"knows (ended or cancelled) is dropped from the registry as it's noticed.",
+			"knows (ended or cancelled) is dropped from the registry as it's noticed.\n\n" +
+			"A tunnel whose ssh master is gone — a slept laptop, a dropped link — is shown as\n" +
+			"detached: the forward is down, but the job may well still be running. Put it back\n" +
+			"with `mu job tunnel reattach <id>`, which also reaps it if the job has ended.",
 		Aliases: []string{"list"},
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -33,26 +41,60 @@ func tunnelLsCmd() *cobra.Command {
 				render.Info("no open tunnels")
 				return nil
 			}
+			live, detached := splitByMaster(recs)
 			// One scheduler query per system (not per tunnel) enriches them all; a job the
 			// scheduler no longer knows is pruned inside and left out of the map.
-			states := tunnelStates(recs)
+			states := tunnelStates(live)
 			rows := make([]render.TunnelRow, 0, len(recs))
 			for _, t := range recs {
-				s, ok := states[t.ID]
-				if !ok {
-					continue // pruned — the job is gone
+				row := render.TunnelRow{ID: t.ID, Port: strconv.Itoa(t.LocalPort), System: t.System, Job: t.Job, Node: t.Host}
+				switch {
+				case detached[t.ID]:
+					// The forward is provably down; the job's state is unknown and unasked.
+					row.State = "detached"
+				default:
+					s, ok := states[t.ID]
+					if !ok {
+						continue // pruned — the job is gone
+					}
+					row.State, row.WallLeft = s.state, s.left
 				}
-				rows = append(rows, render.TunnelRow{ID: t.ID, Port: strconv.Itoa(t.LocalPort), System: t.System, Job: t.Job, Node: t.Host, State: s.state, WallLeft: s.left})
+				rows = append(rows, row)
 			}
 			if len(rows) == 0 {
 				render.Info("no open tunnels")
 				return nil
 			}
 			render.TunnelsTable(rows)
+			if len(detached) > 0 {
+				render.Detail("detached: the forward is gone — `mu job tunnel reattach <id>` reopens it, or reaps it if the job ended")
+			}
 			return nil
 		},
 	}
 	return c
+}
+
+// splitByMaster sorts the registry by the one fact mu can establish without a cluster: whether
+// each tunnel's ssh master still answers. Live ones are worth a scheduler query; the rest are
+// detached — EXCEPT those whose walltime has provably run out, which are corpses and are reaped
+// here, on sight and offline, the way a scheduler-confirmed-gone job is.
+//
+// A detached tunnel is deliberately NOT reaped: a dead master says the forward died, never that
+// the job did, and dropping the record of a job still holding a compute node strands it.
+func splitByMaster(recs []tunnelRec) (live []tunnelRec, detached map[string]bool) {
+	detached = map[string]bool{}
+	for _, t := range recs {
+		switch {
+		case masterAlive(t):
+			live = append(live, t)
+		case expired(t):
+			forgetTunnel(t)
+		default:
+			detached[t.ID] = true
+		}
+	}
+	return live, detached
 }
 
 // tunnelState is a tunnel's live scheduler-derived state for the `ls` table.
