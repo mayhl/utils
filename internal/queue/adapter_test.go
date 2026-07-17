@@ -49,8 +49,12 @@ func TestAdapterCmds(t *testing.T) {
 			For("slurm").SubmitCmd("run.slurm", SubmitOpts{Account: "PROJ1", Queue: "debug", Walltime: "0:30:00", Nodes: 2, CoresPerNode: 128, Name: "wave"}),
 			`sbatch -A 'PROJ1' -p 'debug' -t '0:30:00' -N 2 -J 'wave' 'run.slurm'`,
 		},
-		{"pbs interactive", For("pbs").InteractiveCmd(SubmitOpts{Queue: "debug", Walltime: "1:00:00"}), `qsub -I -q 'debug' -l walltime='1:00:00'`},
-		{"slurm interactive", For("slurm").InteractiveCmd(SubmitOpts{Queue: "debug", Nodes: 1}), `salloc -p 'debug' -N 1`},
+		{"pbs interactive", For("pbs").InteractiveCmd(SubmitOpts{Queue: "debug", Walltime: "1:00:00"}, ""), `qsub -I -q 'debug' -l walltime='1:00:00'`},
+		{"slurm interactive", For("slurm").InteractiveCmd(SubmitOpts{Queue: "debug", Nodes: 1}, ""), `salloc -p 'debug' -N 1`},
+		// --dir: SLURM rides the cd as salloc's command (lands the compute shell); PBS can only
+		// prefix a submit-dir cd (qsub -I takes no command).
+		{"slurm interactive dir", For("slurm").InteractiveCmd(SubmitOpts{Queue: "debug", Nodes: 1}, "/work/proj"), `salloc -p 'debug' -N 1 bash -c 'cd '\''/work/proj'\'' && exec bash -l'`},
+		{"pbs interactive dir", For("pbs").InteractiveCmd(SubmitOpts{Queue: "debug"}, "/work/proj"), `cd '/work/proj' && qsub -I -q 'debug'`},
 		{"pbs list you", For("pbs").ListCmd(false, "", "alice"), "qstat -a -u alice"},
 		{"pbs list all", For("pbs").ListCmd(true, "", "alice"), "qstat -a"},
 		{"pbs list users", For("pbs").ListCmd(false, "bob,carol", "alice"), "qstat -a -u bob,carol"},

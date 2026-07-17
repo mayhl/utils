@@ -22,10 +22,10 @@ type Adapter interface {
 	ListCmd(all bool, users, self string) string // live queue    (qstat -a / squeue -o …)
 	HistCmd(all bool, users, self string) string // finished jobs (qstat -xa / sacct …)
 	SubmitCmd(script string, o SubmitOpts) string
-	InteractiveCmd(o SubmitOpts) string          // interactive allocation (qsub -I / salloc) — run under a tty
-	Directives(o SubmitOpts) []string            // header lines (#PBS / #SBATCH) for preview + templates
-	ParseDuration(s string) (int, bool)          // read a scheduler time cell into seconds — DIALECT-SPECIFIC
-	ScriptWalltime(script []byte) (string, bool) // the walltime the script declares FOR THIS dialect
+	InteractiveCmd(o SubmitOpts, startDir string) string // interactive allocation (qsub -I / salloc) under a tty; startDir (if set) lands the session there, injected per the scheduler's dialect
+	Directives(o SubmitOpts) []string                    // header lines (#PBS / #SBATCH) for preview + templates
+	ParseDuration(s string) (int, bool)                  // read a scheduler time cell into seconds — DIALECT-SPECIFIC
+	ScriptWalltime(script []byte) (string, bool)         // the walltime the script declares FOR THIS dialect
 }
 
 // SubmitOpts are the scheduler-neutral submit knobs; mu job sub populates them and the
@@ -186,7 +186,17 @@ func (pbsAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	return "qsub" + pbsOpts(o) + " " + quoteScriptPath(script)
 }
 
-func (pbsAdapter) InteractiveCmd(o SubmitOpts) string { return "qsub -I" + pbsOpts(o) }
+// InteractiveCmd builds `qsub -I`. startDir can only be honored as a submit-dir prefix: PBS's
+// `qsub -I` takes no command to run, so mu cannot inject a `cd` into the interactive shell —
+// the cd on the LOGIN node sets PBS_O_WORKDIR=<dir>, but the qsub -I shell still opens in $HOME
+// (a `cd $PBS_O_WORKDIR`, e.g. from shellinit, is what actually lands you there).
+func (pbsAdapter) InteractiveCmd(o SubmitOpts, startDir string) string {
+	cmd := "qsub -I" + pbsOpts(o)
+	if startDir != "" {
+		return "cd " + shell.Quote(startDir) + " && " + cmd
+	}
+	return cmd
+}
 
 func (pbsAdapter) ParseDuration(s string) (int, bool) { return parsePBSDuration(s) }
 
@@ -294,7 +304,18 @@ func (slurmAdapter) SubmitCmd(script string, o SubmitOpts) string {
 	return "sbatch" + slurmOpts(o) + " " + quoteScriptPath(script)
 }
 
-func (slurmAdapter) InteractiveCmd(o SubmitOpts) string { return "salloc" + slurmOpts(o) }
+// InteractiveCmd builds `salloc`. When startDir is set, it rides as salloc's COMMAND —
+// `salloc … bash -c 'cd <dir> && exec bash -l'` — so the cd runs inside the allocation and the
+// interactive shell actually lands in <dir> on the compute node (a login-node prefix cd can't:
+// salloc's shell starts in $HOME regardless). bash -l, not $SHELL, to match the site's
+// bash-written profile scripts (same reason `mu job shell` uses `bash -lc`).
+func (slurmAdapter) InteractiveCmd(o SubmitOpts, startDir string) string {
+	cmd := "salloc" + slurmOpts(o)
+	if startDir != "" {
+		cmd += " bash -c " + shell.Quote("cd "+shell.Quote(startDir)+" && exec bash -l")
+	}
+	return cmd
+}
 
 func (slurmAdapter) ParseDuration(s string) (int, bool) { return parseSLURMDuration(s) }
 

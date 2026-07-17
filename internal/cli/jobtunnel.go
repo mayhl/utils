@@ -487,19 +487,14 @@ func jobInteractive(node, account, walltime, dir string, nodes int, sel *queueSe
 	// Name it mu-<id>, same as a tunnel — a bland handle in the queue rather than the
 	// scheduler's anonymous default (or a leaked "interactive"). No registry entry: an
 	// interactive shell dies with its terminal, so there's nothing to track or close.
+	// --dir (harness open): the adapter injects the cd where its scheduler allows — SLURM as
+	// salloc's command so the compute shell lands in <dir>; PBS as a submit-dir prefix (qsub -I
+	// takes no command, so it can only set PBS_O_WORKDIR — the shell still opens in $HOME).
 	icmd := adapter.InteractiveCmd(queue.SubmitOpts{
 		Account: account, Queue: part, QOS: qos, Walltime: wall, Name: jobName(newTunnelID()),
 		Nodes: nodes, CoresPerNode: queueCPN(label, queue_),
-	})
-	// --dir (harness open): submit the allocation FROM <dir> so the scheduler's submit dir is
-	// <dir>. SLURM's salloc keeps that cwd, so the pane lands in <dir>; PBS opens the interactive
-	// shell in $HOME but exports PBS_O_WORKDIR=<dir> (`cd $PBS_O_WORKDIR` gets you there, and the
-	// harness anchor already runs driven commands in <dir>).
-	launch := icmd
-	if dir != "" {
-		launch = "cd " + shell.Quote(dir) + " && " + icmd
-	}
-	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, launch))
+	}, dir)
+	render.Info(fmt.Sprintf("interactive allocation on %s: %s", label, icmd))
 	ssh := config.SSHCommand()
 	// `bash -lc`, exactly as RemoteExec does it: ssh runs the command in the user's LOGIN
 	// SHELL WITHOUT LOGIN SEMANTICS, so /etc/profile.d never runs and the scheduler isn't on
@@ -509,7 +504,7 @@ func jobInteractive(node, account, walltime, dir string, nodes int, sel *queueSe
 	//
 	// -q silences the client's pre-auth banner (the consent notice); the MOTD and the profile
 	// noise come down the pty instead, and allocView drops those.
-	cmd := exec.Command(ssh, "-q", "-t", target, "bash -lc "+shell.Quote(launch))
+	cmd := exec.Command(ssh, "-q", "-t", target, "bash -lc "+shell.Quote(icmd))
 	view := newAllocView(os.Stdout)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, view, os.Stderr
 	// ssh -t puts THIS terminal in raw mode, where a bare \n doesn't return the cursor to
