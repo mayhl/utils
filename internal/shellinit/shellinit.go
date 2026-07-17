@@ -173,6 +173,9 @@ func frontDoors() string {
 			door{"hpcs", `mu hpc nodes "$@"`},
 			door{"mtunnel", `mu job tunnel "$@"`},
 			door{"mshell", `mu job shell "$@"`},
+			// mharness sends a command to a harness pane (opened by `mu job harness open`);
+			// the common drive verb, so the front-door is `run`, not the group.
+			door{"mharness", `mu job harness run "$@"`},
 		)
 	}
 	// archive is mirror-aware end-to-end via `mu archive` (project module),
