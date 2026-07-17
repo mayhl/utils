@@ -2,6 +2,8 @@ package cli
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -50,6 +52,50 @@ func TestTunnelRegistry(t *testing.T) {
 	}
 	if len(loadTunnels()) != 2 {
 		t.Error("forget didn't remove exactly one")
+	}
+}
+
+// TestExpired: the offline death proof. It must fire only when the job CANNOT still be
+// running — a false positive here drops the record of a live job and strands it, so every
+// unprovable case has to answer false.
+func TestExpired(t *testing.T) {
+	ago := func(d time.Duration) time.Time { return time.Now().Add(-d) }
+	for _, tc := range []struct {
+		name string
+		rec  tunnelRec
+		want bool
+	}{
+		{"walltime spent", tunnelRec{Walltime: "01:00:00", Running: ago(2 * time.Hour)}, true},
+		{"still inside its walltime", tunnelRec{Walltime: "04:00:00", Running: ago(time.Hour)}, false},
+		{"walltime unknown — the script named its own", tunnelRec{Walltime: "", Running: ago(500 * time.Hour)}, false},
+		{"walltime unparseable", tunnelRec{Walltime: "UNLIMITED", Running: ago(500 * time.Hour)}, false},
+		// The record predates Running: Started is the SUBMIT, and the queue wait before the job
+		// ran is unknown, so it dates nothing. Old records age out via reattach, never on a guess.
+		{"no running stamp", tunnelRec{Walltime: "01:00:00", Started: ago(500 * time.Hour)}, false},
+	} {
+		if got := expired(tc.rec); got != tc.want {
+			t.Errorf("expired(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestMasterAlive: the local liveness test says dead for a socket that isn't there and for a
+// path that is not a live control socket — and, the point of it, without touching the network.
+func TestMasterAlive(t *testing.T) {
+	if masterAlive(tunnelRec{Sock: "", Target: "u@alpha"}) {
+		t.Error("a record with no socket must read dead")
+	}
+	if masterAlive(tunnelRec{Sock: filepath.Join(t.TempDir(), "absent"), Target: "u@alpha"}) {
+		t.Error("an absent socket must read dead")
+	}
+	// A regular file at the socket path: present, but nothing answers `-O check` — the corpse
+	// case a force-killed master leaves behind.
+	corpse := filepath.Join(t.TempDir(), "mu-tun-corpse")
+	if err := os.WriteFile(corpse, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if masterAlive(tunnelRec{Sock: corpse, Target: "u@alpha"}) {
+		t.Error("a stale socket file must read dead")
 	}
 }
 

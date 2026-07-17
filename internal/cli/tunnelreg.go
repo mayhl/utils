@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mayhl/mayhl_utils/internal/config"
+	"github.com/mayhl/mayhl_utils/internal/queue"
 )
 
 // The tunnel registry.
@@ -145,6 +149,45 @@ func findTunnel(ref string) (tunnelRec, error) {
 }
 
 func forgetTunnel(t tunnelRec) { _ = os.Remove(tunnelPath(t.ID)) }
+
+// masterAlive reports whether the tunnel's ssh master is still up.
+//
+// The forward is a channel ON the master, so this — not the scheduler — is what says whether
+// the TUNNEL is live: a laptop that slept dropped the master while the job ran happily on. And
+// it costs nothing to ask. `-O check` queries the master through its unix socket, a local
+// process: no network, no ticket, no pkinit. That's what lets `ls` render a registry full of
+// corpses without dialling a cluster.
+//
+// Socket gone ⇒ master gone (ssh unlinks it on exit). Socket present but unanswered ⇒ a corpse
+// left by a kill, which is exactly what OpenSession reaps before opening its own.
+func masterAlive(t tunnelRec) bool {
+	if t.Sock == "" {
+		return false
+	}
+	if _, err := os.Stat(t.Sock); err != nil {
+		return false
+	}
+	return exec.Command(config.SSHCommand(), "-q", "-S", t.Sock, "-O", "check", t.Target).Run() == nil
+}
+
+// expired reports whether the tunnel's JOB has certainly ended, from the clock alone — the
+// scheduler kills at walltime, so a walltime spent since the job started running means there is
+// nothing left to reattach to. Proof rather than a guess, and free: no query, no ticket.
+//
+// It answers false whenever it can't prove death: an unknown walltime (the script named its own
+// and mu never learned the number) or an unset Running (a record from before mu tracked it).
+// Unprovable is not dead — dropping a record whose job still runs strands the job, which is the
+// one thing this registry exists to prevent.
+func expired(t tunnelRec) bool {
+	if t.Running.IsZero() {
+		return false
+	}
+	secs, ok := queue.ParseWalltime(strings.TrimSpace(t.Walltime))
+	if !ok {
+		return false
+	}
+	return time.Since(t.Running) > time.Duration(secs)*time.Second
+}
 
 // portFree reports whether a local port can be listened on. Binding is the only honest test
 // — /proc and lsof both lie about what a bind will actually do.
