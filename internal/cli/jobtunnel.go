@@ -525,13 +525,24 @@ func jobInteractive(node, account, walltime, dir string, nodes int, sel *queueSe
 // instant the inner exits — so the error flashes and vanishes and the owner sees a silent no-op.
 // Failing here surfaces it on the owner's own terminal. jobInteractive still validates (it also
 // serves the un-wrapped `mu job shell`), so this is a deliberate echo, not the only check.
-func preflightAlloc(node string) error {
-	label, scheduler, _, _, _, err := queueTargetCtx(node, userSel{})
+func preflightAlloc(o *shellAlloc) error {
+	label, scheduler, _, _, _, err := queueTargetCtx(o.node, userSel{})
 	if err != nil {
 		return err
 	}
 	if queue.For(scheduler) == nil {
 		return errNoScheduler(label)
+	}
+	// Resolve the queue here too, with the REAL -q/flags, so a bad queue_flag or a qos-site with
+	// no default fails on the owner's own terminal — not inside the pane, which tmux closes the
+	// instant the inner exits (the error would flash and vanish). The -i form picks its queue
+	// interactively in the pane, so only validate the flag itself for it.
+	if o.interactive {
+		if err := checkQueueFlag(label); err != nil {
+			return err
+		}
+	} else if _, err := o.sel.resolve(o.node, label, true); err != nil {
+		return err
 	}
 	if _, err := hpc.Resolve(label); err != nil {
 		return usageErr("%s", err)

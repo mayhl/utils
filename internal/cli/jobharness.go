@@ -80,7 +80,7 @@ func jobHarnessOpenCmd() *cobra.Command {
 			// here first — inside the pane it would fail pre-auth and the pane would close before
 			// the owner could read it (a silent no-op).
 			if os.Getenv("MU_HARNESS_INNER") == "" {
-				if err := preflightAlloc(o.node); err != nil {
+				if err := preflightAlloc(&o); err != nil {
 					return err
 				}
 				return launchHarness(dir, harnessSession(o.node))
