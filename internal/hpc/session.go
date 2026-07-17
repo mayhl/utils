@@ -67,7 +67,17 @@ func OpenSession(target string, opts SessionOpts) (*Session, error) {
 	// -q: quiet the login banner the server prints on connect. -x: no X11 forwarding — a mux
 	// never needs it, and a ~/.ssh/config that turns it on makes every channel print "No xauth
 	// data; using fake authentication data", noise on a path whose whole output is a few lines.
-	args := []string{"-q", "-x", "-M", "-S", s.sock, "-N", "-o", "ConnectTimeout=10"}
+	//
+	// ServerAlive* keeps the master through an IDLE gap: a held tunnel can sit untouched for
+	// hours while the job computes, and a NAT or an idle-timeout on the way will drop a silent
+	// connection without telling either end — the master then lingers as a corpse whose forward
+	// answers nothing. Probing every 30s (5 misses ≈ 2.5min to declare death) keeps the link
+	// warm, and on a real drop the master EXITS instead of playing dead, so `ls` reads detached
+	// and `reattach` can put it back. Cheap: the traffic is a keepalive packet a minute.
+	args := []string{
+		"-q", "-x", "-M", "-S", s.sock, "-N", "-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=5",
+	}
 	if opts.Persist {
 		args = append(args, "-f", "-o", "ControlPersist=yes")
 	}
