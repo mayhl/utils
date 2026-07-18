@@ -58,3 +58,8 @@ __pycache__/
 # Go build artifacts
 /mu
 /mu-*-amd64
+
+# Local scratch / backup files (machine-local, never committed)
+*.bak
+zshrc.hpc
+.zshrc.hpc
